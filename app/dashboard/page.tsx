@@ -169,6 +169,8 @@ export default function DashboardPage() {
   const [manualBuyAmount, setManualBuyAmount] = useState("0.01")
   const [manualSellPercent, setManualSellPercent] = useState("100")
   const [manualTradeDirty, setManualTradeDirty] = useState(false)
+  const [quickTradeWallet, setQuickTradeWallet] = useState<BundlerWallet | null>(null)
+  const [quickBuyAmount, setQuickBuyAmount] = useState("0.01")
   const [volumeBotStatus, setVolumeBotStatus] = useState<any>(null)
   const [logMintAddress, setLogMintAddress] = useState("")
   const [holderRows, setHolderRows] = useState<HolderRow[]>([])
@@ -883,7 +885,11 @@ export default function DashboardPage() {
   }, [selectedToken, activeWalletsWithTokens, priorityFeeSol, jitoTipSol, autoJitoTip])
 
   // Execute wallet trade (buy/sell individual)
-  const executeWalletTrade = useCallback(async (wallet: BundlerWallet, action: "buy" | "sell") => {
+  const executeWalletTrade = useCallback(async (
+    wallet: BundlerWallet,
+    action: "buy" | "sell",
+    overrides?: { buyAmount?: number; sellPercent?: number }
+  ) => {
     if (!selectedToken?.mintAddress) {
       addSystemLog("Select a token before trading", "error")
       toast.error("Select a token first")
@@ -895,13 +901,38 @@ export default function DashboardPage() {
       return
     }
 
-    const parsedBuy = Number.parseFloat(manualBuyAmount)
+    const parsedBuy = overrides?.buyAmount ?? Number.parseFloat(manualBuyAmount)
     const buyAmount = Number.isFinite(parsedBuy) && parsedBuy > 0 ? parsedBuy : 0
-    const parsedSellPct = Number.parseFloat(manualSellPercent)
+    const parsedSellPct = overrides?.sellPercent ?? Number.parseFloat(manualSellPercent)
     const sellPct = Number.isFinite(parsedSellPct)
       ? Math.min(100, Math.max(1, parsedSellPct))
       : 100
-    const sellAmount = Math.max(0, (wallet.tokenBalance || 0) * (sellPct / 100))
+    let effectiveWallet = wallet
+    const calcSellAmount = (w: BundlerWallet) => Math.max(0, (w.tokenBalance || 0) * (sellPct / 100))
+    let sellAmount = calcSellAmount(effectiveWallet)
+    if (action === "sell" && (effectiveWallet.tokenBalance || 0) <= 0) {
+      try {
+        const res = await fetch("/api/bundler/wallets", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "refresh",
+            wallets: [wallet],
+            mintAddress: selectedToken.mintAddress,
+          }),
+        })
+        const data = await res.json()
+        if (Array.isArray(data.wallets) && data.wallets[0]) {
+          effectiveWallet = data.wallets[0]
+          setBundlerWallets((prev) =>
+            prev.map((w) => (w.publicKey === effectiveWallet.publicKey ? effectiveWallet : w))
+          )
+          sellAmount = calcSellAmount(effectiveWallet)
+        }
+      } catch {
+        // ignore refresh errors, fall back to existing balance
+      }
+    }
     const amount = action === "buy" ? buyAmount : sellAmount
 
     if (action === "buy" && buyAmount <= 0) {
@@ -909,9 +940,14 @@ export default function DashboardPage() {
       toast.error("Set a valid buy amount")
       return
     }
+    if (action === "sell" && (effectiveWallet.tokenBalance || 0) <= 0) {
+      addSystemLog("Нет токенов для продажи!", "error")
+      toast.error("Нет токенов для продажи!")
+      return
+    }
     if (action === "sell" && sellAmount <= 0) {
-      addSystemLog("Sell amount is zero for this wallet", "error")
-      toast.error("Sell amount is zero")
+      addSystemLog("Нет токенов для продажи!", "error")
+      toast.error("Нет токенов для продажи!")
       return
     }
 
@@ -920,7 +956,7 @@ export default function DashboardPage() {
         ? `${amount} SOL`
         : `${amount.toFixed(2)} tokens (${sellPct}%)`
     addSystemLog(
-      `Manual ${action} request: ${wallet.publicKey.slice(0, 8)}...${wallet.publicKey.slice(-4)} (${amountLabel})`,
+      `Manual ${action} request: ${effectiveWallet.publicKey.slice(0, 8)}...${effectiveWallet.publicKey.slice(-4)} (${amountLabel})`,
       "info"
     )
 
@@ -930,12 +966,12 @@ export default function DashboardPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           wallet: {
-            publicKey: wallet.publicKey,
-            secretKey: wallet.secretKey,
-            solBalance: wallet.solBalance,
-            tokenBalance: wallet.tokenBalance,
-            isActive: wallet.isActive,
-            ataExists: wallet.ataExists,
+            publicKey: effectiveWallet.publicKey,
+            secretKey: effectiveWallet.secretKey,
+            solBalance: effectiveWallet.solBalance,
+            tokenBalance: effectiveWallet.tokenBalance,
+            isActive: effectiveWallet.isActive,
+            ataExists: effectiveWallet.ataExists,
           },
           mintAddress: selectedToken.mintAddress,
           type: action,
@@ -1427,44 +1463,97 @@ export default function DashboardPage() {
             </div>
 
             <div className="max-h-40 overflow-y-auto">
-              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-1">
+              <div className="grid grid-cols-6 sm:grid-cols-8 lg:grid-cols-12 gap-1">
                 {activeWallets.length === 0 ? (
                   <div className="col-span-full text-xs text-neutral-500">No active wallets</div>
                 ) : (
                   activeWallets.map((wallet) => (
-                  <div key={wallet.publicKey} className="rounded border border-neutral-800 bg-neutral-900/70 p-1 space-y-0.5">
-                    <div className="flex items-center justify-between text-[10px] text-neutral-500">
-                      <span className="font-mono text-neutral-300">
-                        {wallet.publicKey.slice(0, 6)}...{wallet.publicKey.slice(-4)}
-                      </span>
-                      <span>{wallet.solBalance.toFixed(3)} SOL</span>
+                  <button
+                    key={wallet.publicKey}
+                    type="button"
+                    onClick={() => setQuickTradeWallet(wallet)}
+                    className="aspect-square rounded border border-orange-500 bg-white p-0.5 text-left text-[8px] hover:border-orange-400 transition"
+                  >
+                    <div className="text-[8px]" style={{ color: "#000", fontWeight: 700 }}>Wallet</div>
+                    <div className="font-mono text-[8px] text-neutral-900 truncate">
+                      {wallet.publicKey.slice(0, 6)}...{wallet.publicKey.slice(-4)}
                     </div>
-                    <div className="text-[11px] text-neutral-400">Token: {wallet.tokenBalance.toFixed(2)}</div>
-                    <div className="flex gap-1">
-                      <Button
-                        size="sm"
-                        className="h-6 px-2 text-[10px] bg-blue-500 hover:bg-blue-600"
-                        onClick={() => executeWalletTrade(wallet, "buy")}
-                        disabled={!selectedToken}
-                      >
-                        Buy
-                      </Button>
-                      <Button
-                        size="sm"
-                        className="h-6 px-2 text-[10px] bg-orange-500 hover:bg-orange-600"
-                        onClick={() => executeWalletTrade(wallet, "sell")}
-                        disabled={!selectedToken || wallet.tokenBalance <= 0}
-                      >
-                        Sell
-                      </Button>
-                    </div>
-                  </div>
+                  </button>
                 ))
               )}
               </div>
             </div>
           </CardContent>
         </Card>
+
+        <Dialog open={!!quickTradeWallet} onOpenChange={(open) => { if (!open) setQuickTradeWallet(null) }}>
+          <DialogContent className="bg-white border-neutral-300 text-neutral-900 max-w-sm">
+            <DialogHeader>
+              <DialogTitle className="text-sm text-neutral-900">Wallet Trade</DialogTitle>
+            </DialogHeader>
+            <div className="space-y-3">
+              <div className="text-xs text-neutral-600">
+                {quickTradeWallet
+                  ? `${quickTradeWallet.publicKey.slice(0, 8)}...${quickTradeWallet.publicKey.slice(-4)}`
+                  : ""}
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs text-neutral-700">Buy Amount (SOL)</Label>
+                <Input
+                  type="number"
+                  step="0.0001"
+                  className="h-8 bg-white border-neutral-300 text-xs text-neutral-900"
+                  value={quickBuyAmount}
+                  onChange={(e) => setQuickBuyAmount(e.target.value)}
+                />
+              </div>
+              <div className="grid grid-cols-4 gap-2">
+                {["0.005", "0.01", "0.02", "0.05"].map((preset) => (
+                  <Button
+                    key={preset}
+                    variant="outline"
+                    className="h-8 text-xs bg-white text-neutral-900 border-neutral-300 hover:bg-neutral-100 disabled:text-neutral-400"
+                    onClick={() => setQuickBuyAmount(preset)}
+                  >
+                    {preset}
+                  </Button>
+                ))}
+              </div>
+              <div className="flex gap-2">
+                <Button
+                  className="h-8 flex-1 bg-blue-500 hover:bg-blue-600 text-xs text-white"
+                  onClick={() => {
+                    if (!quickTradeWallet) return
+                    const parsed = Number.parseFloat(quickBuyAmount)
+                    executeWalletTrade(quickTradeWallet, "buy", { buyAmount: parsed })
+                    setQuickTradeWallet(null)
+                  }}
+                  disabled={!selectedToken || !quickTradeWallet}
+                >
+                  Buy
+                </Button>
+              </div>
+              <div className="text-xs text-neutral-700">Sell %</div>
+              <div className="grid grid-cols-4 gap-2">
+                {[10, 25, 50, 100].map((pct) => (
+                  <Button
+                    key={pct}
+                    variant="outline"
+                    className="h-8 text-xs bg-white text-neutral-900 border-neutral-300 hover:bg-neutral-100 disabled:text-neutral-400"
+                    onClick={() => {
+                      if (!quickTradeWallet) return
+                      executeWalletTrade(quickTradeWallet, "sell", { sellPercent: pct })
+                      setQuickTradeWallet(null)
+                    }}
+                    disabled={!selectedToken || !quickTradeWallet}
+                  >
+                    {pct}%
+                  </Button>
+                ))}
+              </div>
+            </div>
+          </DialogContent>
+        </Dialog>
 
         <Card className="xl:col-span-6 bg-neutral-900 border-neutral-700">
           <CardHeader className="py-1 px-2">
@@ -1795,10 +1884,10 @@ export default function DashboardPage() {
                         <div className="text-neutral-400 font-mono truncate">
                           {wallet.publicKey.slice(0, 8)}...{wallet.publicKey.slice(-4)}
                         </div>
-                        <div className="flex gap-2 text-[10px] text-slate-400">
-                          <span className="text-emerald-400">SOL: {wallet.solBalance.toFixed(3)}</span>
-                          <span className="text-cyan-400">Tokens: {wallet.tokenBalance.toFixed(2)}</span>
-                          <span className={wallet.ataExists ? "text-green-400" : "text-red-400"}>
+                        <div className="flex gap-2 text-[10px] text-slate-500">
+                          <span className="text-emerald-300/70">SOL: {wallet.solBalance.toFixed(3)}</span>
+                          <span className="text-cyan-300/70">Tokens: {wallet.tokenBalance.toFixed(2)}</span>
+                          <span className={wallet.ataExists ? "text-green-300/70" : "text-red-300/70"}>
                             ATA: {wallet.ataExists ? "✓" : "✗"}
                           </span>
                         </div>
@@ -1924,7 +2013,7 @@ export default function DashboardPage() {
       <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
         <DialogContent className="bg-neutral-900 border-neutral-700 max-w-xl">
           <DialogHeader>
-            <DialogTitle className="text-sm text-neutral-200">Volume Bot Settings</DialogTitle>
+            <DialogTitle className="text-sm text-black">Volume Bot Settings</DialogTitle>
           </DialogHeader>
           <div className="space-y-3">
             <div className="grid grid-cols-2 gap-1">
