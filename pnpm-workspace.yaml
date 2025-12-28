@@ -1,0 +1,12 @@
+onlyBuiltDependencies:
+  - '@prisma/engines'
+  - bigint-buffer
+  - blake-hash
+  - bufferutil
+  - esbuild
+  - prisma
+  - protobufjs
+  - sharp
+  - tiny-secp256k1
+  - usb
+  - utf-8-validate

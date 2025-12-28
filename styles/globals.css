@@ -1,0 +1,121 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+}
+
+@layer base {
+  :root {
+    --font-sans: var(--font-geist-sans);
+    --font-mono: var(--font-geist-mono);
+    /* pink-forward palette to match panel */
+    --background: 0 0% 0%; /* keep dark stage */
+    --foreground: 340 24% 90%; /* #EFDBE0 */
+    --card: 340 100% 50%; /* #FF0054 */
+    --card-foreground: 340 24% 90%;
+    --popover: 340 100% 48%;
+    --popover-foreground: 340 24% 90%;
+    --primary: 340 100% 50%; /* bright pink */
+    --primary-foreground: 340 24% 92%;
+    --secondary: 343 70% 60%; /* #E05174 */
+    --secondary-foreground: 340 24% 90%;
+    --muted: 343 30% 28%;
+    --muted-foreground: 340 24% 80%;
+    --accent: 343 70% 60%;
+    --accent-foreground: 340 24% 90%;
+    --destructive: 343 75% 30%; /* #980025 */
+    --destructive-foreground: 340 24% 95%;
+    --border: 343 70% 50%;
+    --input: 343 70% 50%;
+    --ring: 343 70% 60%;
+    --chart-1: 343 70% 60%; /* mid pink */
+    --chart-2: 340 24% 90%; /* light */
+    --chart-3: 343 75% 30%; /* dark */
+    --chart-4: 343 30% 28%;
+    --chart-5: 343 45% 35%;
+    --radius: 0.5rem;
+    --sidebar-background: 340 100% 35%;
+    --sidebar-foreground: 340 24% 90%;
+    --sidebar-primary: 340 100% 50%;
+    --sidebar-primary-foreground: 340 24% 92%;
+    --sidebar-accent: 343 70% 60%;
+    --sidebar-accent-foreground: 340 24% 90%;
+    --sidebar-border: 343 70% 50%;
+    --sidebar-ring: 343 70% 60%;
+  }
+  .dark {
+    --background: 0 0% 0%;
+    --foreground: 340 24% 90%;
+    --card: 340 100% 46%;
+    --card-foreground: 340 24% 90%;
+    --popover: 340 100% 44%;
+    --popover-foreground: 340 24% 90%;
+    --primary: 340 100% 50%;
+    --primary-foreground: 340 24% 92%;
+    --secondary: 343 70% 58%;
+    --secondary-foreground: 340 24% 90%;
+    --muted: 343 30% 25%;
+    --muted-foreground: 340 24% 80%;
+    --accent: 343 70% 58%;
+    --accent-foreground: 340 24% 90%;
+    --destructive: 343 75% 28%;
+    --destructive-foreground: 340 24% 95%;
+    --border: 343 70% 46%;
+    --input: 343 70% 46%;
+    --ring: 343 70% 58%;
+    --chart-1: 343 70% 58%;
+    --chart-2: 340 24% 90%;
+    --chart-3: 343 75% 28%;
+    --chart-4: 343 30% 25%;
+    --chart-5: 343 45% 33%;
+    --sidebar-background: 340 100% 32%;
+    --sidebar-foreground: 340 24% 90%;
+    --sidebar-primary: 340 100% 50%;
+    --sidebar-primary-foreground: 340 24% 92%;
+    --sidebar-accent: 343 70% 58%;
+    --sidebar-accent-foreground: 340 24% 90%;
+    --sidebar-border: 343 70% 46%;
+    --sidebar-ring: 343 70% 58%;
+  }
+}
+
+/* override neutral palette to fit burgundy / rose palette */
+@layer utilities {
+  .bg-neutral-900, .bg-neutral-800, .bg-neutral-700 {
+    background-color: #980025 !important;
+  }
+  .bg-neutral-600, .bg-neutral-500, .bg-neutral-400 {
+    background-color: #E05174 !important;
+  }
+  .text-neutral-900, .text-neutral-800, .text-neutral-700, .text-neutral-600, .text-neutral-500, .text-neutral-400 {
+    color: #EFDBE0 !important;
+  }
+  .border-neutral-900, .border-neutral-800, .border-neutral-700, .border-neutral-600, .border-neutral-500, .border-neutral-400 {
+    border-color: #980025 !important;
+  }
+  .text-cyan-400, .text-cyan-500, .text-cyan-600, .text-sky-400, .text-sky-500 {
+    color: #EFDBE0 !important;
+  }
+  .fill-cyan-400, .fill-cyan-500, .fill-sky-400, .fill-sky-500 {
+    fill: #EFDBE0 !important;
+  }
+  .stroke-cyan-400, .stroke-cyan-500, .stroke-sky-400, .stroke-sky-500 {
+    stroke: #EFDBE0 !important;
+  }
+  .bg-cyan-500, .bg-cyan-400, .bg-sky-500, .bg-sky-400 {
+    background-color: #E05174 !important;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+}

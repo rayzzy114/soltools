@@ -1,0 +1,109 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+}
+
+@layer base {
+  :root {
+    --font-sans: var(--font-geist-sans);
+    --font-mono: var(--font-geist-mono);
+    /* Customer reference: light canvas + blue-gray panels, dark sidebar */
+    --background: 210 25% 98%; /* near-white */
+    --foreground: 222 47% 11%; /* slate-900 */
+    --card: 0 0% 100%;
+    --card-foreground: 222 47% 11%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 222 47% 11%;
+    --primary: 214 90% 52%; /* blue */
+    --primary-foreground: 0 0% 100%;
+    --secondary: 210 40% 96%;
+    --secondary-foreground: 222 47% 11%;
+    --muted: 210 40% 96%;
+    --muted-foreground: 215 16% 47%; /* slate-500 */
+    --accent: 210 40% 96%;
+    --accent-foreground: 222 47% 11%;
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 214 32% 91%; /* blue-gray border */
+    --input: 214 32% 91%;
+    --ring: 214 90% 52%;
+    --chart-1: 214 90% 52%;
+    --chart-2: 173 80% 40%;
+    --chart-3: 262 83% 58%;
+    --chart-4: 43 96% 56%;
+    --chart-5: 0 84% 60%;
+    --radius: 0.375rem;
+    --sidebar-background: 222 47% 11%; /* slate-900 */
+    --sidebar-foreground: 210 40% 98%;
+    --sidebar-primary: 214 90% 52%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 217 33% 17%; /* slate-800 */
+    --sidebar-accent-foreground: 210 40% 98%;
+    --sidebar-border: 217 33% 17%;
+    --sidebar-ring: 214 90% 52%;
+  }
+  .dark {
+    --background: 222 47% 7%;
+    --foreground: 210 40% 98%;
+    --card: 222 47% 9%;
+    --card-foreground: 210 40% 98%;
+    --popover: 222 47% 9%;
+    --popover-foreground: 210 40% 98%;
+    --primary: 214 90% 52%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 217 33% 17%;
+    --secondary-foreground: 210 40% 98%;
+    --muted: 217 33% 17%;
+    --muted-foreground: 215 20% 65%;
+    --accent: 217 33% 17%;
+    --accent-foreground: 210 40% 98%;
+    --destructive: 0 62% 50%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 217 33% 17%;
+    --input: 217 33% 17%;
+    --ring: 214 90% 52%;
+    --chart-1: 214 90% 52%;
+    --chart-2: 173 80% 40%;
+    --chart-3: 262 83% 58%;
+    --chart-4: 43 96% 56%;
+    --chart-5: 0 84% 60%;
+    --sidebar-background: 222 47% 11%;
+    --sidebar-foreground: 210 40% 98%;
+    --sidebar-primary: 214 90% 52%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 217 33% 17%;
+    --sidebar-accent-foreground: 210 40% 98%;
+    --sidebar-border: 217 33% 17%;
+    --sidebar-ring: 214 90% 52%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+}
+
+/* Compatibility layer: convert older hardcoded neutral utilities into theme tokens */
+@layer utilities {
+  .bg-neutral-900 { background-color: hsl(var(--card)) !important; }
+  .bg-neutral-800 { background-color: hsl(var(--muted)) !important; }
+  .bg-neutral-700 { background-color: hsl(var(--muted)) !important; }
+
+  .border-neutral-700,
+  .border-neutral-800,
+  .border-neutral-900 { border-color: hsl(var(--border)) !important; }
+
+  .text-neutral-400,
+  .text-neutral-500 { color: hsl(var(--muted-foreground)) !important; }
+
+  .text-white { color: hsl(var(--foreground)) !important; }
+}

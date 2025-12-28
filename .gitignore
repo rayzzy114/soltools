@@ -1,0 +1,43 @@
+# dependencies
+node_modules/
+.pnpm-store/
+
+# environment variables
+.env
+.env.local
+.env.production
+
+# build outputs
+.next/
+dist/
+build/
+
+# logs
+*.log
+logs/
+
+# test coverage
+coverage/
+
+# IDE
+.vscode/
+.idea/
+.cursor/
+.cursorignore
+
+# OS
+.DS_Store
+Thumbs.db
+
+# temp files
+*.tmp
+*.swp
+
+# runtime data
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# reports
+reports/

@@ -1,0 +1,6 @@
+#!/usr/bin/env sh
+. "$(dirname "$0")/_/husky.sh"
+
+echo "running lint and smoke tests..."
+pnpm lint && pnpm test:smoke
+

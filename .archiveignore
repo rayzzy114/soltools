@@ -1,0 +1,28 @@
+# Файлы для исключения из архива продакшена
+node_modules
+.git
+.cursor
+.next
+dist
+coverage
+.vscode
+.idea
+*.log
+*.tmp
+test-env.txt
+.env
+.env.local
+.env.production.local
+.env.development.local
+
+# Тестовые файлы (опционально, можно оставить)
+# tests
+# scripts/test-*.ts
+# scripts/devnet-*.ts
+
+# Временные файлы
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db

@@ -1,0 +1,56 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: panel-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-pumpfun_panel}
+      POSTGRES_USER: ${POSTGRES_USER:-panel}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change_me}
+    volumes:
+      - panel_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  app:
+    image: panel-app:latest
+    # Keep build for local usage; on server we run `docker compose up -d --no-build`
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: panel-app
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "${APP_PORT:-3000}:3000"
+    environment:
+      NODE_ENV: production
+      # Prisma
+      DATABASE_URL: ${DATABASE_URL}
+      # App env (public)
+      NEXT_PUBLIC_SOLANA_NETWORK: ${NEXT_PUBLIC_SOLANA_NETWORK:-mainnet-beta}
+      NEXT_PUBLIC_SOLANA_RPC_URL: ${NEXT_PUBLIC_SOLANA_RPC_URL}
+      NEXT_PUBLIC_SOLANA_RPC_URLS: ${NEXT_PUBLIC_SOLANA_RPC_URLS}
+      NEXT_PUBLIC_ALLOW_PRIVATE_KEYS: ${NEXT_PUBLIC_ALLOW_PRIVATE_KEYS:-false}
+      # App env (server)
+      EXPOSE_WALLET_SECRETS: ${EXPOSE_WALLET_SECRETS:-false}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      # Jito
+      JITO_USE_SDK: ${JITO_USE_SDK:-true}
+      JITO_AUTH_KEYPAIR: ${JITO_AUTH_KEYPAIR}
+      JITO_BUNDLE_API_URL: ${JITO_BUNDLE_API_URL}
+      JITO_BLOCK_ENGINE_URL: ${JITO_BLOCK_ENGINE_URL}
+      # Telegram alerts (optional)
+      TELEGRAM_ALERTS_ENABLED: ${TELEGRAM_ALERTS_ENABLED:-false}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID}
+
+volumes:
+  panel_db_data:
+
+
