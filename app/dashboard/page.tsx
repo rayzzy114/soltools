@@ -245,9 +245,7 @@ export default function DashboardPage() {
           setBundlerWallets(data.wallets)
         }
 
-        if (data.wallets.length > 0) {
-          toast.success(`loaded ${data.wallets.length} saved wallets`)
-        }
+        // no toast: avoid noisy "loaded X saved wallets" popup
       }
     } catch (error: any) {
       console.error("failed to load saved wallets:", error)
@@ -1316,22 +1314,22 @@ export default function DashboardPage() {
     <div className="p-1 space-y-1">
       <div className="flex flex-col gap-1 xl:flex-row xl:items-center xl:justify-between">
         <div className="space-y-1">
-          <div className="text-sm font-semibold text-neutral-200 tracking-wider">CONTROL PANEL</div>
+          <div className="text-sm font-semibold text-white tracking-wider">CONTROL PANEL</div>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-1 text-[10px]">
               <div className="flex items-center justify-between rounded border border-neutral-800 bg-neutral-900/70 px-1 py-0.5">
-              <span className="text-neutral-500">Active tokens</span>
+              <span className="text-white/80">Active tokens</span>
               <span className="font-mono text-white">{loading ? "..." : stats.activeTokens}</span>
             </div>
               <div className="flex items-center justify-between rounded border border-neutral-800 bg-neutral-900/70 px-1 py-0.5">
-              <span className="text-neutral-500">Volume 24h</span>
+              <span className="text-white/80">Volume 24h</span>
               <span className="font-mono text-white">{loading ? "..." : formatVolume(stats.totalVolume24h)}</span>
             </div>
               <div className="flex items-center justify-between rounded border border-neutral-800 bg-neutral-900/70 px-1 py-0.5">
-              <span className="text-neutral-500">Bundled txs</span>
+              <span className="text-white/80">Bundled txs</span>
               <span className="font-mono text-white">{loading ? "..." : stats.bundledTxs}</span>
             </div>
               <div className="flex items-center justify-between rounded border border-neutral-800 bg-neutral-900/70 px-1 py-0.5">
-              <span className="text-neutral-500">Holders gained</span>
+              <span className="text-white/80">Holders gained</span>
               <span className="font-mono text-white">{loading ? "..." : stats.holdersGained.toLocaleString()}</span>
             </div>
           </div>
@@ -1374,7 +1372,7 @@ export default function DashboardPage() {
         <Card className="xl:col-span-6 bg-neutral-900 border-neutral-700">
           <CardHeader className="py-1 px-2">
             <div className="flex items-center justify-between">
-              <CardTitle className="text-xs font-medium text-slate-400 tracking-wider flex items-center gap-2 border-b border-slate-800 pb-2">
+              <CardTitle className="text-xs font-medium text-white tracking-wider flex items-center gap-2 border-b border-slate-800 pb-2">
                 <Rocket className="w-4 h-4 text-blue-400" />
                 VOLUME BOT
               </CardTitle>
@@ -1470,7 +1468,7 @@ export default function DashboardPage() {
 
         <Card className="xl:col-span-6 bg-neutral-900 border-neutral-700">
           <CardHeader className="py-1 px-2">
-              <CardTitle className="text-xs font-medium text-slate-400 tracking-wider flex items-center gap-2 border-b border-slate-800 pb-2">
+              <CardTitle className="text-xs font-medium text-white tracking-wider flex items-center gap-2 border-b border-slate-800 pb-2">
                 <Package className="w-4 h-4 text-cyan-400" />
                 BUNDLER
               </CardTitle>
@@ -1559,7 +1557,7 @@ export default function DashboardPage() {
       <div className="grid grid-cols-1 xl:grid-cols-12 gap-1">
         <Card className="xl:col-span-12 bg-red-950/20 border-red-500/50">
           <CardHeader className="py-1 px-2">
-            <CardTitle className="text-xs font-medium text-slate-200 tracking-wider flex items-center gap-2 border-b border-slate-800 pb-2">
+              <CardTitle className="text-xs font-medium text-white tracking-wider flex items-center gap-2 border-b border-slate-800 pb-2">
               <Flame className="w-4 h-4 text-red-400" />
               RUGPULL
             </CardTitle>
@@ -1646,7 +1644,7 @@ export default function DashboardPage() {
         <Card className="bg-neutral-900 border-neutral-700">
           <CardHeader className="py-1 px-2">
             <div className="flex items-center justify-between">
-              <CardTitle className="text-xs font-medium text-slate-400 tracking-wider flex items-center gap-2 border-b border-slate-800 pb-2">
+            <CardTitle className="text-xs font-medium text-white tracking-wider flex items-center gap-2 border-b border-slate-800 pb-2">
                 <Wallet className="w-4 h-4" />
                 WALLETS
               </CardTitle>
@@ -1818,7 +1816,7 @@ export default function DashboardPage() {
 
         <Card className="bg-neutral-900 border-neutral-700">
           <CardHeader className="py-1 px-2">
-            <CardTitle className="text-xs font-medium text-slate-200 tracking-wider flex items-center gap-2 border-b border-slate-800 pb-2">
+            <CardTitle className="text-xs font-medium text-white tracking-wider flex items-center gap-2 border-b border-slate-800 pb-2">
               <Users className="w-4 h-4" />
               HOLDERS
             </CardTitle>
@@ -1847,7 +1845,7 @@ export default function DashboardPage() {
 
         <Card className="bg-neutral-900 border-neutral-700">
           <CardHeader className="py-1 px-2">
-            <CardTitle className="text-xs font-medium text-slate-200 tracking-wider flex items-center gap-2 border-b border-slate-800 pb-2">
+            <CardTitle className="text-xs font-medium text-white tracking-wider flex items-center gap-2 border-b border-slate-800 pb-2">
               <Activity className="w-4 h-4" />
               LIVE TRADES
             </CardTitle>
@@ -1884,7 +1882,7 @@ export default function DashboardPage() {
         <Card className="bg-neutral-900 border-neutral-700">
           <CardHeader className="py-1 px-2">
             <div className="flex items-center justify-between border-b border-slate-800 pb-2">
-              <CardTitle className="text-xs font-medium text-slate-400 tracking-wider flex items-center gap-2">
+              <CardTitle className="text-xs font-medium text-white tracking-wider flex items-center gap-2">
                 <AlertTriangle className="w-4 h-4 text-yellow-400" />
                 SYSTEM LOGS
               </CardTitle>

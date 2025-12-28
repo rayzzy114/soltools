@@ -1,10 +1,9 @@
 "use client"
-
+import dynamic from "next/dynamic"
 import { useState, useEffect } from "react"
 import { ChevronRight, LayoutDashboard, Bot, Package, Rocket, Bell, RefreshCw, Wallet, PlayCircle, BarChart3, TestTube } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { useWallet, useConnection } from "@solana/wallet-adapter-react"
-import { WalletMultiButton } from "@solana/wallet-adapter-react-ui"
 import { LAMPORTS_PER_SOL } from "@solana/web3.js"
 import DashboardPage from "./dashboard/page"
 import VolumeBotPage from "./volume-bot/page"
@@ -13,6 +12,10 @@ import TokenLauncherPage from "./token-launcher/page"
 import DevnetTestPage from "./devnet-test/page"
 import DemoPage from "./demo/page"
 import TestsPage from "./tests/page"
+const WalletMultiButton = dynamic(
+  () => import("@solana/wallet-adapter-react-ui").then((mod) => mod.WalletMultiButton),
+  { ssr: false }
+)
 
 export default function CryptoDashboard() {
   const [activeSection, setActiveSection] = useState("dashboard")
@@ -95,8 +98,11 @@ export default function CryptoDashboard() {
                 </div>
               ) : (
                 <div className="p-4">
-                  <WalletMultiButton className="!bg-cyan-500 hover:!bg-cyan-600 !text-black !rounded !w-full !justify-center" />
-              </div>
+                  <div className="relative">
+                    <WalletMultiButton className="!bg-cyan-500 hover:!bg-cyan-600 !text-black !rounded !w-full !justify-center !pl-12" />
+                    <Wallet className="absolute left-3 top-1/2 -translate-y-1/2 text-black/70 pointer-events-none" />
+                  </div>
+                </div>
               )}
             </div>
           )}

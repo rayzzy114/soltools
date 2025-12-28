@@ -1,0 +1,69 @@
+# docker-compose для заказчика (без build, только pull образа)
+# использование: docker compose -f docker-compose.production.yml up -d
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: panel-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-pumpfun_panel}
+      POSTGRES_USER: ${POSTGRES_USER:-panel}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change_me}
+    volumes:
+      - panel_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  app:
+    # замени на свой Docker Hub username
+    image: YOUR_DOCKERHUB_USER/panel-app:latest
+    container_name: panel-app
+    restart: unless-stopped
+    pull_policy: always  # всегда пуллит последнюю версию
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "${APP_PORT:-3000}:3000"
+    environment:
+      NODE_ENV: production
+      # Prisma
+      DATABASE_URL: ${DATABASE_URL}
+      # App env (public)
+      NEXT_PUBLIC_SOLANA_NETWORK: ${NEXT_PUBLIC_SOLANA_NETWORK:-mainnet-beta}
+      NEXT_PUBLIC_SOLANA_RPC_URL: ${NEXT_PUBLIC_SOLANA_RPC_URL}
+      NEXT_PUBLIC_SOLANA_RPC_URLS: ${NEXT_PUBLIC_SOLANA_RPC_URLS}
+      NEXT_PUBLIC_ALLOW_PRIVATE_KEYS: ${NEXT_PUBLIC_ALLOW_PRIVATE_KEYS:-false}
+      # App env (server)
+      EXPOSE_WALLET_SECRETS: ${EXPOSE_WALLET_SECRETS:-false}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      # Jito
+      JITO_USE_SDK: ${JITO_USE_SDK:-true}
+      JITO_AUTH_KEYPAIR: ${JITO_AUTH_KEYPAIR}
+      JITO_BUNDLE_API_URL: ${JITO_BUNDLE_API_URL}
+      JITO_BLOCK_ENGINE_URL: ${JITO_BLOCK_ENGINE_URL}
+      # Telegram alerts (optional)
+      TELEGRAM_ALERTS_ENABLED: ${TELEGRAM_ALERTS_ENABLED:-false}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID}
+
+  # watchtower - автоматически обновляет контейнеры при появлении нового образа
+  watchtower:
+    image: containrrr/watchtower
+    container_name: panel-watchtower
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - WATCHTOWER_POLL_INTERVAL=300  # проверка каждые 5 минут
+      - WATCHTOWER_CLEANUP=true  # удаляет старые образы
+      - WATCHTOWER_INCLUDE_STOPPED=false
+      - WATCHTOWER_REVIVE_STOPPED=false
+    command: panel-app  # следит только за контейнером panel-app
+
+volumes:
+  panel_db_data:

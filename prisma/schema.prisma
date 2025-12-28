@@ -1,10 +1,7 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
 generator client {
   provider   = "prisma-client-js"
-  engineType = "client"
   output     = "../node_modules/.prisma/client"
+  engineType = "client"
 }
 
 datasource db {
@@ -12,24 +9,22 @@ datasource db {
 }
 
 model Token {
-  id                String   @id @default(cuid())
-  mintAddress       String   @unique
-  name              String
-  symbol            String
-  decimals          Int      @default(9)
-  totalSupply       String
-  description       String?
-  imageUrl          String?
-  creatorWallet     String
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
-  deletedAt         DateTime?
-  
-  // Relations
-  transactions      Transaction[]
-  volumeBotPairs    VolumeBotPair[]
-  bundles           BundleTransaction[]
-  
+  id             String              @id @default(cuid())
+  mintAddress    String              @unique
+  name           String
+  symbol         String
+  decimals       Int                 @default(9)
+  totalSupply    String
+  description    String?
+  imageUrl       String?
+  creatorWallet  String
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+  deletedAt      DateTime?
+  bundles        BundleTransaction[]
+  transactions   Transaction[]
+  volumeBotPairs VolumeBotPair[]
+
   @@index([creatorWallet])
   @@index([createdAt])
   @@index([mintAddress])
@@ -37,25 +32,23 @@ model Token {
 }
 
 model Transaction {
-  id                String   @id @default(cuid())
-  signature         String?  @unique
-  tokenId           String
-  token             Token    @relation(fields: [tokenId], references: [id])
-  type              String   // "buy", "sell", "add_liquidity", "remove_liquidity", "burn"
-  walletAddress     String
-  amount            String
-  solAmount         String?
-  price             String?
-  // fee / tip (best-effort; stored as strings to avoid float precision issues)
-  networkFeeLamports String?
-  networkFeeSol      String?
-  jitoTipSol         String?
+  id                   String   @id @default(cuid())
+  signature            String?  @unique
+  tokenId              String
+  type                 String
+  walletAddress        String
+  amount               String
+  solAmount            String?
+  price                String?
+  networkFeeLamports   String?
+  networkFeeSol        String?
+  jitoTipSol           String?
   priorityFeeSolBudget String?
-  // human-readable error (for failed/pending) for UI
-  error             String?
-  status            String   @default("pending") // "pending", "confirmed", "failed"
-  createdAt         DateTime @default(now())
-  
+  error                String?
+  status               String   @default("pending")
+  createdAt            DateTime @default(now())
+  token                Token    @relation(fields: [tokenId], references: [id])
+
   @@index([tokenId])
   @@index([walletAddress])
   @@index([createdAt])
@@ -63,27 +56,25 @@ model Transaction {
 }
 
 model VolumeBotPair {
-  id                String   @id @default(cuid())
-  tokenId           String
-  token             Token    @relation(fields: [tokenId], references: [id])
-  isActive          Boolean  @default(false)
-  minAmount         String
-  maxAmount         String
-  intervalSeconds   Int
-  numberOfWallets   Int      @default(1)
-  randomDelays      Boolean  @default(true)
-  antiDetection     Boolean  @default(true)
-  totalTrades       Int      @default(0)
-  totalVolume       String   @default("0")
-  solSpent          String   @default("0")
-  status            String   @default("stopped") // "stopped", "running", "paused", "error"
-  lastRunAt         DateTime?
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
-
-  // Relations
-  settings          VolumeBotSettings?
-  logs              BotLog[]
+  id              String             @id @default(cuid())
+  tokenId         String
+  isActive        Boolean            @default(false)
+  minAmount       String
+  maxAmount       String
+  intervalSeconds Int
+  numberOfWallets Int                @default(1)
+  randomDelays    Boolean            @default(true)
+  antiDetection   Boolean            @default(true)
+  totalTrades     Int                @default(0)
+  totalVolume     String             @default("0")
+  solSpent        String             @default("0")
+  status          String             @default("stopped")
+  lastRunAt       DateTime?
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+  logs            BotLog[]
+  token           Token              @relation(fields: [tokenId], references: [id])
+  settings        VolumeBotSettings?
 
   @@index([tokenId])
   @@index([isActive])
@@ -91,34 +82,34 @@ model VolumeBotPair {
 }
 
 model VolumeBotSettings {
-  id                String   @id @default(cuid())
-  pairId            String   @unique
-  pair              VolumeBotPair @relation(fields: [pairId], references: [id], onDelete: Cascade)
-  mode              String   @default("wash") // "buy", "sell", "wash"
-  amountMode        String   @default("random") // "fixed", "random", "percentage"
-  fixedAmount       String   @default("0.01")
-  minAmount         String   @default("0.005")
-  maxAmount         String   @default("0.02")
-  minPercentage     String   @default("5")
-  maxPercentage     String   @default("20")
-  slippage          String   @default("10")
-  priorityFee       String   @default("0.005")
-  jitoTip           String   @default("0.0001")
-  jitoRegion        String   @default("frankfurt")
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
+  id            String        @id @default(cuid())
+  pairId        String        @unique
+  mode          String        @default("wash")
+  amountMode    String        @default("random")
+  fixedAmount   String        @default("0.01")
+  minAmount     String        @default("0.005")
+  maxAmount     String        @default("0.02")
+  minPercentage String        @default("5")
+  maxPercentage String        @default("20")
+  slippage      String        @default("10")
+  priorityFee   String        @default("0.005")
+  jitoTip       String        @default("0.0001")
+  jitoRegion    String        @default("frankfurt")
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  pair          VolumeBotPair @relation(fields: [pairId], references: [id], onDelete: Cascade)
 
   @@index([pairId])
 }
 
 model BotLog {
-  id                String   @id @default(cuid())
-  pairId            String
-  pair              VolumeBotPair @relation(fields: [pairId], references: [id], onDelete: Cascade)
-  message           String
-  type              String   @default("info") // "info", "success", "error", "warning"
-  metadata          Json?    // additional data like tx signatures, amounts, etc.
-  createdAt         DateTime @default(now())
+  id        String        @id @default(cuid())
+  pairId    String
+  message   String
+  type      String        @default("info")
+  metadata  Json?
+  createdAt DateTime      @default(now())
+  pair      VolumeBotPair @relation(fields: [pairId], references: [id], onDelete: Cascade)
 
   @@index([pairId])
   @@index([type])
@@ -126,95 +117,90 @@ model BotLog {
 }
 
 model Bundle {
-  id                String   @id @default(cuid())
-  bundleId          String   @unique
-  status            String   @default("pending") // "pending", "processing", "completed", "failed"
-  txCount           Int
-  successCount      Int      @default(0)
-  failedCount       Int      @default(0)
-  gasUsed           String?
-  createdAt         DateTime @default(now())
-  completedAt       DateTime?
-  
-  transactions      BundleTransaction[]
-  
+  id           String              @id @default(cuid())
+  bundleId     String              @unique
+  status       String              @default("pending")
+  txCount      Int
+  successCount Int                 @default(0)
+  failedCount  Int                 @default(0)
+  gasUsed      String?
+  createdAt    DateTime            @default(now())
+  completedAt  DateTime?
+  transactions BundleTransaction[]
+
   @@index([status])
   @@index([createdAt])
 }
 
 model BundleTransaction {
-  id                String   @id @default(cuid())
-  bundleId          String
-  bundle            Bundle   @relation(fields: [bundleId], references: [id])
-  tokenId           String?
-  token             Token?   @relation(fields: [tokenId], references: [id])
-  walletAddress     String
-  amount            String
-  type              String   // "buy", "sell"
-  status            String   @default("pending")
-  signature         String?
-  createdAt         DateTime @default(now())
-  
+  id            String   @id @default(cuid())
+  bundleId      String
+  tokenId       String?
+  walletAddress String
+  amount        String
+  type          String
+  status        String   @default("pending")
+  signature     String?
+  createdAt     DateTime @default(now())
+  bundle        Bundle   @relation(fields: [bundleId], references: [id])
+  token         Token?   @relation(fields: [tokenId], references: [id])
+
   @@index([bundleId])
   @@index([walletAddress])
 }
 
 model Stats {
-  id                String   @id @default(cuid())
-  date              DateTime @unique @default(now())
-  activeTokens      Int      @default(0)
-  totalVolume24h    String   @default("0")
-  bundledTxs        Int      @default(0)
-  holdersGained     Int      @default(0)
-  volumeBotTrades   Int      @default(0)
-  volumeBotVolume   String   @default("0")
-  
+  id              String   @id @default(cuid())
+  date            DateTime @unique @default(now())
+  activeTokens    Int      @default(0)
+  totalVolume24h  String   @default("0")
+  bundledTxs      Int      @default(0)
+  holdersGained   Int      @default(0)
+  volumeBotTrades Int      @default(0)
+  volumeBotVolume String   @default("0")
+
   @@index([date])
 }
 
 model Wallet {
-  id                String   @id @default(cuid())
-  publicKey         String   @unique
-  secretKey         String   // encrypted in production
-  label             String?
-  solBalance        String   @default("0")
-  tokenBalance      String   @default("0")
-  isActive          Boolean  @default(true)
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
-  
-  // Relations
-  groups            WalletGroupWallet[]
-  
+  id           String              @id @default(cuid())
+  publicKey    String              @unique
+  secretKey    String
+  label        String?
+  solBalance   String              @default("0")
+  tokenBalance String              @default("0")
+  isActive     Boolean             @default(true)
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+  groups       WalletGroupWallet[]
+
   @@index([publicKey])
   @@index([isActive])
   @@index([createdAt])
 }
 
 model WalletGroup {
-  id                String   @id @default(cuid())
-  name              String
-  description       String?
-  type              String   @default("custom") // "custom", "launch", "exit", "volume"
-  isActive          Boolean  @default(true)
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
-  
-  // Relations
-  wallets           WalletGroupWallet[]
-  
+  id          String              @id @default(cuid())
+  name        String
+  description String?
+  type        String              @default("custom")
+  isActive    Boolean             @default(true)
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+  wallets     WalletGroupWallet[]
+
   @@index([type])
   @@index([isActive])
 }
 
 model WalletGroupWallet {
-  id                String   @id @default(cuid())
-  groupId            String
-  group              WalletGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
-  walletId           String
-  wallet             Wallet   @relation(fields: [walletId], references: [id], onDelete: Cascade)
-  createdAt          DateTime @default(now())
-  
+  id        String      @id @default(cuid())
+  groupId   String
+  walletId  String
+  createdAt DateTime    @default(now())
+  group     WalletGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  wallet    Wallet      @relation(fields: [walletId], references: [id], onDelete: Cascade)
+
   @@unique([groupId, walletId])
   @@index([groupId])
   @@index([walletId])

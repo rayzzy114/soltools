@@ -2,6 +2,51 @@
 
 панель для pump.fun: launcher, bundler, ragpull, volume bot, gather. по умолчанию mainnet-beta.
 
+## деплой для заказчика (без передачи кода) — вариант 1: Docker Hub + автообновления
+
+**идея:** пушишь Docker образ в приватный Docker Hub, заказчик пуллит образ. watchtower автоматически обновляет приложение при новом образе.
+
+### настройка (один раз):
+
+1. **создай приватный репозиторий на Docker Hub:**
+   - зайди на https://hub.docker.com
+   - создай репозиторий `panel-app` (приватный)
+   - запомни свой username
+
+2. **настрой docker-compose.production.yml:**
+   - открой `deploy/docker-compose.production.yml`
+   - замени `YOUR_DOCKERHUB_USER` на свой Docker Hub username
+
+3. **запуши образ:**
+```powershell
+.\deploy\docker-hub-push.ps1 -DockerHubUser "твой_username"
+```
+
+### передача заказчику:
+
+передай заказчику:
+- `deploy/docker-compose.production.yml` (уже с твоим username)
+- `deploy/env.example`
+- `deploy/CLIENT_SETUP.md` (инструкция)
+- доступ к приватному Docker Hub репозиторию
+
+### обновление (когда делаешь фиксы):
+
+```powershell
+# просто запуши новый образ
+.\deploy\docker-hub-push.ps1 -DockerHubUser "твой_username" -ImageTag "v1.0.1"
+
+# watchtower у заказчика автоматически обновит контейнер в течение 5 минут
+```
+
+**преимущества:**
+- код не передаётся заказчику
+- автоматические обновления через watchtower
+- простота: заказчик только запускает docker compose
+- версионирование через теги
+
+---
+
 ## деплой на выделенный сервер + автообновления (без github) — вариант 2B
 
 Идея: **ты собираешь Docker image локально**, упаковываешь в `*.tar.gz`, заливаешь на сервер по SSH и сервер делает `docker load` + `docker compose up -d`. Код панели никуда публично не выкладывается.
@@ -60,7 +105,51 @@ docker image tag panel-app:rollback panel-app:latest
 docker compose up -d --no-build
 ```
 
-## быстрый старт (mainnet)
+## запуск через Docker (рекомендуется)
+
+самый простой способ запустить проект:
+
+```powershell
+# 1. клонируй репозиторий
+git clone <твой_приватный_репозиторий>
+cd панель
+
+# 2. создай .env файл
+cp deploy/env.example .env
+# отредактируй .env - укажи свои RPC URLs, пароли и т.д.
+
+# 3. запусти всё одной командой
+docker compose up -d --build
+```
+
+**что происходит:**
+- автоматически поднимается PostgreSQL (порт 5433)
+- собирается и запускается Next.js приложение (порт 3000)
+- выполняются миграции Prisma
+- всё работает в изолированных контейнерах
+
+**проверка:**
+```powershell
+# проверь что приложение запустилось
+curl http://localhost:3000/api/health
+
+# посмотри логи
+docker logs panel-app
+docker logs panel-db
+```
+
+**остановка:**
+```powershell
+docker compose down
+```
+
+**обновление после изменений:**
+```powershell
+git pull
+docker compose up -d --build
+```
+
+## быстрый старт (mainnet, без Docker)
 1) зависимости  
 ```bash
 pnpm install

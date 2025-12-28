@@ -1,0 +1,41 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: panel-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: pumpfun_panel
+      POSTGRES_USER: panel
+      POSTGRES_PASSWORD: change_me
+    volumes:
+      - panel_db_data:/var/lib/postgresql/data
+
+  app:
+    image: YOUR_USERNAME/panel-app:latest
+    container_name: panel-app
+    restart: unless-stopped
+    depends_on:
+      - db
+    ports:
+      - "3000:3000"
+    environment:
+      DATABASE_URL: postgresql://panel:change_me@db:5432/pumpfun_panel
+      NEXT_PUBLIC_SOLANA_NETWORK: mainnet-beta
+      NEXT_PUBLIC_SOLANA_RPC_URL: https://your-rpc-url
+      # добавь остальные переменные из .env
+
+  watchtower:
+    image: containrrr/watchtower
+    container_name: panel-watchtower
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - WATCHTOWER_POLL_INTERVAL=300
+      - WATCHTOWER_CLEANUP=true
+      - WATCHTOWER_INCLUDE_STOPPED=false
+      - WATCHTOWER_REVIVE_STOPPED=false
+    command: panel-app
+
+volumes:
+  panel_db_data:

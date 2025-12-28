@@ -1,0 +1,4 @@
+1. создай .env файл (скопируй из deploy/env.example)
+2. отредактируй docker-compose.client.yml - замени YOUR_USERNAME на username разработчика
+3. docker compose -f docker-compose.client.yml up -d
+4. готово

@@ -106,7 +106,6 @@ export default function VolumeBotPage() {
     multiThreaded: false,
     jitoTip: "0.0005",
     jitoRegion: "frankfurt",
-    jitoUuid: "",
     autoFees: true,
     autoBundler: true,
   }
@@ -128,7 +127,6 @@ export default function VolumeBotPage() {
     multiThreaded,
     jitoTip,
     jitoRegion,
-    jitoUuid,
     autoFees,
     autoBundler,
   } = config
@@ -148,7 +146,6 @@ export default function VolumeBotPage() {
   const setPriorityFee = (value: string) => setConfig((prev) => ({ ...prev, priorityFee: value }))
   const setJitoTip = (value: string) => setConfig((prev) => ({ ...prev, jitoTip: value }))
   const setJitoRegion = (value: string) => setConfig((prev) => ({ ...prev, jitoRegion: value }))
-  const setJitoUuid = (value: string) => setConfig((prev) => ({ ...prev, jitoUuid: value }))
   const setAutoFees = (value: boolean) => setConfig((prev) => ({ ...prev, autoFees: value }))
   const setAutoBundler = (value: boolean) => setConfig((prev) => ({ ...prev, autoBundler: value }))
   const setMaxExecutions = (value: string) => setConfig((prev) => ({ ...prev, maxExecutions: value }))
@@ -497,7 +494,6 @@ export default function VolumeBotPage() {
           priorityFee: Math.max(0, parseSafe(config.priorityFee)),
           jitoTip: Math.max(0, parseSafe(config.jitoTip)),
           jitoRegion: config.jitoRegion || "frankfurt",
-          jitoUuid: config.jitoUuid || "",
           autoFees: config.autoFees ?? true,
         }),
       })
@@ -1461,16 +1457,6 @@ export default function VolumeBotPage() {
                       </SelectContent>
                     </Select>
                   </div>
-                </div>
-
-                <div className="space-y-2">
-                  <Label className="text-xs text-muted-foreground">Jito JSON-RPC UUID</Label>
-                  <Input
-                    className="h-8 bg-background border-border text-xs"
-                    value={jitoUuid}
-                    onChange={(e) => setJitoUuid(e.target.value)}
-                    placeholder="uuid"
-                  />
                 </div>
 
                 <div className="space-y-2">
