@@ -11,6 +11,8 @@ import { JitoRegion } from "@/lib/solana/jito"
 import { prisma } from "@/lib/prisma"
 import { PublicKey } from "@solana/web3.js"
 
+const SELL_BUFFER_SOL = 0.0015
+
 async function ensureToken(mintAddress: string) {
   const existing = await prisma.token.findFirst({
     where: { mintAddress },
@@ -73,8 +75,38 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "mintAddress required" }, { status: 400 })
     }
 
+    const activeWallets = (wallets as BundlerWallet[])
+      .filter((w) => w.isActive && (w.tokenBalance ?? 0) > 0)
+    const targetWallets = mode === "bundle" ? activeWallets.slice(0, 13) : activeWallets
+    if (targetWallets.length === 0) {
+      return NextResponse.json({ error: "no wallets with token balance" }, { status: 400 })
+    }
+
+    const lastWalletIdx = targetWallets.length - 1
+    for (let i = 0; i < targetWallets.length; i++) {
+      const wallet = targetWallets[i]
+      const sellPercentage =
+        (sellPercentages as number[])[i] ?? (sellPercentages as number[])[0] ?? 100
+      if (!Number.isFinite(sellPercentage) || sellPercentage <= 0 || sellPercentage > 100) {
+        return NextResponse.json({ error: `invalid sell percentage for wallet ${wallet.publicKey}` }, { status: 400 })
+      }
+      const solBalance = Number(wallet.solBalance ?? 0)
+      let required = SELL_BUFFER_SOL + Math.max(0, Number(priorityFee || 0))
+      if (mode === "bundle" && i === lastWalletIdx) {
+        required += Math.max(0, Number(jitoTip || 0))
+      }
+      if (solBalance < required) {
+        return NextResponse.json(
+          {
+            error: `insufficient SOL for ${wallet.publicKey.slice(0, 6)}... need ${required.toFixed(4)} SOL`,
+          },
+          { status: 400 }
+        )
+      }
+    }
+
     const config: BundleConfig = {
-      wallets: wallets as BundlerWallet[],
+      wallets: targetWallets as BundlerWallet[],
       mintAddress,
       sellPercentages,
       staggerDelay,
@@ -119,7 +151,7 @@ export async function POST(request: NextRequest) {
         transactions: {
           create: (result.signatures || []).map((sig, idx) => ({
             tokenId: token?.id,
-            walletAddress: (wallets as BundlerWallet[])[idx]?.publicKey || "unknown",
+            walletAddress: targetWallets[idx]?.publicKey || "unknown",
             amount: String((sellPercentages as number[])[idx] ?? (sellPercentages as number[])[0] ?? 0),
             type: "sell",
             status: "confirmed",
@@ -129,11 +161,8 @@ export async function POST(request: NextRequest) {
       },
     })
 
-    const activeWallets = (wallets as BundlerWallet[])
-      .filter((w) => w.isActive && (w.tokenBalance ?? 0) > 0)
-      .slice(0, 13)
     const sellRows = (result.signatures || []).map((sig, idx) => {
-      const wallet = activeWallets[idx]
+      const wallet = targetWallets[idx]
       const sellPercentage = Number((sellPercentages as number[])[idx] ?? (sellPercentages as number[])[0] ?? 100)
       const tokenAmount = wallet ? Math.floor((wallet.tokenBalance * sellPercentage) / 100) : 0
       const tokenAmountRaw = BigInt(Math.floor(tokenAmount * 1e6))

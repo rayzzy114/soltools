@@ -3,6 +3,7 @@ import {
   Keypair,
   PublicKey,
   Transaction,
+  VersionedTransaction,
   TransactionInstruction,
   SystemProgram,
   LAMPORTS_PER_SOL,
@@ -36,11 +37,42 @@ import {
 import { buildSellPlan } from "./sell-plan"
 import { sendBundle, createTipInstruction, JitoRegion, JITO_ENDPOINTS } from "./jito"
 import bs58 from "bs58"
+import {
+  STAGGER_RETRY_ATTEMPTS,
+  STAGGER_RETRY_BASE_MS,
+  STAGGER_RETRY_JITTER_MS,
+} from "@/lib/config/limits"
 
 // max wallets in pump.fun bundle (after recent update)
 export const MAX_BUNDLE_WALLETS = 13
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+const getRetryDelay = (attempt: number) => {
+  const base = STAGGER_RETRY_BASE_MS + attempt * 400
+  const jitter = Math.random() * STAGGER_RETRY_JITTER_MS
+  return base + jitter
+}
+
+const MAX_TX_BYTES = 1232 // conservative UDP payload (MTU 1280 - headers)
+function getTxSize(tx: Transaction | VersionedTransaction): number {
+  if (tx instanceof VersionedTransaction) {
+    return tx.serialize().length
+  }
+  return tx.serialize({ requireAllSignatures: true, verifySignatures: false }).length
+}
+
+function validateBundleMtu(
+  transactions: (Transaction | VersionedTransaction)[],
+  label: string
+): string | null {
+  for (let i = 0; i < transactions.length; i++) {
+    const size = getTxSize(transactions[i])
+    if (size > MAX_TX_BYTES) {
+      return `transaction ${label}[${i}] exceeds MTU (${size} > ${MAX_TX_BYTES} bytes)`
+    }
+  }
+  return null
+}
 
 function extractTxSignature(tx: Transaction | VersionedTransaction): string {
   if (tx instanceof VersionedTransaction) {
@@ -542,6 +574,16 @@ export async function createLaunchBundle(config: BundleConfig): Promise<BundleRe
       }
     }
 
+    const mtuError = validateBundleMtu(transactions, "launch")
+    if (mtuError) {
+      return {
+        bundleId: "",
+        success: false,
+        signatures: [],
+        error: mtuError,
+      }
+    }
+
     // evidence-first: simulate ALL signed txs before sending
     for (let i = 0; i < transactions.length; i++) {
       const tx = transactions[i]
@@ -705,6 +747,16 @@ export async function createBuyBundle(config: BundleConfig): Promise<BundleResul
         lastTx.sign(...txSigners[lastIdx])
       } else {
         console.warn("[bundler] missing signer for last tx (tip not added)")
+      }
+    }
+
+    const mtuError = validateBundleMtu(transactions, "buy")
+    if (mtuError) {
+      return {
+        bundleId: "",
+        success: false,
+        signatures: [],
+        error: mtuError,
       }
     }
 
@@ -881,6 +933,30 @@ export async function createSellBundle(config: BundleConfig): Promise<BundleResu
       }
     }
 
+    const mtuError = validateBundleMtu(transactions, "sell")
+    if (mtuError) {
+      return {
+        bundleId: "",
+        success: false,
+        signatures: [],
+        error: mtuError,
+      }
+    }
+
+    // evidence-first: simulate ALL signed txs before sending
+    for (let i = 0; i < transactions.length; i++) {
+      const tx = transactions[i]
+      const sim = await connection.simulateTransaction(tx)
+      if (sim?.value?.err) {
+        return {
+          bundleId: "",
+          success: false,
+          signatures: [],
+          error: `simulation failed (sell idx=${i}): ${JSON.stringify(sim.value.err)}`,
+        }
+      }
+    }
+
     // send bundle via jito
     const result = await sendBundleWithRetry(transactions, jitoRegion)
 
@@ -960,60 +1036,75 @@ export async function createStaggeredBuys(
     const keypair = getKeypair(wallet)
     const buyAmount = buyAmounts[i] || buyAmounts[0] || 0.01
 
-    try {
-      // get latest bonding curve data
-      const bondingCurve = await getBondingCurveData(mint)
-      if (!bondingCurve) {
-        errors.push(`${wallet.publicKey}: token not available`)
-        continue
+    let attempt = 0
+    let sent = false
+    while (attempt < STAGGER_RETRY_ATTEMPTS && !sent) {
+      try {
+        // get latest bonding curve data
+        const bondingCurve = await getBondingCurveData(mint)
+        if (!bondingCurve) {
+          errors.push(`${wallet.publicKey}: token not available`)
+          break
+        }
+
+        const instructions: TransactionInstruction[] = []
+
+        // create ATA (idempotent, avoid RPC existence check)
+        const ata = await getAssociatedTokenAddress(mint, keypair.publicKey, false)
+        const ataIx = createAssociatedTokenAccountIdempotentInstruction(
+          keypair.publicKey,
+          ata,
+          keypair.publicKey,
+          mint
+        )
+        instructions.push(ataIx)
+
+        // calculate tokens out
+        const { tokensOut } = calculateBuyAmount(bondingCurve, buyAmount)
+        const minTokensOut = (tokensOut * BigInt(100 - slippage)) / BigInt(100)
+
+        // buy instruction
+        const solLamports = BigInt(Math.floor(buyAmount * LAMPORTS_PER_SOL))
+        const buyIx = await createBuyInstruction(keypair.publicKey, mint, minTokensOut, solLamports)
+        instructions.push(buyIx)
+
+        const prioritized = addPriorityFeeInstructions(instructions, priorityFee)
+        const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash()
+
+        const buyTx = new Transaction()
+        buyTx.add(...prioritized)
+        buyTx.recentBlockhash = blockhash
+        buyTx.lastValidBlockHeight = lastValidBlockHeight
+        buyTx.feePayer = keypair.publicKey
+        buyTx.sign(keypair)
+
+        const signature = await connection.sendRawTransaction(buyTx.serialize())
+        signatures.push(signature)
+        sent = true
+
+        if (onTransaction && signature) {
+          onTransaction(wallet.publicKey, signature, i)
+        }
+      } catch (error: any) {
+        const message = error?.message || String(error)
+        const retryable =
+          message.includes("429") ||
+          message.toLowerCase().includes("too many requests") ||
+          message.toLowerCase().includes("rate limit") ||
+          message.toLowerCase().includes("blockhash")
+        attempt += 1
+        if (attempt >= STAGGER_RETRY_ATTEMPTS || !retryable) {
+          errors.push(`${wallet.publicKey}: ${message}`)
+          break
+        }
+        await sleep(getRetryDelay(attempt))
       }
+    }
 
-      const instructions: TransactionInstruction[] = []
-
-      // create ATA (idempotent, avoid RPC existence check)
-      const ata = await getAssociatedTokenAddress(mint, keypair.publicKey, false)
-      const ataIx = createAssociatedTokenAccountIdempotentInstruction(
-        keypair.publicKey,
-        ata,
-        keypair.publicKey,
-        mint
-      )
-      instructions.push(ataIx)
-
-      // calculate tokens out
-      const { tokensOut } = calculateBuyAmount(bondingCurve, buyAmount)
-      const minTokensOut = (tokensOut * BigInt(100 - slippage)) / BigInt(100)
-
-      // buy instruction
-      const solLamports = BigInt(Math.floor(buyAmount * LAMPORTS_PER_SOL))
-      const buyIx = await createBuyInstruction(keypair.publicKey, mint, minTokensOut, solLamports)
-      instructions.push(buyIx)
-
-      const prioritized = addPriorityFeeInstructions(instructions, priorityFee)
-      const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash()
-
-      let signature: string | null = null
-      const buyTx = new Transaction()
-      buyTx.add(...prioritized)
-      buyTx.recentBlockhash = blockhash
-      buyTx.lastValidBlockHeight = lastValidBlockHeight
-      buyTx.feePayer = keypair.publicKey
-      buyTx.sign(keypair)
-
-      signature = await connection.sendRawTransaction(buyTx.serialize())
-      signatures.push(signature)
-
-      if (onTransaction && signature) {
-        onTransaction(wallet.publicKey, signature, i)
-      }
-
-      // random delay before next transaction
-      if (i < activeWallets.length - 1) {
-        const delay = Math.random() * (staggerDelay.max - staggerDelay.min) + staggerDelay.min
-        await new Promise((resolve) => setTimeout(resolve, delay))
-      }
-    } catch (error: any) {
-      errors.push(`${wallet.publicKey}: ${error.message}`)
+    // random delay before next transaction
+    if (i < activeWallets.length - 1) {
+      const delay = Math.random() * (staggerDelay.max - staggerDelay.min) + staggerDelay.min
+      await new Promise((resolve) => setTimeout(resolve, delay))
     }
   }
 
@@ -1051,68 +1142,84 @@ export async function createStaggeredSells(
     const keypair = getKeypair(wallet)
     const sellPercentage = sellPercentages[i] ?? sellPercentages[0] ?? 100
 
-    try {
-      // get latest bonding curve data
-      const bondingCurve = await getBondingCurveData(mint)
-      if (!bondingCurve || bondingCurve.complete) {
-        errors.push(`${wallet.publicKey}: token not available`)
-        continue
-      }
-
-      const tokenAmount = Math.floor((wallet.tokenBalance * sellPercentage) / 100)
-      if (tokenAmount <= 0) continue
-
-      const tokenAmountRaw = BigInt(Math.floor(tokenAmount * 1e6))
-
-      // calculate min SOL out
-      let minSolOut = BigInt(0)
-      let sellTx: Transaction
-
-      if (bondingCurve.complete) {
-        const poolData = await getPumpswapPoolData(mint)
-        if (!poolData) {
-          errors.push(`${wallet.publicKey}: pumpswap pool unavailable`)
-          continue
+    let attempt = 0
+    let sent = false
+    while (attempt < STAGGER_RETRY_ATTEMPTS && !sent) {
+      try {
+        // get latest bonding curve data
+        const bondingCurve = await getBondingCurveData(mint)
+        if (!bondingCurve || bondingCurve.complete) {
+          errors.push(`${wallet.publicKey}: token not available`)
+          break
         }
-        const swap = calculatePumpswapSwapAmount(poolData, tokenAmountRaw, true)
-        minSolOut = (swap.solOut * BigInt(100 - slippage)) / BigInt(100)
-        sellTx = await buildPumpswapSwapTransaction(
-          keypair.publicKey,
-          mint,
-          tokenAmountRaw,
-          minSolOut,
-          priorityFee
-        )
-      } else {
-        const { solOut } = calculateSellAmount(bondingCurve, tokenAmountRaw)
-        minSolOut = (solOut * BigInt(100 - slippage)) / BigInt(100)
-        sellTx = new Transaction()
-        const sellIx = await createSellInstruction(keypair.publicKey, mint, tokenAmountRaw, minSolOut)
-        const instructions = addPriorityFeeInstructions([sellIx], priorityFee)
-        sellTx.add(...instructions)
+
+        const tokenAmount = Math.floor((wallet.tokenBalance * sellPercentage) / 100)
+        if (tokenAmount <= 0) break
+
+        const tokenAmountRaw = BigInt(Math.floor(tokenAmount * 1e6))
+
+        // calculate min SOL out
+        let minSolOut = BigInt(0)
+        let sellTx: Transaction
+
+        if (bondingCurve.complete) {
+          const poolData = await getPumpswapPoolData(mint)
+          if (!poolData) {
+            errors.push(`${wallet.publicKey}: pumpswap pool unavailable`)
+            break
+          }
+          const swap = calculatePumpswapSwapAmount(poolData, tokenAmountRaw, true)
+          minSolOut = (swap.solOut * BigInt(100 - slippage)) / BigInt(100)
+          sellTx = await buildPumpswapSwapTransaction(
+            keypair.publicKey,
+            mint,
+            tokenAmountRaw,
+            minSolOut,
+            priorityFee
+          )
+        } else {
+          const { solOut } = calculateSellAmount(bondingCurve, tokenAmountRaw)
+          minSolOut = (solOut * BigInt(100 - slippage)) / BigInt(100)
+          sellTx = new Transaction()
+          const sellIx = await createSellInstruction(keypair.publicKey, mint, tokenAmountRaw, minSolOut)
+          const instructions = addPriorityFeeInstructions([sellIx], priorityFee)
+          sellTx.add(...instructions)
+        }
+
+        const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash()
+        sellTx.recentBlockhash = blockhash
+        sellTx.lastValidBlockHeight = lastValidBlockHeight
+        sellTx.feePayer = keypair.publicKey
+
+        sellTx.sign(keypair)
+
+        const signature = await connection.sendRawTransaction(sellTx.serialize())
+        signatures.push(signature)
+        sent = true
+
+        if (onTransaction) {
+          onTransaction(wallet.publicKey, signature, i)
+        }
+      } catch (error: any) {
+        const message = error?.message || String(error)
+        const retryable =
+          message.includes("429") ||
+          message.toLowerCase().includes("too many requests") ||
+          message.toLowerCase().includes("rate limit") ||
+          message.toLowerCase().includes("blockhash")
+        attempt += 1
+        if (attempt >= STAGGER_RETRY_ATTEMPTS || !retryable) {
+          errors.push(`${wallet.publicKey}: ${message}`)
+          break
+        }
+        await sleep(getRetryDelay(attempt))
       }
+    }
 
-      const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash()
-      sellTx.recentBlockhash = blockhash
-      sellTx.lastValidBlockHeight = lastValidBlockHeight
-      sellTx.feePayer = keypair.publicKey
-
-      sellTx.sign(keypair)
-
-      const signature = await connection.sendRawTransaction(sellTx.serialize())
-      signatures.push(signature)
-
-      if (onTransaction) {
-        onTransaction(wallet.publicKey, signature, i)
-      }
-
-      // random delay before next transaction
-      if (i < activeWallets.length - 1) {
-        const delay = Math.random() * (staggerDelay.max - staggerDelay.min) + staggerDelay.min
-        await new Promise((resolve) => setTimeout(resolve, delay))
-      }
-    } catch (error: any) {
-      errors.push(`${wallet.publicKey}: ${error.message}`)
+    // random delay before next transaction
+    if (i < activeWallets.length - 1) {
+      const delay = Math.random() * (staggerDelay.max - staggerDelay.min) + staggerDelay.min
+      await new Promise((resolve) => setTimeout(resolve, delay))
     }
   }
 
@@ -1229,6 +1336,7 @@ export async function createRugpullBundle(config: BundleConfig): Promise<BundleR
     const netEstimatedProfit = profitData.totalEstimatedSol - estimatedGasFee - estimatedJitoTip
 
     const transactions: Transaction[] = []
+    const txSigners: Keypair[][] = []
     const { blockhash } = await connection.getLatestBlockhash()
 
     // second pass: create transactions for wallets with balances
@@ -1278,6 +1386,16 @@ export async function createRugpullBundle(config: BundleConfig): Promise<BundleR
         lastTx.sign(...txSigners[lastIdx])
       } else {
         console.warn("[bundler] missing signer for last tx (tip not added)")
+      }
+    }
+
+    const mtuError = validateBundleMtu(transactions, "rugpull")
+    if (mtuError) {
+      return {
+        bundleId: "",
+        success: false,
+        signatures: [],
+        error: mtuError,
       }
     }
 

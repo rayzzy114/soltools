@@ -16,5 +16,9 @@ export const FETCH_TIMEOUT_MS = 15_000
 export const FETCH_RETRIES = 2
 export const FETCH_BACKOFF_MS = 500
 
+export const STAGGER_RETRY_ATTEMPTS = 3
+export const STAGGER_RETRY_BASE_MS = 1200
+export const STAGGER_RETRY_JITTER_MS = 600
+
 export type SellRoute = "auto" | "bonding_curve" | "pumpswap"
 

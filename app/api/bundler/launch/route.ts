@@ -10,6 +10,19 @@ import { SOLANA_NETWORK } from "@/lib/solana/config"
 import { JitoRegion } from "@/lib/solana/jito"
 import { prisma } from "@/lib/prisma"
 import { PublicKey } from "@solana/web3.js"
+import { MIN_BUY_SOL } from "@/lib/config/limits"
+
+const ATA_RENT_BUFFER_SOL = 0.0022
+const MINT_RENT_BUFFER_SOL = 0.0022
+const FEE_BUFFER_SOL = 0.0015
+const BUY_BUFFER_SOL = ATA_RENT_BUFFER_SOL + FEE_BUFFER_SOL
+const DEV_CREATE_BUFFER_SOL = MINT_RENT_BUFFER_SOL
+
+const resolveLaunchBuyAmount = (index: number, devBuyAmount: number, buyAmounts: number[]) => {
+  if (index === 0) return devBuyAmount
+  const fallback = buyAmounts[0] ?? 0.01
+  return buyAmounts[index] ?? fallback
+}
 
 // POST - create launch bundle (create token + bundled buys)
 export async function POST(request: NextRequest) {
@@ -45,8 +58,39 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    const activeWallets = (wallets as BundlerWallet[]).filter((w) => w.isActive).slice(0, 13)
+    if (activeWallets.length === 0) {
+      return NextResponse.json({ error: "no active wallets" }, { status: 400 })
+    }
+
+    const lastWalletIdx = activeWallets.length - 1
+    for (let i = 0; i < activeWallets.length; i++) {
+      const wallet = activeWallets[i]
+      const buyAmount = resolveLaunchBuyAmount(i, devBuyAmount, buyAmounts as number[])
+      if (!Number.isFinite(buyAmount) || buyAmount < MIN_BUY_SOL) {
+        return NextResponse.json({ error: `buy amount too low for wallet ${wallet.publicKey}` }, { status: 400 })
+      }
+      const solBalance = Number(wallet.solBalance ?? 0)
+      let required =
+        buyAmount +
+        BUY_BUFFER_SOL +
+        Math.max(0, Number(priorityFee || 0)) +
+        (i === 0 ? DEV_CREATE_BUFFER_SOL : 0)
+      if (i === lastWalletIdx) {
+        required += Math.max(0, Number(jitoTip || 0))
+      }
+      if (solBalance < required) {
+        return NextResponse.json(
+          {
+            error: `insufficient SOL for ${wallet.publicKey.slice(0, 6)}... need ${required.toFixed(4)} SOL`,
+          },
+          { status: 400 }
+        )
+      }
+    }
+
     const config: BundleConfig = {
-      wallets: wallets as BundlerWallet[],
+      wallets: activeWallets as BundlerWallet[],
       tokenMetadata: {
         name: tokenMetadata.name,
         symbol: tokenMetadata.symbol,
@@ -80,7 +124,7 @@ export async function POST(request: NextRequest) {
         ...(tokenMetadata.twitter !== undefined && { twitter: tokenMetadata.twitter || null }),
         ...(tokenMetadata.telegram !== undefined && { telegram: tokenMetadata.telegram || null }),
         ...(tokenMetadata.imageUrl !== undefined && { imageUrl }),
-        creatorWallet: (wallets as BundlerWallet[])[0]?.publicKey || "",
+        creatorWallet: activeWallets[0]?.publicKey || "",
       },
       create: {
         mintAddress,
@@ -93,7 +137,7 @@ export async function POST(request: NextRequest) {
         website: tokenMetadata.website || null,
         twitter: tokenMetadata.twitter || null,
         telegram: tokenMetadata.telegram || null,
-        creatorWallet: (wallets as BundlerWallet[])[0]?.publicKey || "",
+        creatorWallet: activeWallets[0]?.publicKey || "",
       },
       select: { id: true },
     })
@@ -110,7 +154,7 @@ export async function POST(request: NextRequest) {
         transactions: {
           create: (result.signatures || []).map((sig: string, idx: number) => ({
             tokenId: token.id,
-            walletAddress: (wallets as BundlerWallet[])[idx]?.publicKey || "unknown",
+            walletAddress: activeWallets[idx]?.publicKey || "unknown",
             amount: String((buyAmounts as number[])[idx] ?? (idx === 0 ? devBuyAmount : (buyAmounts as number[])[0] ?? 0)),
             type: "buy",
             status: "confirmed",
@@ -121,9 +165,6 @@ export async function POST(request: NextRequest) {
     })
 
     const bondingCurve = await getBondingCurveData(new PublicKey(mintAddress))
-    const activeWallets = (wallets as BundlerWallet[])
-      .filter((w) => w.isActive)
-      .slice(0, 13)
     const buyRows = (result.signatures || []).map((sig: string, idx: number) => {
       const buyAmount = Number(
         (buyAmounts as number[])[idx] ?? (idx === 0 ? devBuyAmount : (buyAmounts as number[])[0] ?? 0)

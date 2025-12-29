@@ -114,6 +114,7 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true)
   const [dashboardStage, setDashboardStage] = useState<"launch" | "main">("launch")
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [adminToken, setAdminToken] = useState("")
   const { publicKey, sendTransaction, connected } = useWallet()
 
   // New states for enhanced dashboard
@@ -199,6 +200,21 @@ export default function DashboardPage() {
   const holderTrackerRef = useRef<TokenHolderTracker | null>(null)
   const getPairStorageKey = useCallback((mint: string) => `volume_bot_pair_${mint}`, [])
   const getLastTokenKey = useCallback(() => "dashboardLastTokenMint", [])
+
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    const stored = window.localStorage.getItem("admin_token") || ""
+    setAdminToken(stored)
+  }, [])
+
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    if (adminToken) {
+      window.localStorage.setItem("admin_token", adminToken)
+    } else {
+      window.localStorage.removeItem("admin_token")
+    }
+  }, [adminToken])
 
   const activeWallets = useMemo(() => bundlerWallets.filter(w => w.isActive), [bundlerWallets])
   const activeWalletsWithTokens = useMemo(
@@ -2826,6 +2842,31 @@ export default function DashboardPage() {
                   onChange={(e) => setVolumeBotConfig(prev => ({ ...prev, priorityFee: e.target.value }))}
                 />
               </div>
+            </div>
+
+            <div className="space-y-1">
+              <div className="flex items-center justify-between gap-2">
+                <Label className="text-xs text-neutral-400">Admin token (API)</Label>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setAdminToken("")}
+                  className="h-6 px-2 text-[10px]"
+                >
+                  Clear token
+                </Button>
+              </div>
+              <Input
+                type="password"
+                className="bg-background border-border text-xs"
+                value={adminToken}
+                onChange={(e) => setAdminToken(e.target.value)}
+                placeholder="x-admin-token"
+              />
+              <p className="text-[10px] text-neutral-500">
+                Stored in localStorage and sent with API requests. If empty, UI uses NEXT_PUBLIC_ADMIN_TOKEN.
+              </p>
             </div>
           </div>
         </DialogContent>

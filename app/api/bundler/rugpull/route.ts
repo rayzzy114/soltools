@@ -9,6 +9,8 @@ import { SOLANA_NETWORK } from "@/lib/solana/config"
 import { prisma } from "@/lib/prisma"
 import { PublicKey } from "@solana/web3.js"
 
+const SELL_BUFFER_SOL = 0.0015
+
 async function ensureToken(mintAddress: string) {
   const existing = await prisma.token.findFirst({
     where: { mintAddress },
@@ -68,8 +70,33 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "mintAddress required" }, { status: 400 })
     }
 
+    const activeWallets = (wallets as BundlerWallet[])
+      .filter((w) => w.isActive && (w.tokenBalance ?? 0) > 0)
+      .slice(0, 13)
+    if (activeWallets.length === 0) {
+      return NextResponse.json({ error: "no wallets with token balance" }, { status: 400 })
+    }
+
+    const lastWalletIdx = activeWallets.length - 1
+    for (let i = 0; i < activeWallets.length; i++) {
+      const wallet = activeWallets[i]
+      const solBalance = Number(wallet.solBalance ?? 0)
+      let required = SELL_BUFFER_SOL + Math.max(0, Number(priorityFee || 0))
+      if (i === lastWalletIdx) {
+        required += Math.max(0, Number(jitoTip || 0))
+      }
+      if (solBalance < required) {
+        return NextResponse.json(
+          {
+            error: `insufficient SOL for ${wallet.publicKey.slice(0, 6)}... need ${required.toFixed(4)} SOL`,
+          },
+          { status: 400 }
+        )
+      }
+    }
+
     const config: BundleConfig = {
-      wallets: wallets as BundlerWallet[],
+      wallets: activeWallets as BundlerWallet[],
       mintAddress,
       jitoTip,
       priorityFee,
@@ -102,7 +129,7 @@ export async function POST(request: NextRequest) {
         transactions: {
           create: (result.signatures || []).map((sig, idx) => ({
             tokenId: token?.id,
-            walletAddress: (wallets as BundlerWallet[])[idx]?.publicKey || "unknown",
+            walletAddress: activeWallets[idx]?.publicKey || "unknown",
             amount: "100", // 100% of tokens (rugpull)
             type: "sell",
             status: "confirmed",
@@ -112,9 +139,6 @@ export async function POST(request: NextRequest) {
       },
     })
 
-    const activeWallets = (wallets as BundlerWallet[])
-      .filter((w) => w.isActive && (w.tokenBalance ?? 0) > 0)
-      .slice(0, 13)
     const sellRows = (result.signatures || []).map((sig, idx) => {
       const wallet = activeWallets[idx]
       const tokenAmount = wallet ? Math.floor(wallet.tokenBalance) : 0

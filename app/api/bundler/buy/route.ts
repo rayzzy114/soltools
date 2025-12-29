@@ -10,6 +10,11 @@ import { SOLANA_NETWORK } from "@/lib/solana/config"
 import { JitoRegion } from "@/lib/solana/jito"
 import { prisma } from "@/lib/prisma"
 import { PublicKey } from "@solana/web3.js"
+import { MIN_BUY_SOL } from "@/lib/config/limits"
+
+const ATA_RENT_BUFFER_SOL = 0.0022
+const FEE_BUFFER_SOL = 0.0015
+const BUY_BUFFER_SOL = ATA_RENT_BUFFER_SOL + FEE_BUFFER_SOL
 
 async function ensureToken(mintAddress: string) {
   const existing = await prisma.token.findFirst({
@@ -73,8 +78,36 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "mintAddress required" }, { status: 400 })
     }
 
+    const activeWallets = (wallets as BundlerWallet[]).filter((w) => w.isActive)
+    const targetWallets = mode === "bundle" ? activeWallets.slice(0, 13) : activeWallets
+    if (targetWallets.length === 0) {
+      return NextResponse.json({ error: "no active wallets" }, { status: 400 })
+    }
+
+    const lastWalletIdx = targetWallets.length - 1
+    for (let i = 0; i < targetWallets.length; i++) {
+      const wallet = targetWallets[i]
+      const buyAmount = (buyAmounts as number[])[i] ?? (buyAmounts as number[])[0] ?? 0.01
+      if (!Number.isFinite(buyAmount) || buyAmount < MIN_BUY_SOL) {
+        return NextResponse.json({ error: `buy amount too low for wallet ${wallet.publicKey}` }, { status: 400 })
+      }
+      const solBalance = Number(wallet.solBalance ?? 0)
+      let required = buyAmount + BUY_BUFFER_SOL + Math.max(0, Number(priorityFee || 0))
+      if (mode === "bundle" && i === lastWalletIdx) {
+        required += Math.max(0, Number(jitoTip || 0))
+      }
+      if (solBalance < required) {
+        return NextResponse.json(
+          {
+            error: `insufficient SOL for ${wallet.publicKey.slice(0, 6)}... need ${required.toFixed(4)} SOL`,
+          },
+          { status: 400 }
+        )
+      }
+    }
+
     const config: BundleConfig = {
-      wallets: wallets as BundlerWallet[],
+      wallets: targetWallets as BundlerWallet[],
       mintAddress,
       buyAmounts,
       staggerDelay,
@@ -118,7 +151,7 @@ export async function POST(request: NextRequest) {
         transactions: {
           create: (result.signatures || []).map((sig, idx) => ({
             tokenId: token?.id,
-            walletAddress: (wallets as BundlerWallet[])[idx]?.publicKey || "unknown",
+            walletAddress: targetWallets[idx]?.publicKey || "unknown",
             amount: String((buyAmounts as number[])[idx] ?? (buyAmounts as number[])[0] ?? 0),
             type: "buy",
             status: "confirmed",
@@ -128,9 +161,6 @@ export async function POST(request: NextRequest) {
       },
     })
 
-    const activeWallets = (wallets as BundlerWallet[])
-      .filter((w) => w.isActive)
-      .slice(0, 13)
     const buyRows = (result.signatures || []).map((sig, idx) => {
       const buyAmount = Number((buyAmounts as number[])[idx] ?? (buyAmounts as number[])[0] ?? 0)
       let tokenAmount = 0
@@ -142,7 +172,7 @@ export async function POST(request: NextRequest) {
         signature: sig,
         tokenId: token.id,
         type: "buy",
-        walletAddress: activeWallets[idx]?.publicKey || "unknown",
+        walletAddress: targetWallets[idx]?.publicKey || "unknown",
         amount: String(tokenAmount),
         solAmount: String(buyAmount),
         price: tokenAmount > 0 ? String(buyAmount / tokenAmount) : null,

@@ -44,11 +44,8 @@ const AUTH_KEYPAIR =
   process.env.NEXT_PUBLIC_JITO_AUTH_KEYPAIR ||
   process.env.JITO_AUTH_SECRET
 
-// approved auth key for 5 RPC limit - this is a token, not a keypair
-const FALLBACK_AUTH_TOKEN = "8nobkWiDUsDF6rdzXWAeieHDZynpeHA4iaBKBsSkRRz5"
-
-// For HTTP JSON-RPC, use UUID when available; otherwise fallback to keypair token or legacy token.
-const JITO_AUTH_TOKEN = AUTH_UUID || AUTH_KEYPAIR || FALLBACK_AUTH_TOKEN
+// For HTTP JSON-RPC, use UUID when available; otherwise fallback to keypair token.
+const JITO_AUTH_TOKEN = AUTH_UUID || AUTH_KEYPAIR
 const JITO_UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 function isUuid(value: string | undefined): boolean {

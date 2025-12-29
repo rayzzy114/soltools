@@ -1,25 +1,36 @@
 import { Connection, clusterApiUrl } from "@solana/web3.js"
 import { ENV } from "../env"
 
-// hard mainnet defaults for testing (ignores .env network)
-export const SOLANA_NETWORK: string = "mainnet-beta"
+export const SOLANA_NETWORK: string = ENV.network
 
-const HARDCODED_RPC = "https://lb.drpc.live/solana/Atq_UX05s04RtjyXPMy7fEdebKdG1c4R8KoACqfUNZ5M"
-const PUBLIC_FALLBACKS = [
-  "https://api.mainnet-beta.solana.com",
-  "https://solana-mainnet.rpcpool.com",
-]
+const envRpcPrimary =
+  process.env.SOLANA_RPC_URL ||
+  process.env.RPC_ENDPOINT ||
+  ENV.rpcPrimary ||
+  ""
+
+const envRpcList = [
+  envRpcPrimary,
+  ...ENV.rpcList,
+  ...(process.env.SOLANA_RPC_URLS?.split(",").map((s) => s.trim()) || []),
+  ...(process.env.RPC_ENDPOINTS?.split(",").map((s) => s.trim()) || []),
+].filter(Boolean)
+
+const fallbackRpc =
+  SOLANA_NETWORK === "devnet" ? clusterApiUrl("devnet") : clusterApiUrl("mainnet-beta")
 
 // build RPC endpoints list with fallbacks, prefer provided
-export const RPC_ENDPOINTS = [HARDCODED_RPC, ...PUBLIC_FALLBACKS]
+export const RPC_ENDPOINTS = envRpcList.length ? [...envRpcList, fallbackRpc] : [fallbackRpc]
 
 export const RPC_ENDPOINT = RPC_ENDPOINTS[0]
 const toWs = (url: string) => (url?.startsWith("http") ? url.replace(/^http/, "ws") : url)
 let selectedWebsocketEndpoint = toWs(RPC_ENDPOINT)
 export let RPC_WEBSOCKET_ENDPOINT = selectedWebsocketEndpoint
 
-// check if using public RPC (not recommended for production) — with hardcoded defaults we consider public if primary is fallback
-export const isPublicRpc = RPC_ENDPOINT !== HARDCODED_RPC
+// check if using public RPC (not recommended for production)
+export const isPublicRpc =
+  RPC_ENDPOINT.includes("api.mainnet-beta.solana.com") ||
+  RPC_ENDPOINT.includes("api.devnet.solana.com")
 
 let selectedRpcEndpoint = RPC_ENDPOINT
 let cachedConnection: Connection | null = null
@@ -93,20 +104,19 @@ export const connection = getConnection()
 
 // Log network info and warnings
 if (typeof window === "undefined") {
-  console.log(`🔗 Solana Network: ${SOLANA_NETWORK}`)
-  console.log(`🔗 RPC Endpoint: ${RPC_ENDPOINT}`)
+  console.log(`Solana Network: ${SOLANA_NETWORK}`)
+  console.log(`RPC Endpoint: ${RPC_ENDPOINT}`)
   if (RPC_ENDPOINTS.length > 1) {
-    console.log(`🔁 RPC fallbacks: ${RPC_ENDPOINTS.slice(1).join(", ")}`)
+    console.log(`RPC fallbacks: ${RPC_ENDPOINTS.slice(1).join(", ")}`)
   }
-  
+
   // production warnings
   if (SOLANA_NETWORK === "devnet") {
-    console.warn(`⚠️  WARNING: Running on DEVNET! Set NEXT_PUBLIC_SOLANA_NETWORK=mainnet-beta for production`)
+    console.warn("WARNING: Running on DEVNET! Set NEXT_PUBLIC_SOLANA_NETWORK=mainnet-beta for production")
   }
-  
+
   if (isPublicRpc && SOLANA_NETWORK === "mainnet-beta") {
-    console.warn(`⚠️  WARNING: Using PUBLIC RPC on mainnet! This will be slow and rate-limited.`)
-    console.warn(`⚠️  Set NEXT_PUBLIC_SOLANA_RPC_URL to your RPC provider (Helius, QuickNode, ERPC)`)
+    console.warn("WARNING: Using PUBLIC RPC on mainnet! This will be slow and rate-limited.")
+    console.warn("Set NEXT_PUBLIC_SOLANA_RPC_URL to your RPC provider (Helius, QuickNode, ERPC)")
   }
 }
-
