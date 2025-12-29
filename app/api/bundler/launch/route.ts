@@ -5,6 +5,7 @@ import {
   type BundleConfig,
   type BundlerWallet,
 } from "@/lib/solana/bundler-engine"
+import { MAX_BUNDLE_WALLETS } from "@/lib/solana/bundler-engine"
 import { isPumpFunAvailable, getBondingCurveData, calculateBuyAmount } from "@/lib/solana/pumpfun-sdk"
 import { SOLANA_NETWORK } from "@/lib/solana/config"
 import { JitoRegion } from "@/lib/solana/jito"
@@ -58,12 +59,11 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    const activeWallets = (wallets as BundlerWallet[]).filter((w) => w.isActive).slice(0, 13)
+    const activeWallets = (wallets as BundlerWallet[]).filter((w) => w.isActive)
     if (activeWallets.length === 0) {
       return NextResponse.json({ error: "no active wallets" }, { status: 400 })
     }
 
-    const lastWalletIdx = activeWallets.length - 1
     for (let i = 0; i < activeWallets.length; i++) {
       const wallet = activeWallets[i]
       const buyAmount = resolveLaunchBuyAmount(i, devBuyAmount, buyAmounts as number[])
@@ -76,7 +76,9 @@ export async function POST(request: NextRequest) {
         BUY_BUFFER_SOL +
         Math.max(0, Number(priorityFee || 0)) +
         (i === 0 ? DEV_CREATE_BUFFER_SOL : 0)
-      if (i === lastWalletIdx) {
+      const isLastInBundle =
+        i === activeWallets.length - 1 || (i + 1) % MAX_BUNDLE_WALLETS === 0
+      if (isLastInBundle) {
         required += Math.max(0, Number(jitoTip || 0))
       }
       if (solBalance < required) {
@@ -142,27 +144,41 @@ export async function POST(request: NextRequest) {
       select: { id: true },
     })
 
-    await prisma.bundle.create({
-      data: {
-        bundleId: result.bundleId,
-        status: "completed",
-        txCount: result.signatures.length,
-        successCount: result.signatures.length,
-        failedCount: 0,
-        gasUsed: null,
-        completedAt: new Date(),
-        transactions: {
-          create: (result.signatures || []).map((sig: string, idx: number) => ({
-            tokenId: token.id,
-            walletAddress: activeWallets[idx]?.publicKey || "unknown",
-            amount: String((buyAmounts as number[])[idx] ?? (idx === 0 ? devBuyAmount : (buyAmounts as number[])[0] ?? 0)),
-            type: "buy",
-            status: "confirmed",
-            signature: sig,
-          })),
+    const bundleIds = result.bundleIds?.length ? result.bundleIds : [result.bundleId]
+    const signatureGroups =
+      result.bundleSignatures?.length ? result.bundleSignatures : [result.signatures]
+    const bundleRows = []
+    let signatureOffset = 0
+    for (let bundleIdx = 0; bundleIdx < signatureGroups.length; bundleIdx++) {
+      const sigs = signatureGroups[bundleIdx]
+      const bundleId = bundleIds[bundleIdx] || bundleIds[0]
+      const row = await prisma.bundle.create({
+        data: {
+          bundleId,
+          status: "completed",
+          txCount: sigs.length,
+          successCount: sigs.length,
+          failedCount: 0,
+          gasUsed: null,
+          completedAt: new Date(),
+          transactions: {
+            create: sigs.map((sig: string, idx: number) => ({
+              tokenId: token.id,
+              walletAddress: activeWallets[signatureOffset + idx]?.publicKey || "unknown",
+              amount: String(
+                (buyAmounts as number[])[signatureOffset + idx] ??
+                (signatureOffset + idx === 0 ? devBuyAmount : (buyAmounts as number[])[0] ?? 0)
+              ),
+              type: "buy",
+              status: "confirmed",
+              signature: sig,
+            })),
+          },
         },
-      },
-    })
+      })
+      bundleRows.push(row)
+      signatureOffset += sigs.length
+    }
 
     const bondingCurve = await getBondingCurveData(new PublicKey(mintAddress))
     const buyRows = (result.signatures || []).map((sig: string, idx: number) => {
@@ -193,6 +209,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       success: true,
       bundleId: result.bundleId,
+      bundleIds,
       mintAddress: result.mintAddress,
       signatures: result.signatures,
     })

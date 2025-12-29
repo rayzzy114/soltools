@@ -12,6 +12,20 @@ import { prisma } from "@/lib/prisma"
 import { logger, getCorrelationId } from "@/lib/logger"
 import { LAMPORTS_PER_SOL, PublicKey } from "@solana/web3.js"
 
+const toRawTokenAmount = (value: string, decimals: number): bigint => {
+  const cleaned = value.trim().replace(/,/g, "")
+  if (!cleaned) return BigInt(0)
+  const sign = cleaned.startsWith("-") ? "-" : ""
+  const normalized = sign ? cleaned.slice(1) : cleaned
+  const [whole = "0", frac = ""] = normalized.split(".")
+  const wholeDigits = whole.replace(/\D/g, "") || "0"
+  const fracDigits = frac.replace(/\D/g, "")
+  const padded = (fracDigits + "0".repeat(decimals)).slice(0, decimals)
+  const combined = `${wholeDigits}${padded}`.replace(/^0+/, "") || "0"
+  const result = BigInt(combined)
+  return sign ? -result : result
+}
+
 // GET - estimate rugpull profit
 export async function GET(request: NextRequest) {
   const correlationId = getCorrelationId(request)
@@ -46,7 +60,6 @@ export async function GET(request: NextRequest) {
       select: { decimals: true },
     })
     const tokenDecimals = tokenMeta?.decimals ?? 6
-    const tokenFactor = Math.pow(10, tokenDecimals)
 
     if (walletAddress) {
       // Single wallet calculation
@@ -79,7 +92,7 @@ export async function GET(request: NextRequest) {
 
       wallets = [{
         walletAddress: dbWallet.publicKey,
-        tokenAmount: BigInt(Math.floor(parseFloat(dbWallet.tokenBalance) * tokenFactor)), // Convert to raw amount
+        tokenAmount: toRawTokenAmount(dbWallet.tokenBalance, tokenDecimals),
       }]
     } else if (walletAddressesParam) {
       const walletAddresses = walletAddressesParam
@@ -112,7 +125,7 @@ export async function GET(request: NextRequest) {
 
       wallets = dbWallets.map((w) => ({
         walletAddress: w.publicKey,
-        tokenAmount: BigInt(Math.floor(parseFloat(w.tokenBalance) * tokenFactor)), // Convert to raw amount
+        tokenAmount: toRawTokenAmount(w.tokenBalance, tokenDecimals),
       }))
     } else {
       // All active wallets calculation
@@ -123,7 +136,7 @@ export async function GET(request: NextRequest) {
 
       wallets = dbWallets.map((w) => ({
         walletAddress: w.publicKey,
-        tokenAmount: BigInt(Math.floor(parseFloat(w.tokenBalance) * tokenFactor)), // Convert to raw amount
+        tokenAmount: toRawTokenAmount(w.tokenBalance, tokenDecimals),
       }))
     }
 

@@ -5,6 +5,7 @@ import {
   type BundleConfig,
   type BundlerWallet,
 } from "@/lib/solana/bundler-engine"
+import { MAX_BUNDLE_WALLETS } from "@/lib/solana/bundler-engine"
 import { isPumpFunAvailable, getBondingCurveData, calculateBuyAmount } from "@/lib/solana/pumpfun-sdk"
 import { SOLANA_NETWORK } from "@/lib/solana/config"
 import { JitoRegion } from "@/lib/solana/jito"
@@ -79,12 +80,11 @@ export async function POST(request: NextRequest) {
     }
 
     const activeWallets = (wallets as BundlerWallet[]).filter((w) => w.isActive)
-    const targetWallets = mode === "bundle" ? activeWallets.slice(0, 13) : activeWallets
+    const targetWallets = activeWallets
     if (targetWallets.length === 0) {
       return NextResponse.json({ error: "no active wallets" }, { status: 400 })
     }
 
-    const lastWalletIdx = targetWallets.length - 1
     for (let i = 0; i < targetWallets.length; i++) {
       const wallet = targetWallets[i]
       const buyAmount = (buyAmounts as number[])[i] ?? (buyAmounts as number[])[0] ?? 0.01
@@ -93,7 +93,10 @@ export async function POST(request: NextRequest) {
       }
       const solBalance = Number(wallet.solBalance ?? 0)
       let required = buyAmount + BUY_BUFFER_SOL + Math.max(0, Number(priorityFee || 0))
-      if (mode === "bundle" && i === lastWalletIdx) {
+      const isLastInBundle =
+        mode === "bundle" &&
+        (i === targetWallets.length - 1 || (i + 1) % MAX_BUNDLE_WALLETS === 0)
+      if (isLastInBundle) {
         required += Math.max(0, Number(jitoTip || 0))
       }
       if (solBalance < required) {
@@ -139,27 +142,38 @@ export async function POST(request: NextRequest) {
     const mintAddr = mintAddress as string
     const token = await ensureToken(mintAddr)
     const bondingCurve = await getBondingCurveData(new PublicKey(mintAddr))
-    const bundleRow = await prisma.bundle.create({
-      data: {
-        bundleId: result.bundleId,
-        status: "completed",
-        txCount: result.signatures.length,
-        successCount: result.signatures.length,
-        failedCount: 0,
-        gasUsed: null,
-        completedAt: new Date(),
-        transactions: {
-          create: (result.signatures || []).map((sig, idx) => ({
-            tokenId: token?.id,
-            walletAddress: targetWallets[idx]?.publicKey || "unknown",
-            amount: String((buyAmounts as number[])[idx] ?? (buyAmounts as number[])[0] ?? 0),
-            type: "buy",
-            status: "confirmed",
-            signature: sig,
-          })),
+    const bundleIds = result.bundleIds?.length ? result.bundleIds : [result.bundleId]
+    const signatureGroups =
+      result.bundleSignatures?.length ? result.bundleSignatures : [result.signatures]
+    const bundleRows = []
+    let signatureOffset = 0
+    for (let bundleIdx = 0; bundleIdx < signatureGroups.length; bundleIdx++) {
+      const sigs = signatureGroups[bundleIdx]
+      const bundleId = bundleIds[bundleIdx] || bundleIds[0]
+      const row = await prisma.bundle.create({
+        data: {
+          bundleId,
+          status: "completed",
+          txCount: sigs.length,
+          successCount: sigs.length,
+          failedCount: 0,
+          gasUsed: null,
+          completedAt: new Date(),
+          transactions: {
+            create: sigs.map((sig, idx) => ({
+              tokenId: token?.id,
+              walletAddress: targetWallets[signatureOffset + idx]?.publicKey || "unknown",
+              amount: String((buyAmounts as number[])[signatureOffset + idx] ?? (buyAmounts as number[])[0] ?? 0),
+              type: "buy",
+              status: "confirmed",
+              signature: sig,
+            })),
+          },
         },
-      },
-    })
+      })
+      bundleRows.push(row)
+      signatureOffset += sigs.length
+    }
 
     const buyRows = (result.signatures || []).map((sig, idx) => {
       const buyAmount = Number((buyAmounts as number[])[idx] ?? (buyAmounts as number[])[0] ?? 0)
@@ -188,8 +202,9 @@ export async function POST(request: NextRequest) {
       success: true,
       mode: "bundle",
       bundleId: result.bundleId,
+      bundleIds,
       signatures: result.signatures,
-      dbBundleId: bundleRow.id,
+      dbBundleId: bundleRows[0]?.id,
     })
   } catch (error: any) {
     console.error("buy bundle error:", error)

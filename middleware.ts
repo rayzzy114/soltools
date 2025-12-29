@@ -1,7 +1,6 @@
 import type { NextRequest } from "next/server"
 import { NextResponse } from "next/server"
 
-const ADMIN_TOKEN = process.env.ADMIN_TOKEN || ""
 const ALLOWED_ORIGINS = (process.env.CORS_ALLOWED_ORIGINS || "")
   .split(",")
   .map((s) => s.trim())
@@ -37,20 +36,6 @@ export function middleware(request: NextRequest) {
   if (request.method === "OPTIONS") {
     const headers = origin && originRestricted ? buildCorsHeaders(origin) : undefined
     return new NextResponse(null, { status: 204, headers })
-  }
-
-  if (ADMIN_TOKEN) {
-    const headerToken = request.headers.get("x-admin-token") || ""
-    const authHeader = request.headers.get("authorization") || ""
-    const cookieToken = request.cookies.get("admin_token")?.value || ""
-    const bearer = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : authHeader
-
-    if (headerToken !== ADMIN_TOKEN && bearer !== ADMIN_TOKEN && cookieToken !== ADMIN_TOKEN) {
-      return new NextResponse(JSON.stringify({ error: "unauthorized" }), {
-        status: 401,
-        headers: { "content-type": "application/json" },
-      })
-    }
   }
 
   const response = NextResponse.next()

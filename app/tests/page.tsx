@@ -110,7 +110,7 @@ export default function TestsPage() {
         tests: [
           { name: "should create buy bundle", status: "passed", duration: 20, module: "Bundler" },
           { name: "should handle Jito tips", status: "passed", duration: 5, module: "Bundler" },
-          { name: "should limit to 13 wallets", status: "passed", duration: 3, module: "Bundler" },
+          { name: "should limit to 5 wallets", status: "passed", duration: 3, module: "Bundler" },
         ],
       },
     ]

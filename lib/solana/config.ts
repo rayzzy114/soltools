@@ -32,6 +32,77 @@ export const isPublicRpc =
   RPC_ENDPOINT.includes("api.mainnet-beta.solana.com") ||
   RPC_ENDPOINT.includes("api.devnet.solana.com")
 
+const defaultRpcMinTime = isPublicRpc ? 1200 : 300
+const defaultRpcMaxConcurrent = 1
+const parsedMinTime = Number(process.env.RPC_RATE_LIMIT_MIN_TIME_MS)
+const parsedMaxConcurrent = Number(process.env.RPC_RATE_LIMIT_MAX_CONCURRENT)
+const RPC_RATE_LIMIT_MIN_TIME_MS = Number.isFinite(parsedMinTime)
+  ? Math.max(0, parsedMinTime)
+  : defaultRpcMinTime
+const RPC_RATE_LIMIT_MAX_CONCURRENT = Number.isFinite(parsedMaxConcurrent)
+  ? Math.max(1, Math.floor(parsedMaxConcurrent))
+  : defaultRpcMaxConcurrent
+
+type FetchTask = {
+  input: RequestInfo | URL
+  init?: RequestInit
+  resolve: (value: Response | PromiseLike<Response>) => void
+  reject: (reason?: any) => void
+}
+
+function createRateLimitedFetch(minIntervalMs: number, maxConcurrent: number) {
+  if (minIntervalMs <= 0 && maxConcurrent >= 50) {
+    return (input: RequestInfo | URL, init?: RequestInit) => fetch(input, init)
+  }
+
+  const queue: FetchTask[] = []
+  let inFlight = 0
+  let lastStart = 0
+  let timer: ReturnType<typeof setTimeout> | null = null
+
+  const pump = () => {
+    if (inFlight >= maxConcurrent) return
+    if (!queue.length) return
+    const now = Date.now()
+    const waitMs = Math.max(0, minIntervalMs - (now - lastStart))
+    if (waitMs > 0) {
+      if (!timer) {
+        timer = setTimeout(() => {
+          timer = null
+          pump()
+        }, waitMs)
+      }
+      return
+    }
+
+    const task = queue.shift()
+    if (!task) return
+    inFlight += 1
+    lastStart = Date.now()
+    fetch(task.input, task.init)
+      .then(task.resolve, task.reject)
+      .finally(() => {
+        inFlight -= 1
+        pump()
+      })
+
+    if (inFlight < maxConcurrent) {
+      pump()
+    }
+  }
+
+  return (input: RequestInfo | URL, init?: RequestInit) =>
+    new Promise<Response>((resolve, reject) => {
+      queue.push({ input, init, resolve, reject })
+      pump()
+    })
+}
+
+const rateLimitedFetch = createRateLimitedFetch(
+  RPC_RATE_LIMIT_MIN_TIME_MS,
+  RPC_RATE_LIMIT_MAX_CONCURRENT
+)
+
 let selectedRpcEndpoint = RPC_ENDPOINT
 let cachedConnection: Connection | null = null
 
@@ -41,7 +112,7 @@ async function probeEndpoint(endpoint: string, timeoutMs = 1500): Promise<boolea
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
   try {
-    const res = await fetch(endpoint, {
+    const res = await rateLimitedFetch(endpoint, {
       method: "POST",
       headers: rpcHeaders,
       body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "getHealth" }),
@@ -78,6 +149,7 @@ export const getConnection = () => {
   if (!cachedConnection) {
     cachedConnection = new Connection(selectedRpcEndpoint, {
       commitment: "confirmed",
+      fetch: rateLimitedFetch,
     })
   }
   return cachedConnection
@@ -89,6 +161,7 @@ export async function getResilientConnection(): Promise<Connection> {
     selectedRpcEndpoint = endpoint
     cachedConnection = new Connection(selectedRpcEndpoint, {
       commitment: "confirmed",
+      fetch: rateLimitedFetch,
     })
   }
   return cachedConnection

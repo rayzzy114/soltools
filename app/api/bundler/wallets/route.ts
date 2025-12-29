@@ -8,6 +8,7 @@ import {
   fundWallets,
   collectSol,
   getKeypair,
+  MAX_BUNDLE_WALLETS,
   type BundlerWallet,
 } from "@/lib/solana/bundler-engine"
 import { getAssociatedTokenAddress, createAssociatedTokenAccountInstruction } from "@solana/spl-token"
@@ -113,7 +114,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({
       network: SOLANA_NETWORK,
       pumpFunAvailable: isPumpFunAvailable(),
-      maxBundleWallets: 13,
+      maxBundleWallets: MAX_BUNDLE_WALLETS,
     })
   } catch (error: any) {
     logger.error({ correlationId, error: error?.message }, "bundler wallets GET failed")

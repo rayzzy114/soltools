@@ -1261,7 +1261,7 @@ export default function BundlerPage() {
         <div className="flex gap-2 text-sm">
           <Badge className="bg-purple-500/20 text-purple-400">{wallets.length} wallets</Badge>
           <Badge className="bg-cyan-500/20 text-cyan-400">{totalSolBalance.toFixed(2)} SOL</Badge>
-          <Badge className="bg-green-500/20 text-green-400">max 13 per bundle</Badge>
+          <Badge className="bg-green-500/20 text-green-400">max 5 per bundle</Badge>
           <Badge className="bg-sky-500/20 text-sky-200">
             rpc {rpcEndpoint ? formatRpcLabel(rpcEndpoint) : "unknown"}
           </Badge>
@@ -2289,7 +2289,7 @@ export default function BundlerPage() {
 
                 <div className="p-3 bg-yellow-900/20 border border-yellow-500/30 rounded">
                   <p className="text-xs text-yellow-400">
-                    ⚠️ pump.fun allows max 13 wallets per bundle. larger groups will be split.
+                    ⚠️ pump.fun allows max 5 wallets per bundle. larger groups will be split.
                   </p>
                 </div>
               </CardContent>

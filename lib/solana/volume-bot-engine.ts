@@ -106,9 +106,74 @@ function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms))
 }
 
+const TOKEN_DECIMALS = 6
+const RPC_REFRESH_CONCURRENCY = 2
+const RPC_RETRY_ATTEMPTS = 4
+const RPC_RETRY_BASE_MS = 500
+const RPC_RETRY_JITTER_MS = 400
+const keypairCache = new Map<string, Keypair>()
+
+function getCachedKeypair(secretKey: string): Keypair {
+  const cached = keypairCache.get(secretKey)
+  if (cached) return cached
+  const keypair = Keypair.fromSecretKey(bs58.decode(secretKey))
+  keypairCache.set(secretKey, keypair)
+  return keypair
+}
+
+function toRawTokenAmount(value: number, decimals: number = TOKEN_DECIMALS): bigint {
+  if (!Number.isFinite(value) || value <= 0) return BigInt(0)
+  const str = value.toString()
+  const [whole = "0", frac = ""] = str.split(".")
+  const wholeDigits = whole.replace(/\D/g, "") || "0"
+  const fracDigits = frac.replace(/\D/g, "")
+  const padded = (fracDigits + "0".repeat(decimals)).slice(0, decimals)
+  const combined = `${wholeDigits}${padded}`.replace(/^0+/, "") || "0"
+  return BigInt(combined)
+}
+
 function clampPercent(value: number, min: number = 0, max: number = 99): number {
   if (!Number.isFinite(value)) return min
   return Math.min(max, Math.max(min, Math.floor(value)))
+}
+
+async function mapWithLimit<T, R>(
+  items: T[],
+  limit: number,
+  worker: (item: T, index: number) => Promise<R>
+): Promise<R[]> {
+  const results = new Array<R>(items.length)
+  let cursor = 0
+  const runWorker = async () => {
+    while (cursor < items.length) {
+      const index = cursor++
+      results[index] = await worker(items[index], index)
+    }
+  }
+  const count = Math.min(limit, items.length)
+  await Promise.all(Array.from({ length: count }, () => runWorker()))
+  return results
+}
+
+function isRateLimitedError(error: any): boolean {
+  const message = (error?.message || String(error || "")).toLowerCase()
+  return message.includes("429") || message.includes("rate limit") || message.includes("too many requests")
+}
+
+async function rpcWithRetry<T>(fn: () => Promise<T>): Promise<T> {
+  let lastError: any
+  for (let attempt = 0; attempt < RPC_RETRY_ATTEMPTS; attempt++) {
+    try {
+      return await fn()
+    } catch (error) {
+      lastError = error
+      if (!isRateLimitedError(error)) break
+      const backoff = RPC_RETRY_BASE_MS * Math.pow(2, attempt)
+      const jitter = Math.random() * RPC_RETRY_JITTER_MS
+      await sleep(backoff + jitter)
+    }
+  }
+  throw lastError
 }
 
 /**
@@ -133,7 +198,7 @@ export function generateWallet(): VolumeWallet {
  * import wallet from private key
  */
 export function importWallet(secretKey: string): VolumeWallet {
-  const keypair = Keypair.fromSecretKey(bs58.decode(secretKey))
+  const keypair = getCachedKeypair(secretKey)
   return {
     publicKey: keypair.publicKey.toBase58(),
     secretKey,
@@ -152,37 +217,35 @@ export async function refreshWalletBalances(
 ): Promise<VolumeWallet[]> {
   const mint = mintAddress ? new PublicKey(mintAddress) : null
 
-  const updated = await Promise.all(
-    wallets.map(async (wallet) => {
-      try {
-        const pubkey = new PublicKey(wallet.publicKey)
+  const updated = await mapWithLimit(wallets, RPC_REFRESH_CONCURRENCY, async (wallet) => {
+    try {
+      const pubkey = new PublicKey(wallet.publicKey)
 
-        // get SOL balance
-        const solBalance = await connection.getBalance(pubkey)
+      // get SOL balance
+      const solBalance = await rpcWithRetry(() => connection.getBalance(pubkey))
 
-        // get token balance (optional if mint provided)
-        let tokenBalance = 0
-        if (mint) {
-          try {
-            const ata = await getAssociatedTokenAddress(mint, pubkey, false)
-            const tokenAccount = await connection.getTokenAccountBalance(ata)
-            tokenBalance = tokenAccount.value.uiAmount || 0
-          } catch {
-            // no token account
-          }
+      // get token balance (optional if mint provided)
+      let tokenBalance = 0
+      if (mint) {
+        try {
+          const ata = await getAssociatedTokenAddress(mint, pubkey, false)
+          const tokenAccount = await rpcWithRetry(() => connection.getTokenAccountBalance(ata))
+          tokenBalance = tokenAccount.value.uiAmount || 0
+        } catch {
+          // no token account
         }
-
-        return {
-          ...wallet,
-          solBalance: solBalance / LAMPORTS_PER_SOL,
-          tokenBalance,
-        }
-      } catch (error) {
-        console.error(`error refreshing wallet ${wallet.publicKey}:`, error)
-        return wallet
       }
-    })
-  )
+
+      return {
+        ...wallet,
+        solBalance: solBalance / LAMPORTS_PER_SOL,
+        tokenBalance,
+      }
+    } catch (error) {
+      console.error(`error refreshing wallet ${wallet.publicKey}:`, error)
+      return wallet
+    }
+  })
 
   return updated
 }
@@ -244,7 +307,7 @@ export async function executeBuy(
   }
   
   try {
-    const keypair = Keypair.fromSecretKey(bs58.decode(wallet.secretKey))
+    const keypair = getCachedKeypair(wallet.secretKey)
     const mint = new PublicKey(mintAddress)
 
     const safeSlippage = clampPercent(slippage)
@@ -579,9 +642,9 @@ export async function executeSell(
   }
   
   try {
-    const keypair = Keypair.fromSecretKey(bs58.decode(wallet.secretKey))
+    const keypair = getCachedKeypair(wallet.secretKey)
     const mint = new PublicKey(mintAddress)
-    const tokenAmountRaw = BigInt(Math.floor(tokenAmount * 1e6))
+    const tokenAmountRaw = toRawTokenAmount(tokenAmount, TOKEN_DECIMALS)
     const safeSlippage = clampPercent(slippage)
     const startedAt = Date.now()
     // IMPORTANT: for sell, wallets often have low SOL (after buys). Do not force a large priority fee.
@@ -1291,7 +1354,7 @@ export class VolumeBotPairEngine {
       }
       let walletKeypair: Keypair
       try {
-        walletKeypair = Keypair.fromSecretKey(bs58.decode(secretKeyString))
+        walletKeypair = getCachedKeypair(secretKeyString)
       } catch (error: any) {
         const msg = error?.message || String(error)
         this.onLog?.(this.pairId, `Failed to decode wallet secretKey: ${msg}`, "error")
@@ -1355,14 +1418,14 @@ export class VolumeBotPairEngine {
         const bondingCurve = await getBondingCurveData(mintPubkey)
         if (!bondingCurve) throw new Error("Bonding curve not found")
 
-        const { solOut } = calculateSellAmount(bondingCurve, BigInt(Math.floor(tokenAmount * 1e6)))
+        const { solOut } = calculateSellAmount(bondingCurve, toRawTokenAmount(tokenAmount, TOKEN_DECIMALS))
         const minSolOut = solOut * BigInt(100 - parseInt(this.settings.slippage)) / BigInt(100)
         solAmountForLog = Number(solOut) / LAMPORTS_PER_SOL
 
         transaction = await buildSellTransaction(
           walletKeypair.publicKey,
           mintPubkey,
-          BigInt(Math.floor(tokenAmount * 1e6)),
+          toRawTokenAmount(tokenAmount, TOKEN_DECIMALS),
           minSolOut
         )
         if (!transaction) {

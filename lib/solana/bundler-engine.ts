@@ -43,8 +43,8 @@ import {
   STAGGER_RETRY_JITTER_MS,
 } from "@/lib/config/limits"
 
-// max wallets in pump.fun bundle (after recent update)
-export const MAX_BUNDLE_WALLETS = 13
+// max transactions per Jito bundle (hard limit)
+export const MAX_BUNDLE_WALLETS = 5
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 const getRetryDelay = (attempt: number) => {
@@ -54,6 +54,38 @@ const getRetryDelay = (attempt: number) => {
 }
 
 const MAX_TX_BYTES = 1232 // conservative UDP payload (MTU 1280 - headers)
+const TOKEN_DECIMALS = 6
+const BPS_DENOM = BigInt(10000)
+const RPC_REFRESH_CONCURRENCY = 2
+const RPC_RETRY_ATTEMPTS = 4
+const RPC_RETRY_BASE_MS = 500
+const RPC_RETRY_JITTER_MS = 400
+
+function decimalToBigInt(value: string, decimals: number): bigint {
+  const cleaned = value.trim().replace(/,/g, "")
+  if (!cleaned) return BigInt(0)
+  const sign = cleaned.startsWith("-") ? "-" : ""
+  const normalized = sign ? cleaned.slice(1) : cleaned
+  const [whole = "0", frac = ""] = normalized.split(".")
+  const wholeDigits = whole.replace(/\D/g, "") || "0"
+  const fracDigits = frac.replace(/\D/g, "")
+  const padded = (fracDigits + "0".repeat(decimals)).slice(0, decimals)
+  const combined = `${wholeDigits}${padded}`.replace(/^0+/, "") || "0"
+  const result = BigInt(combined)
+  return sign ? -result : result
+}
+
+function toRawTokenAmount(value: number | string, decimals: number = TOKEN_DECIMALS): bigint {
+  if (typeof value === "number") {
+    if (!Number.isFinite(value) || value <= 0) return BigInt(0)
+    const str = value.toString()
+    const raw = decimalToBigInt(str, decimals)
+    return raw < BigInt(0) ? BigInt(0) : raw
+  }
+  if (!value) return BigInt(0)
+  const raw = decimalToBigInt(value, decimals)
+  return raw < BigInt(0) ? BigInt(0) : raw
+}
 function getTxSize(tx: Transaction | VersionedTransaction): number {
   if (tx instanceof VersionedTransaction) {
     return tx.serialize().length
@@ -72,6 +104,54 @@ function validateBundleMtu(
     }
   }
   return null
+}
+
+function chunkArray<T>(items: T[], size: number): T[][] {
+  if (size <= 0) return [items]
+  const chunks: T[][] = []
+  for (let i = 0; i < items.length; i += size) {
+    chunks.push(items.slice(i, i + size))
+  }
+  return chunks
+}
+
+async function mapWithLimit<T, R>(
+  items: T[],
+  limit: number,
+  worker: (item: T, index: number) => Promise<R>
+): Promise<R[]> {
+  const results = new Array<R>(items.length)
+  let cursor = 0
+  const runWorker = async () => {
+    while (cursor < items.length) {
+      const index = cursor++
+      results[index] = await worker(items[index], index)
+    }
+  }
+  const count = Math.min(limit, items.length)
+  await Promise.all(Array.from({ length: count }, () => runWorker()))
+  return results
+}
+
+function isRateLimitedError(error: any): boolean {
+  const message = (error?.message || String(error || "")).toLowerCase()
+  return message.includes("429") || message.includes("rate limit") || message.includes("too many requests")
+}
+
+async function rpcWithRetry<T>(fn: () => Promise<T>): Promise<T> {
+  let lastError: any
+  for (let attempt = 0; attempt < RPC_RETRY_ATTEMPTS; attempt++) {
+    try {
+      return await fn()
+    } catch (error) {
+      lastError = error
+      if (!isRateLimitedError(error)) break
+      const backoff = RPC_RETRY_BASE_MS * Math.pow(2, attempt)
+      const jitter = Math.random() * RPC_RETRY_JITTER_MS
+      await sleep(backoff + jitter)
+    }
+  }
+  throw lastError
 }
 
 function extractTxSignature(tx: Transaction | VersionedTransaction): string {
@@ -107,6 +187,53 @@ async function confirmSignaturesOnRpc(
   }
 
   return signatures.map((s) => ({ signature: s, ...(statusBySig.get(s) || { status: "pending" }) }))
+}
+
+async function sendBundleGroup(
+  transactions: Transaction[],
+  txSigners: Keypair[][],
+  label: string,
+  jitoRegion: JitoRegion | "auto",
+  jitoTip: number
+): Promise<{ bundleId: string; signatures: string[] }> {
+  if (jitoTip > 0 && transactions.length > 0) {
+    const lastIdx = transactions.length - 1
+    const lastTx = transactions[lastIdx]
+    const lastSigner = txSigners[lastIdx]?.[0]
+    if (lastSigner) {
+      lastTx.add(createTipInstruction(lastSigner.publicKey, jitoTip))
+      lastTx.sign(...txSigners[lastIdx])
+    } else {
+      console.warn("[bundler] missing signer for last tx (tip not added)")
+    }
+  }
+
+  const mtuError = validateBundleMtu(transactions, label)
+  if (mtuError) {
+    throw new Error(mtuError)
+  }
+
+  for (let i = 0; i < transactions.length; i++) {
+    const sim = await connection.simulateTransaction(transactions[i])
+    if (sim?.value?.err) {
+      throw new Error(`simulation failed (${label} idx=${i}): ${JSON.stringify(sim.value.err)}`)
+    }
+  }
+
+  const result = await sendBundleWithRetry(transactions, jitoRegion)
+  const signatures = transactions.map(extractTxSignature)
+  const statuses = await confirmSignaturesOnRpc(signatures, 60_000)
+  const failed = statuses.filter((s) => s.status === "failed")
+  const pending = statuses.filter((s) => s.status === "pending")
+  if (failed.length || pending.length) {
+    throw new Error(
+      pending.length
+        ? "bundle submitted but not all transactions confirmed on RPC (timeout)"
+        : `bundle contains failed transaction(s): ${JSON.stringify(failed[0]?.err ?? "unknown")}`
+    )
+  }
+
+  return { bundleId: result.bundleId, signatures }
 }
 
 async function getInitialCurve(): Promise<{
@@ -198,8 +325,10 @@ export interface BundleConfig {
 // bundle result
 export interface BundleResult {
   bundleId: string
+  bundleIds?: string[]
   success: boolean
   signatures: string[]
+  bundleSignatures?: string[][]
   error?: string
   mintAddress?: string
   estimatedProfit?: {
@@ -269,13 +398,12 @@ export async function refreshWalletBalances(
 ): Promise<BundlerWallet[]> {
   const mint = mintAddress ? new PublicKey(mintAddress) : null
 
-  const updated = await Promise.all(
-    wallets.map(async (wallet) => {
-      try {
-        const pubkey = new PublicKey(wallet.publicKey)
+  const updated = await mapWithLimit(wallets, RPC_REFRESH_CONCURRENCY, async (wallet) => {
+    try {
+      const pubkey = new PublicKey(wallet.publicKey)
 
-        // get SOL balance
-        const solBalance = await connection.getBalance(pubkey)
+      // get SOL balance
+      const solBalance = await rpcWithRetry(() => connection.getBalance(pubkey))
 
       // get token balance
       let tokenBalance = 0
@@ -283,7 +411,7 @@ export async function refreshWalletBalances(
       if (mint) {
         try {
           const ata = await getAssociatedTokenAddress(mint, pubkey, false)
-          const tokenAccount = await connection.getTokenAccountBalance(ata)
+          const tokenAccount = await rpcWithRetry(() => connection.getTokenAccountBalance(ata))
           tokenBalance = tokenAccount.value.uiAmount || 0
           ataExists = true
         } catch {
@@ -297,12 +425,11 @@ export async function refreshWalletBalances(
         tokenBalance,
         ...(mint ? { ataExists } : {}),
       }
-      } catch (error) {
-        console.error(`error refreshing wallet ${wallet.publicKey}:`, error)
-        return wallet
-      }
-    })
-  )
+    } catch (error) {
+      console.error(`error refreshing wallet ${wallet.publicKey}:`, error)
+      return wallet
+    }
+  })
 
   return updated
 }
@@ -444,7 +571,7 @@ export async function createLaunchBundle(config: BundleConfig): Promise<BundleRe
     }
   }
 
-  const activeWallets = wallets.filter((w) => w.isActive).slice(0, MAX_BUNDLE_WALLETS)
+  const activeWallets = wallets.filter((w) => w.isActive)
   if (activeWallets.length === 0) {
     return {
       bundleId: "",
@@ -463,8 +590,10 @@ export async function createLaunchBundle(config: BundleConfig): Promise<BundleRe
     const devWallet = activeWallets[0]
     const devKeypair = getKeypair(devWallet)
 
-    const transactions: Transaction[] = []
-    const txSigners: Keypair[][] = []
+    const bundleIds: string[] = []
+    const bundleSignatures: string[][] = []
+    const signatures: string[] = []
+    const safeSlippage = Math.min(Math.max(Math.floor(slippage), 0), 99)
     // NOTE: Do not use LUT with Jito bundles.
     // transaction 1: create token + dev buy (+ tip)
     const createTx = new Transaction()
@@ -492,11 +621,13 @@ export async function createLaunchBundle(config: BundleConfig): Promise<BundleRe
       },
       devBuyAmount,
     )
+    const devMinTokensOut = (devTokensOut * BigInt(100 - safeSlippage)) / BigInt(100)
     const devBuyIx = await createBuyInstruction(
       devKeypair.publicKey,
       mint,
-      devTokensOut,
+      devMinTokensOut,
       devSolAmountLamports,
+      devKeypair.publicKey,
     )
 
     // dev ATA (idempotent)
@@ -518,18 +649,16 @@ export async function createLaunchBundle(config: BundleConfig): Promise<BundleRe
     createTx.recentBlockhash = createBh
     createTx.feePayer = devKeypair.publicKey
     createTx.sign(devKeypair, mintKeypair)
-    transactions.push(createTx)
-    txSigners.push([devKeypair, mintKeypair])
 
-    // transactions 2+: bundled buys from other wallets
-    for (let i = 1; i < activeWallets.length; i++) {
+    const firstBundleTxs: Transaction[] = [createTx]
+    const firstBundleSigners: Keypair[][] = [[devKeypair, mintKeypair]]
+    const firstBundleCount = Math.min(activeWallets.length, MAX_BUNDLE_WALLETS)
+
+    for (let i = 1; i < firstBundleCount; i++) {
       const wallet = activeWallets[i]
       const keypair = getKeypair(wallet)
-      const buyAmount = buyAmounts[i] || buyAmounts[0] || 0.01
+      const buyAmount = resolveLaunchBuyAmount(i, devBuyAmount, buyAmounts as number[])
 
-      const buyTx = new Transaction()
-
-      // create ATA if needed
       const ata = await getAssociatedTokenAddress(mint, keypair.publicKey, false)
       const ataIx = createAssociatedTokenAccountIdempotentInstruction(
         keypair.publicKey,
@@ -538,89 +667,110 @@ export async function createLaunchBundle(config: BundleConfig): Promise<BundleRe
         mint
       )
 
-      // buy instruction (estimate tokens from initial curve)
       const { tokensOut } = calculateBuyAmount(
         {
           ...initialCurve,
           complete: false,
-          creator: keypair.publicKey,
+          creator: devKeypair.publicKey,
         },
         buyAmount,
       )
+      const minTokensOut = (tokensOut * BigInt(100 - safeSlippage)) / BigInt(100)
       const solAmountLamports = BigInt(Math.floor(buyAmount * LAMPORTS_PER_SOL))
-      const buyIx = await createBuyInstruction(keypair.publicKey, mint, tokensOut, solAmountLamports)
+      const buyIx = await createBuyInstruction(
+        keypair.publicKey,
+        mint,
+        minTokensOut,
+        solAmountLamports,
+        devKeypair.publicKey
+      )
 
       const buyInstructions = addPriorityFeeInstructions([ataIx, buyIx], priorityFee)
-
       const { blockhash } = await connection.getLatestBlockhash()
+      const buyTx = new Transaction()
       buyTx.add(...buyInstructions)
       buyTx.recentBlockhash = blockhash
       buyTx.feePayer = keypair.publicKey
       buyTx.sign(keypair)
-      transactions.push(buyTx)
-      txSigners.push([keypair])
+      firstBundleTxs.push(buyTx)
+      firstBundleSigners.push([keypair])
     }
 
-    // add jito tip to the last transaction (last instruction)
-    if (jitoTip > 0 && transactions.length > 0) {
-      const lastIdx = transactions.length - 1
-      const lastTx = transactions[lastIdx]
-      const lastSigner = txSigners[lastIdx]?.[0]
-      if (lastSigner) {
-        lastTx.add(createTipInstruction(lastSigner.publicKey, jitoTip))
-        lastTx.sign(...txSigners[lastIdx])
-      } else {
-        console.warn("[bundler] missing signer for last tx (tip not added)")
-      }
-    }
+    const firstResult = await sendBundleGroup(
+      firstBundleTxs,
+      firstBundleSigners,
+      "launch",
+      jitoRegion as any,
+      jitoTip
+    )
+    bundleIds.push(firstResult.bundleId)
+    bundleSignatures.push(firstResult.signatures)
+    signatures.push(...firstResult.signatures)
 
-    const mtuError = validateBundleMtu(transactions, "launch")
-    if (mtuError) {
-      return {
-        bundleId: "",
-        success: false,
-        signatures: [],
-        error: mtuError,
-      }
-    }
-
-    // evidence-first: simulate ALL signed txs before sending
-    for (let i = 0; i < transactions.length; i++) {
-      const tx = transactions[i]
-      const sig = extractTxSignature(tx)
-      const sim = await connection.simulateTransaction(tx)
-      if (sim?.value?.err) {
-        return {
-          bundleId: "",
-          success: false,
-          signatures: [],
-          error: `simulation failed (launch idx=${i}): ${JSON.stringify(sim.value.err)}`,
+    const remainingWallets = activeWallets.slice(firstBundleCount)
+    if (remainingWallets.length > 0) {
+      const chunks = chunkArray(remainingWallets, MAX_BUNDLE_WALLETS)
+      for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex++) {
+        const chunk = chunks[chunkIndex]
+        const bondingCurve = await getBondingCurveData(mint)
+        if (!bondingCurve) {
+          throw new Error("token not found on pump.fun")
         }
-      }
-    }
+        const bundleTxs: Transaction[] = []
+        const bundleSigners: Keypair[][] = []
+        for (let i = 0; i < chunk.length; i++) {
+          const wallet = chunk[i]
+          const keypair = getKeypair(wallet)
+          const globalIndex = firstBundleCount + chunkIndex * MAX_BUNDLE_WALLETS + i
+          const buyAmount = resolveLaunchBuyAmount(globalIndex, devBuyAmount, buyAmounts as number[])
 
-    // send bundle via jito
-    const result = await sendBundleWithRetry(transactions, jitoRegion as any)
-    const signatures = transactions.map(extractTxSignature)
+          const ata = await getAssociatedTokenAddress(mint, keypair.publicKey, false)
+          const ataIx = createAssociatedTokenAccountIdempotentInstruction(
+            keypair.publicKey,
+            ata,
+            keypair.publicKey,
+            mint
+          )
 
-    const statuses = await confirmSignaturesOnRpc(signatures, 60_000)
-    const failed = statuses.filter((s) => s.status === "failed")
-    const pending = statuses.filter((s) => s.status === "pending")
+          const { tokensOut } = calculateBuyAmount(bondingCurve, buyAmount)
+          const minTokensOut = (tokensOut * BigInt(100 - safeSlippage)) / BigInt(100)
+          const solAmountLamports = BigInt(Math.floor(buyAmount * LAMPORTS_PER_SOL))
+          const buyIx = await createBuyInstruction(
+            keypair.publicKey,
+            mint,
+            minTokensOut,
+            solAmountLamports,
+            bondingCurve.creator
+          )
 
-    if (failed.length || pending.length) {
-      return {
-        bundleId: result.bundleId,
-        success: false,
-        signatures,
-        mintAddress: mint.toBase58(),
-        error: pending.length
-          ? "bundle submitted but not all transactions confirmed on RPC (timeout)"
-          : `bundle contains failed transaction(s): ${JSON.stringify(failed[0]?.err ?? "unknown")}`,
+          const buyInstructions = addPriorityFeeInstructions([ataIx, buyIx], priorityFee)
+          const { blockhash } = await connection.getLatestBlockhash()
+          const buyTx = new Transaction()
+          buyTx.add(...buyInstructions)
+          buyTx.recentBlockhash = blockhash
+          buyTx.feePayer = keypair.publicKey
+          buyTx.sign(keypair)
+          bundleTxs.push(buyTx)
+          bundleSigners.push([keypair])
+        }
+
+        const bundleResult = await sendBundleGroup(
+          bundleTxs,
+          bundleSigners,
+          "launch-followup",
+          jitoRegion as any,
+          jitoTip
+        )
+        bundleIds.push(bundleResult.bundleId)
+        bundleSignatures.push(bundleResult.signatures)
+        signatures.push(...bundleResult.signatures)
       }
     }
 
     return {
-      bundleId: result.bundleId,
+      bundleId: bundleIds[0] || "",
+      bundleIds,
+      bundleSignatures,
       success: true,
       signatures,
       mintAddress: mint.toBase58(),
@@ -667,7 +817,7 @@ export async function createBuyBundle(config: BundleConfig): Promise<BundleResul
     }
   }
 
-  const activeWallets = wallets.filter((w) => w.isActive).slice(0, MAX_BUNDLE_WALLETS)
+  const activeWallets = wallets.filter((w) => w.isActive)
   if (activeWallets.length === 0) {
     return {
       bundleId: "",
@@ -680,7 +830,6 @@ export async function createBuyBundle(config: BundleConfig): Promise<BundleResul
   try {
     const mint = new PublicKey(mintAddress)
 
-    // get bonding curve data
     const bondingCurve = await getBondingCurveData(mint)
     if (!bondingCurve) {
       return {
@@ -691,124 +840,84 @@ export async function createBuyBundle(config: BundleConfig): Promise<BundleResul
       }
     }
 
-    const bondingCurveAddress = getBondingCurveAddress(mint)
-    const associatedBondingCurve = getAssociatedBondingCurveAddress(mint, bondingCurveAddress)
+    const bundleIds: string[] = []
+    const bundleSignatures: string[][] = []
+    const signatures: string[] = []
 
-    const transactions: Transaction[] = []
-    const txSigners: Keypair[][] = []
-    const { blockhash } = await connection.getLatestBlockhash()
-
-    for (let i = 0; i < activeWallets.length; i++) {
-      const wallet = activeWallets[i]
-      const keypair = getKeypair(wallet)
-      const buyAmount = buyAmounts[i] || buyAmounts[0] || 0.01
-
-      // create ATA if needed
-      const ata = await getAssociatedTokenAddress(mint, keypair.publicKey, false)
-
-      const instructions: TransactionInstruction[] = [
-        createAssociatedTokenAccountIdempotentInstruction(
-          keypair.publicKey,
-          ata,
-          keypair.publicKey,
-          mint
-        ),
-      ]
-
-      // calculate tokens out with slippage
-      const solAmount = buyAmount
-      const { tokensOut } = calculateBuyAmount(bondingCurve, solAmount)
-      const minTokensOut = (tokensOut * BigInt(100 - slippage)) / BigInt(100)
-
-      // buy instruction
-      const solLamports = BigInt(Math.floor(buyAmount * LAMPORTS_PER_SOL))
-      const buyIx = await createBuyInstruction(keypair.publicKey, mint, minTokensOut, solLamports)
-
-      instructions.push(buyIx)
-
-      const prioritized = addPriorityFeeInstructions(instructions, priorityFee)
-
-      const buyTx = new Transaction()
-      buyTx.add(...prioritized)
-      buyTx.recentBlockhash = blockhash
-      buyTx.feePayer = keypair.publicKey
-      buyTx.sign(keypair)
-      transactions.push(buyTx)
-      txSigners.push([keypair])
-    }
-
-    // add jito tip to the last transaction (last instruction)
-    if (jitoTip > 0 && transactions.length > 0) {
-      const lastIdx = transactions.length - 1
-      const lastTx = transactions[lastIdx]
-      const lastSigner = txSigners[lastIdx]?.[0]
-      if (lastSigner) {
-        lastTx.add(createTipInstruction(lastSigner.publicKey, jitoTip))
-        lastTx.sign(...txSigners[lastIdx])
-      } else {
-        console.warn("[bundler] missing signer for last tx (tip not added)")
-      }
-    }
-
-    const mtuError = validateBundleMtu(transactions, "buy")
-    if (mtuError) {
-      return {
-        bundleId: "",
-        success: false,
-        signatures: [],
-        error: mtuError,
-      }
-    }
-
-    // evidence-first: simulate ALL signed txs before sending
-    for (let i = 0; i < transactions.length; i++) {
-      const tx = transactions[i]
-      const sig = extractTxSignature(tx)
-      const sim = await connection.simulateTransaction(tx)
-      if (sim?.value?.err) {
+    const chunks = chunkArray(activeWallets, MAX_BUNDLE_WALLETS)
+    for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex++) {
+      const walletsChunk = chunks[chunkIndex]
+      const bondingCurve = chunkIndex === 0 ? initialCurve : await getBondingCurveData(mint)
+      if (!bondingCurve) {
         return {
           bundleId: "",
           success: false,
-          signatures: [],
-          error: `simulation failed (buy idx=${i}): ${JSON.stringify(sim.value.err)}`,
+          signatures,
+          error: "token not found on pump.fun",
         }
       }
-    }
 
-    // send bundle via jito
-    const result = await sendBundleWithRetry(transactions, jitoRegion)
+      const transactions: Transaction[] = []
+      const txSigners: Keypair[][] = []
+      const { blockhash } = await connection.getLatestBlockhash()
 
-    const signatures = transactions.map(extractTxSignature)
+      for (let i = 0; i < walletsChunk.length; i++) {
+        const wallet = walletsChunk[i]
+        const globalIndex = chunkIndex * MAX_BUNDLE_WALLETS + i
+        const keypair = getKeypair(wallet)
+        const buyAmount = buyAmounts[globalIndex] || buyAmounts[0] || 0.01
 
-    // strict validation: confirm on-chain via RPC statuses
-    const statuses = await confirmSignaturesOnRpc(signatures, 60_000)
-    const failed = statuses.filter((s) => s.status === "failed")
-    const pending = statuses.filter((s) => s.status === "pending")
+        const ata = await getAssociatedTokenAddress(mint, keypair.publicKey, false)
+        const instructions: TransactionInstruction[] = [
+          createAssociatedTokenAccountIdempotentInstruction(
+            keypair.publicKey,
+            ata,
+            keypair.publicKey,
+            mint
+          ),
+        ]
 
-    if (failed.length || pending.length) {
-      return {
-        bundleId: result.bundleId,
-        success: false,
-        signatures,
-        error: pending.length
-          ? "bundle submitted but not all transactions confirmed on RPC (timeout)"
-          : `bundle contains failed transaction(s): ${JSON.stringify(failed[0]?.err ?? "unknown")}`,
+        const { tokensOut } = calculateBuyAmount(bondingCurve, buyAmount)
+        const minTokensOut = (tokensOut * BigInt(100 - slippage)) / BigInt(100)
+        const solLamports = BigInt(Math.floor(buyAmount * LAMPORTS_PER_SOL))
+        const buyIx = await createBuyInstruction(
+          keypair.publicKey,
+          mint,
+          minTokensOut,
+          solLamports,
+          bondingCurve.creator
+        )
+
+        instructions.push(buyIx)
+
+        const prioritized = addPriorityFeeInstructions(instructions, priorityFee)
+        const buyTx = new Transaction()
+        buyTx.add(...prioritized)
+        buyTx.recentBlockhash = blockhash
+        buyTx.feePayer = keypair.publicKey
+        buyTx.sign(keypair)
+        transactions.push(buyTx)
+        txSigners.push([keypair])
       }
+
+      const result = await sendBundleGroup(
+        transactions,
+        txSigners,
+        "buy",
+        jitoRegion,
+        jitoTip
+      )
+      bundleIds.push(result.bundleId)
+      bundleSignatures.push(result.signatures)
+      signatures.push(...result.signatures)
     }
 
     return {
-      bundleId: result.bundleId,
+      bundleId: bundleIds[0] || "",
+      bundleIds,
+      bundleSignatures,
       success: true,
       signatures,
-      mintAddress,
-      estimatedProfit: {
-        grossSol: Number(profitData.totalEstimatedSol) / LAMPORTS_PER_SOL,
-        gasFee: Number(estimatedGasFee) / LAMPORTS_PER_SOL,
-        jitoTip: Number(estimatedJitoTip) / LAMPORTS_PER_SOL,
-        netSol: Number(netEstimatedProfit) / LAMPORTS_PER_SOL,
-        priceImpact: profitData.totalPriceImpact,
-        walletCount: walletBalances.length,
-      },
     }
   } catch (error: any) {
     return {
@@ -819,6 +928,7 @@ export async function createBuyBundle(config: BundleConfig): Promise<BundleResul
     }
   }
 }
+
 
 /**
  * create sell bundle - bundled sells
@@ -852,7 +962,7 @@ export async function createSellBundle(config: BundleConfig): Promise<BundleResu
     }
   }
 
-  const activeWallets = wallets.filter((w) => w.isActive && w.tokenBalance > 0).slice(0, MAX_BUNDLE_WALLETS)
+  const activeWallets = wallets.filter((w) => w.isActive && w.tokenBalance > 0)
   if (activeWallets.length === 0) {
     return {
       bundleId: "",
@@ -864,10 +974,7 @@ export async function createSellBundle(config: BundleConfig): Promise<BundleResu
 
   try {
     const mint = new PublicKey(mintAddress)
-    const bondingCurveAddress = getBondingCurveAddress(mint)
-    const associatedBondingCurve = getAssociatedBondingCurveAddress(mint, bondingCurveAddress)
 
-    // get bonding curve data
     const bondingCurve = await getBondingCurveData(mint)
     if (!bondingCurve) {
       return {
@@ -878,40 +985,65 @@ export async function createSellBundle(config: BundleConfig): Promise<BundleResu
       }
     }
 
-    const transactions: Transaction[] = []
-    const txSigners: Keypair[][] = []
-    const { blockhash } = await connection.getLatestBlockhash()
+    const bundleIds: string[] = []
+    const bundleSignatures: string[][] = []
+    const signatures: string[] = []
 
-    for (let i = 0; i < activeWallets.length; i++) {
-      const wallet = activeWallets[i]
-      const keypair = getKeypair(wallet)
-      const sellPercentage = sellPercentages[i] ?? sellPercentages[0] ?? 100
+    const chunks = chunkArray(activeWallets, MAX_BUNDLE_WALLETS)
+    for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex++) {
+      const walletsChunk = chunks[chunkIndex]
+      const transactions: Transaction[] = []
+      const txSigners: Keypair[][] = []
+      const { blockhash } = await connection.getLatestBlockhash()
 
-      // calculate token amount to sell
-      const tokenAmount = Math.floor((wallet.tokenBalance * sellPercentage) / 100)
-      if (tokenAmount <= 0) continue
+      for (let i = 0; i < walletsChunk.length; i++) {
+        const wallet = walletsChunk[i]
+        const globalIndex = chunkIndex * MAX_BUNDLE_WALLETS + i
+        const keypair = getKeypair(wallet)
+        const sellPercentage = sellPercentages[globalIndex] ?? sellPercentages[0] ?? 100
+        const safePercent = Math.min(Math.max(Number(sellPercentage), 0), 100)
+        const percentBps = BigInt(Math.round(safePercent * 100))
 
-      const tokenAmountRaw = BigInt(Math.floor(tokenAmount * 1e6))
+        const tokenBalanceRaw = toRawTokenAmount(wallet.tokenBalance, TOKEN_DECIMALS)
+        const tokenAmountRaw = tokenBalanceRaw * percentBps / BPS_DENOM
+        if (tokenAmountRaw <= BigInt(0)) {
+          continue
+        }
 
-      // use unified sell plan (auto picks pumpswap after migration)
-      const plan = await buildSellPlan(
-        keypair.publicKey,
-        mint,
-        tokenAmountRaw,
-        slippage,
-        priorityFee,
-        "auto"
+        const plan = await buildSellPlan(
+          keypair.publicKey,
+          mint,
+          tokenAmountRaw,
+          slippage,
+          priorityFee,
+          "auto"
+        )
+
+        plan.transaction.recentBlockhash = blockhash
+        plan.transaction.feePayer = keypair.publicKey
+
+        plan.transaction.sign(keypair)
+        transactions.push(plan.transaction)
+        txSigners.push([keypair])
+      }
+
+      if (transactions.length === 0) {
+        continue
+      }
+
+      const result = await sendBundleGroup(
+        transactions,
+        txSigners,
+        "sell",
+        jitoRegion,
+        jitoTip
       )
-
-      plan.transaction.recentBlockhash = blockhash
-      plan.transaction.feePayer = keypair.publicKey
-
-      plan.transaction.sign(keypair)
-      transactions.push(plan.transaction)
-      txSigners.push([keypair])
+      bundleIds.push(result.bundleId)
+      bundleSignatures.push(result.signatures)
+      signatures.push(...result.signatures)
     }
 
-    if (transactions.length === 0) {
+    if (signatures.length === 0) {
       return {
         bundleId: "",
         success: false,
@@ -920,77 +1052,13 @@ export async function createSellBundle(config: BundleConfig): Promise<BundleResu
       }
     }
 
-    // add jito tip to the last transaction (last instruction)
-    if (jitoTip > 0 && transactions.length > 0) {
-      const lastIdx = transactions.length - 1
-      const lastTx = transactions[lastIdx]
-      const lastSigner = txSigners[lastIdx]?.[0]
-      if (lastSigner) {
-        lastTx.add(createTipInstruction(lastSigner.publicKey, jitoTip))
-        lastTx.sign(...txSigners[lastIdx])
-      } else {
-        console.warn("[bundler] missing signer for last tx (tip not added)")
-      }
-    }
-
-    const mtuError = validateBundleMtu(transactions, "sell")
-    if (mtuError) {
-      return {
-        bundleId: "",
-        success: false,
-        signatures: [],
-        error: mtuError,
-      }
-    }
-
-    // evidence-first: simulate ALL signed txs before sending
-    for (let i = 0; i < transactions.length; i++) {
-      const tx = transactions[i]
-      const sim = await connection.simulateTransaction(tx)
-      if (sim?.value?.err) {
-        return {
-          bundleId: "",
-          success: false,
-          signatures: [],
-          error: `simulation failed (sell idx=${i}): ${JSON.stringify(sim.value.err)}`,
-        }
-      }
-    }
-
-    // send bundle via jito
-    const result = await sendBundleWithRetry(transactions, jitoRegion)
-
-    const signatures = transactions.map(extractTxSignature)
-
-    // strict validation: confirm on-chain via RPC statuses
-    const statuses = await confirmSignaturesOnRpc(signatures, 60_000)
-    const failed = statuses.filter((s) => s.status === "failed")
-    const pending = statuses.filter((s) => s.status === "pending")
-
-    if (failed.length || pending.length) {
-      return {
-        bundleId: result.bundleId,
-        success: false,
-        signatures,
-        error: pending.length
-          ? "bundle submitted but not all transactions confirmed on RPC (timeout)"
-          : `bundle contains failed transaction(s): ${JSON.stringify(failed[0]?.err ?? "unknown")}`,
-      }
-    }
-
     return {
-      bundleId: result.bundleId,
+      bundleId: bundleIds[0] || "",
+      bundleIds,
+      bundleSignatures,
       success: true,
       signatures,
       mintAddress,
-      estimatedProfit: {
-        grossSol: Number(profitData.totalEstimatedSol) / LAMPORTS_PER_SOL,
-        gasFee: Number(estimatedGasFee) / LAMPORTS_PER_SOL,
-        jitoTip: Number(estimatedJitoTip) / LAMPORTS_PER_SOL,
-        netSol: Number(netEstimatedProfit) / LAMPORTS_PER_SOL,
-        priceImpact: profitData.totalPriceImpact,
-        walletCount: walletBalances.length,
-      },
     }
   } catch (error: any) {
     return {
@@ -1001,6 +1069,7 @@ export async function createSellBundle(config: BundleConfig): Promise<BundleResu
     }
   }
 }
+
 
 /**
  * create staggered buy transactions (not bundled, with delays)
@@ -1141,6 +1210,8 @@ export async function createStaggeredSells(
     const wallet = activeWallets[i]
     const keypair = getKeypair(wallet)
     const sellPercentage = sellPercentages[i] ?? sellPercentages[0] ?? 100
+    const safePercent = Math.min(Math.max(Number(sellPercentage), 0), 100)
+    const percentBps = BigInt(Math.round(safePercent * 100))
 
     let attempt = 0
     let sent = false
@@ -1153,10 +1224,9 @@ export async function createStaggeredSells(
           break
         }
 
-        const tokenAmount = Math.floor((wallet.tokenBalance * sellPercentage) / 100)
-        if (tokenAmount <= 0) break
-
-        const tokenAmountRaw = BigInt(Math.floor(tokenAmount * 1e6))
+        const tokenBalanceRaw = toRawTokenAmount(wallet.tokenBalance, TOKEN_DECIMALS)
+        const tokenAmountRaw = tokenBalanceRaw * percentBps / BPS_DENOM
+        if (tokenAmountRaw <= BigInt(0)) break
 
         // calculate min SOL out
         let minSolOut = BigInt(0)
@@ -1259,7 +1329,7 @@ export async function createRugpullBundle(config: BundleConfig): Promise<BundleR
     }
   }
 
-  const activeWallets = wallets.filter((w) => w.isActive).slice(0, MAX_BUNDLE_WALLETS)
+  const activeWallets = wallets.filter((w) => w.isActive)
   if (activeWallets.length === 0) {
     return {
       bundleId: "",
@@ -1272,7 +1342,6 @@ export async function createRugpullBundle(config: BundleConfig): Promise<BundleR
   try {
     const mint = new PublicKey(mintAddress)
 
-    // get bonding curve data
     const bondingCurve = await getBondingCurveData(mint)
     if (!bondingCurve) {
       return {
@@ -1283,21 +1352,18 @@ export async function createRugpullBundle(config: BundleConfig): Promise<BundleR
       }
     }
 
-    // first pass: get real token balances for all wallets
     const walletBalances: { wallet: BundlerWallet; tokenAmount: bigint; keypair: any }[] = []
 
     for (const wallet of activeWallets) {
       const keypair = getKeypair(wallet)
 
       try {
-        // get real token balance from RPC
         const ata = await getAssociatedTokenAddress(mint, keypair.publicKey, false)
         let tokenBalanceRaw = BigInt(0)
         try {
           const balance = await connection.getTokenAccountBalance(ata)
           tokenBalanceRaw = BigInt(balance.value.amount)
         } catch {
-          // no token account or zero balance, skip this wallet
           continue
         }
 
@@ -1306,8 +1372,7 @@ export async function createRugpullBundle(config: BundleConfig): Promise<BundleR
         }
 
         walletBalances.push({ wallet, tokenAmount: tokenBalanceRaw, keypair })
-      } catch (error: any) {
-        // continue with other wallets
+      } catch {
         continue
       }
     }
@@ -1321,7 +1386,6 @@ export async function createRugpullBundle(config: BundleConfig): Promise<BundleR
       }
     }
 
-    // calculate sequential bundler profit with price impact
     const profitData = await calculateBundlerRugpullProfit(
       mint,
       walletBalances.map(w => ({
@@ -1330,44 +1394,61 @@ export async function createRugpullBundle(config: BundleConfig): Promise<BundleR
       }))
     )
 
-    // calculate fees
+    const bundleCount = Math.ceil(walletBalances.length / MAX_BUNDLE_WALLETS)
     const estimatedGasFee = BigInt(Math.floor(priorityFee * LAMPORTS_PER_SOL * walletBalances.length))
-    const estimatedJitoTip = BigInt(Math.floor(jitoTip * LAMPORTS_PER_SOL))
+    const estimatedJitoTip = BigInt(Math.floor(jitoTip * LAMPORTS_PER_SOL * bundleCount))
     const netEstimatedProfit = profitData.totalEstimatedSol - estimatedGasFee - estimatedJitoTip
 
-    const transactions: Transaction[] = []
-    const txSigners: Keypair[][] = []
-    const { blockhash } = await connection.getLatestBlockhash()
+    const bundleIds: string[] = []
+    const bundleSignatures: string[][] = []
+    const signatures: string[] = []
 
-    // second pass: create transactions for wallets with balances
-    for (let i = 0; i < walletBalances.length; i++) {
-      const { wallet, tokenAmount, keypair } = walletBalances[i]
+    const chunks = chunkArray(walletBalances, MAX_BUNDLE_WALLETS)
+    for (const chunk of chunks) {
+      const transactions: Transaction[] = []
+      const txSigners: Keypair[][] = []
+      const { blockhash } = await connection.getLatestBlockhash()
 
-      try {
-        // use unified sell plan (auto picks pumpswap after migration) - sell 100% of tokens
-        const { buildSellPlan } = await import("./sell-plan")
-        const plan = await buildSellPlan(
-          keypair.publicKey,
-          mint,
-          tokenAmount,
-          slippage,
-          priorityFee,
-          "auto"
-        )
+      for (const entry of chunk) {
+        const { keypair, tokenAmount } = entry
+        try {
+          const plan = await buildSellPlan(
+            keypair.publicKey,
+            mint,
+            tokenAmount,
+            slippage,
+            priorityFee,
+            "auto"
+          )
 
-        plan.transaction.recentBlockhash = blockhash
-        plan.transaction.feePayer = keypair.publicKey
+          plan.transaction.recentBlockhash = blockhash
+          plan.transaction.feePayer = keypair.publicKey
 
-        plan.transaction.sign(keypair)
-        transactions.push(plan.transaction)
-        txSigners.push([keypair])
-      } catch (error: any) {
-        // continue with other wallets
+          plan.transaction.sign(keypair)
+          transactions.push(plan.transaction)
+          txSigners.push([keypair])
+        } catch {
+          continue
+        }
+      }
+
+      if (transactions.length === 0) {
         continue
       }
+
+      const result = await sendBundleGroup(
+        transactions,
+        txSigners,
+        "rugpull",
+        jitoRegion as any,
+        jitoTip
+      )
+      bundleIds.push(result.bundleId)
+      bundleSignatures.push(result.signatures)
+      signatures.push(...result.signatures)
     }
 
-    if (transactions.length === 0) {
+    if (signatures.length === 0) {
       return {
         bundleId: "",
         success: false,
@@ -1376,67 +1457,10 @@ export async function createRugpullBundle(config: BundleConfig): Promise<BundleR
       }
     }
 
-    // add jito tip to the last transaction (last instruction)
-    if (jitoTip > 0 && transactions.length > 0) {
-      const lastIdx = transactions.length - 1
-      const lastTx = transactions[lastIdx]
-      const lastSigner = txSigners[lastIdx]?.[0]
-      if (lastSigner) {
-        lastTx.add(createTipInstruction(lastSigner.publicKey, jitoTip))
-        lastTx.sign(...txSigners[lastIdx])
-      } else {
-        console.warn("[bundler] missing signer for last tx (tip not added)")
-      }
-    }
-
-    const mtuError = validateBundleMtu(transactions, "rugpull")
-    if (mtuError) {
-      return {
-        bundleId: "",
-        success: false,
-        signatures: [],
-        error: mtuError,
-      }
-    }
-
-    // evidence-first: simulate ALL signed txs before sending
-    for (let i = 0; i < transactions.length; i++) {
-      const tx = transactions[i]
-      const sig = extractTxSignature(tx)
-      const sim = await connection.simulateTransaction(tx)
-      if (sim?.value?.err) {
-        return {
-          bundleId: "",
-          success: false,
-          signatures: [],
-          error: `simulation failed (rugpull idx=${i}): ${JSON.stringify(sim.value.err)}`,
-        }
-      }
-    }
-
-    // send bundle via jito
-    const result = await sendBundleWithRetry(transactions, jitoRegion)
-
-    const signatures = transactions.map(extractTxSignature)
-
-    // strict validation: confirm on-chain via RPC statuses
-    const statuses = await confirmSignaturesOnRpc(signatures, 60_000)
-    const failed = statuses.filter((s) => s.status === "failed")
-    const pending = statuses.filter((s) => s.status === "pending")
-
-    if (failed.length || pending.length) {
-      return {
-        bundleId: result.bundleId,
-        success: false,
-        signatures,
-        error: pending.length
-          ? "bundle submitted but not all transactions confirmed on RPC (timeout)"
-          : `bundle contains failed transaction(s): ${JSON.stringify(failed[0]?.err ?? "unknown")}`,
-      }
-    }
-
     return {
-      bundleId: result.bundleId,
+      bundleId: bundleIds[0] || "",
+      bundleIds,
+      bundleSignatures,
       success: true,
       signatures,
       mintAddress,
@@ -1458,6 +1482,7 @@ export async function createRugpullBundle(config: BundleConfig): Promise<BundleR
     }
   }
 }
+
 
 /**
  * estimate bundle costs

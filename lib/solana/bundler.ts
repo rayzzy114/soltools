@@ -35,6 +35,20 @@ import {
 import { buildSellPlan } from "./sell-plan"
 import bs58 from "bs58"
 
+const TOKEN_DECIMALS = 6
+const MAX_JITO_BUNDLE_TXS = 5
+
+function toRawTokenAmount(value: number, decimals: number = TOKEN_DECIMALS): bigint {
+  if (!Number.isFinite(value) || value <= 0) return BigInt(0)
+  const str = value.toString()
+  const [whole = "0", frac = ""] = str.split(".")
+  const wholeDigits = whole.replace(/\D/g, "") || "0"
+  const fracDigits = frac.replace(/\D/g, "")
+  const padded = (fracDigits + "0".repeat(decimals)).slice(0, decimals)
+  const combined = `${wholeDigits}${padded}`.replace(/^0+/, "") || "0"
+  return BigInt(combined)
+}
+
 function clampPercent(value: number, min: number = 0, max: number = 99): number {
   if (!Number.isFinite(value)) return min
   return Math.min(max, Math.max(min, Math.floor(value)))
@@ -138,7 +152,7 @@ export async function createBundle(
         )
       } else {
         // sell - amount is in tokens
-        const tokenAmountRaw = BigInt(Math.floor(amount * 1e6))
+        const tokenAmountRaw = toRawTokenAmount(amount, TOKEN_DECIMALS)
         const safeSlippage = clampPercent(10)
         
         const plan = await buildSellPlan(
@@ -169,6 +183,18 @@ export async function createBundle(
         status: "failed",
         error: "no valid transactions to bundle",
         }
+    }
+
+    if (txList.length > MAX_JITO_BUNDLE_TXS) {
+      return {
+        bundleId,
+        signatures: [],
+        successCount: 0,
+        failedCount: transactions.length,
+        gasUsed: "0",
+        status: "failed",
+        error: `bundle exceeds Jito limit (${MAX_JITO_BUNDLE_TXS} txs)`,
+      }
     }
     
     // add jito tip to last transaction
@@ -470,7 +496,7 @@ export async function createOptimizedBundle(
           0.0005
         )
       } else {
-        const tokenAmountRaw = BigInt(Math.floor(amount * 1e6))
+        const tokenAmountRaw = toRawTokenAmount(amount, TOKEN_DECIMALS)
         const { solOut } = calculateSellAmount(bondingCurve, tokenAmountRaw)
         const minSolOut = solOut * BigInt(90) / BigInt(100)
         

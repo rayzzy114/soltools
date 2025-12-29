@@ -51,7 +51,7 @@ const allFeatures: Feature[] = [
   {
     id: "bundler",
     title: "Solana Bundler",
-    description: "создание токена + bundled buys через Jito (до 13 кошельков)",
+    description: "создание токена + bundled buys через Jito (до 5 кошельков)",
     icon: Package,
     status: "ready",
     route: "/bundler",
