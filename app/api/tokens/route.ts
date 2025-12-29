@@ -355,6 +355,10 @@ export async function POST(request: NextRequest) {
       metadataUri,
       creatorWallet,
       mintKeypair,
+      website,
+      twitter,
+      telegram,
+      imageUrl,
     } = body
 
     // import existing mint into panel (no tx build)
@@ -376,6 +380,9 @@ export async function POST(request: NextRequest) {
             symbol: data?.symbol || symbol || mintAddr.slice(0, 4),
             description: data?.description || description || "",
             imageUrl: data?.image_uri || "",
+            website: data?.website || website || null,
+            twitter: data?.twitter || data?.x || twitter || null,
+            telegram: data?.telegram || telegram || null,
             creatorWallet: importCreator || data?.creator || creatorWallet || "",
           },
           create: {
@@ -386,6 +393,9 @@ export async function POST(request: NextRequest) {
             totalSupply: "0",
             description: data?.description || description || "",
             imageUrl: data?.image_uri || "",
+            website: data?.website || website || null,
+            twitter: data?.twitter || data?.x || twitter || null,
+            telegram: data?.telegram || telegram || null,
             creatorWallet: importCreator || data?.creator || creatorWallet || "",
             deletedAt: null,
           },
@@ -401,6 +411,9 @@ export async function POST(request: NextRequest) {
             symbol: data?.symbol || symbol || mintAddr.slice(0, 4),
             description: data?.description || description || "",
             imageUrl: data?.image_uri || "",
+            website: data?.website || website || null,
+            twitter: data?.twitter || data?.x || twitter || null,
+            telegram: data?.telegram || telegram || null,
             creatorWallet: importCreator || data?.creator || creatorWallet || "",
           },
           imported: true,
@@ -455,7 +468,10 @@ export async function POST(request: NextRequest) {
         decimals: 6,
         totalSupply: "0",
         description,
-        imageUrl: "",
+        imageUrl: imageUrl || "",
+        website: website || null,
+        twitter: twitter || null,
+        telegram: telegram || null,
         creatorWallet,
       },
     })

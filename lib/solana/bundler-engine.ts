@@ -143,6 +143,10 @@ export interface BundleConfig {
     symbol: string
     description: string
     metadataUri: string
+    website?: string
+    twitter?: string
+    telegram?: string
+    imageUrl?: string
   }
   devBuyAmount?: number
   // buy/sell amounts

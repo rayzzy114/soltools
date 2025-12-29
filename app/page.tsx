@@ -9,6 +9,7 @@ import DashboardPage from "./dashboard/page"
 import VolumeBotPage from "./volume-bot/page"
 import SolanaBundlerPage from "./solana-bundler/page"
 import TokenLauncherPage from "./token-launcher/page"
+import WalletToolsPage from "./wallet-tools/page"
 import DevnetTestPage from "./devnet-test/page"
 import DemoPage from "./demo/page"
 import TestsPage from "./tests/page"
@@ -61,6 +62,7 @@ export default function CryptoDashboard() {
           <nav className="space-y-2">
             {[
               { id: "dashboard", icon: LayoutDashboard, label: "DASHBOARD" },
+              { id: "wallet-tools", icon: Wallet, label: "WALLET TOOLS" },
               { id: "volume-bot", icon: Bot, label: "VOLUME BOT" },
               { id: "bundler", icon: Package, label: "SOLANA BUNDLER" },
               { id: "token-launcher", icon: Rocket, label: "TOKEN LAUNCHER" },
@@ -140,6 +142,7 @@ export default function CryptoDashboard() {
         {/* Dashboard Content */}
         <div className="flex-1 overflow-auto">
           {activeSection === "dashboard" && <DashboardPage />}
+          {activeSection === "wallet-tools" && <WalletToolsPage />}
           {activeSection === "volume-bot" && <VolumeBotPage />}
           {activeSection === "bundler" && <SolanaBundlerPage />}
           {activeSection === "token-launcher" && <TokenLauncherPage />}

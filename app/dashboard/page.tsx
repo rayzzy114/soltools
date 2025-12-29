@@ -6,13 +6,13 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Textarea } from "@/components/ui/textarea"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Alert, AlertDescription } from "@/components/ui/alert"
-import { TrendingUp, TrendingDown, Coins, Activity, Zap, Users, DollarSign, Play, Pause, Wallet, Settings, RefreshCw, Flame, Package, Send, Rocket, AlertTriangle, BarChart3, Plus, Trash2 } from "lucide-react"
-import { useRouter } from "next/navigation"
+import { TrendingUp, TrendingDown, Coins, Activity, Users, Play, Pause, Settings, RefreshCw, Flame, Rocket, AlertTriangle, BarChart3, Trash2, Upload } from "lucide-react"
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, LineChart, Line } from "recharts"
 import { PnLSummaryCard, MiniPnLCard } from "@/components/pnl/PnLCard"
 import { TokenRanking } from "@/components/analytics/TokenRanking"
@@ -20,12 +20,12 @@ import { ActivityHeatmap } from "@/components/analytics/ActivityHeatmap"
 import type { PnLSummary, TokenPnL, Trade } from "@/lib/pnl/types"
 import { toast } from "sonner"
 import { useWallet } from "@solana/wallet-adapter-react"
-import { LAMPORTS_PER_SOL, PublicKey, SystemProgram, Transaction, Keypair } from "@solana/web3.js"
+import { LAMPORTS_PER_SOL, PublicKey, Keypair, SystemProgram, Transaction } from "@solana/web3.js"
 import bs58 from "bs58"
 import { getResilientConnection } from "@/lib/solana/config"
 import { getBondingCurveAddress } from "@/lib/solana/pumpfun-sdk"
 import { TokenHolderTracker, type HolderRow } from "@/lib/solana/holder-tracker"
-import type { PriorityFeeRecommendations } from "@/lib/solana/priority-fees"
+import { clampNumber } from "@/lib/ui-utils"
 
 interface DashboardStats {
   activeTokens: number
@@ -37,10 +37,17 @@ interface DashboardStats {
 interface Token {
   symbol: string
   name: string
-  price: string
-  change: string
-  status: string
+  price?: string
+  change?: string
+  status?: string
+  description?: string
+  imageUrl?: string
+  website?: string
+  twitter?: string
+  telegram?: string
   mintAddress?: string
+  creatorWallet?: string
+  totalSupply?: string
   isMigrated?: boolean
 }
 
@@ -63,6 +70,11 @@ interface BundlerWallet {
   ataExists?: boolean
 }
 
+interface BuyerWalletSelection {
+  publicKey: string
+  amount: string
+}
+
 interface RugpullEstimate {
   grossSol: number
   gasFee: number
@@ -75,27 +87,9 @@ interface RugpullEstimate {
   priorityFee?: number
 }
 
-interface JitoTipFloor {
-  lamports: {
-    p50: number
-    p75: number
-    p95: number
-  }
-  sol: {
-    p50: number
-    p75: number
-    p95: number
-  }
-  recommended: {
-    lamports: number
-    sol: number
-    bufferPct: number
-  }
-}
-
-const GAS_TOPUP_TARGET_SOL = 0.002
 const PRIORITY_FEE_COMPUTE_UNITS = 400000
 const PRICE_SERIES_MAX_POINTS = 60
+const MAX_LAUNCH_WALLETS = 13
 
 export default function DashboardPage() {
   const [stats, setStats] = useState<DashboardStats>({
@@ -118,8 +112,8 @@ export default function DashboardPage() {
   const [tokenPnls, setTokenPnls] = useState<TokenPnL[]>([])
   const [trades, setTrades] = useState<Trade[]>([])
   const [loading, setLoading] = useState(true)
+  const [dashboardStage, setDashboardStage] = useState<"launch" | "main">("launch")
   const [settingsOpen, setSettingsOpen] = useState(false)
-  const router = useRouter()
   const { publicKey, sendTransaction, connected } = useWallet()
 
   // New states for enhanced dashboard
@@ -127,25 +121,41 @@ export default function DashboardPage() {
   const [bundlerWallets, setBundlerWallets] = useState<BundlerWallet[]>([])
   const [rugpullEstimate, setRugpullEstimate] = useState<RugpullEstimate | null>(null)
   const [devRugpullEstimate, setDevRugpullEstimate] = useState<RugpullEstimate | null>(null)
-  const [selectedWallets, setSelectedWallets] = useState<Set<string>>(new Set())
-  const [selectionInitialized, setSelectionInitialized] = useState(false)
-  const [distributingGas, setDistributingGas] = useState(false)
-  const [priorityFeeData, setPriorityFeeData] = useState<PriorityFeeRecommendations | null>(null)
-  const [priorityFeePreset, setPriorityFeePreset] = useState<"default" | "fast" | "turbo" | "custom">("fast")
   const [priorityFeeSol, setPriorityFeeSol] = useState("0.0001")
-  const [jitoTipFloor, setJitoTipFloor] = useState<JitoTipFloor | null>(null)
-  const [autoJitoTip, setAutoJitoTip] = useState(true)
   const [jitoTipSol, setJitoTipSol] = useState("0.0001")
   const [jitoUuid, setJitoUuid] = useState("")
   const [jitoRegion, setJitoRegion] = useState("frankfurt")
-  const [priceSeries, setPriceSeries] = useState<Array<{ time: string; price: number }>>([])
-  const [walletCount, setWalletCount] = useState("5")
-  const [devKey, setDevKey] = useState("")
-  const [funderKey, setFunderKey] = useState("")
-  const [useConnectedDev, setUseConnectedDev] = useState(true)
+  const [network, setNetwork] = useState("unknown")
+  const [pumpFunAvailable, setPumpFunAvailable] = useState<boolean | null>(null)
+  const [rpcHealthy, setRpcHealthy] = useState<boolean | null>(null)
+  const [tokenName, setTokenName] = useState("JITSU")
+  const [tokenSymbol, setTokenSymbol] = useState("JTSU")
+  const [tokenDescription, setTokenDescription] = useState("test launch via bundler")
+  const [tokenWebsite, setTokenWebsite] = useState("")
+  const [tokenTelegram, setTokenTelegram] = useState("")
+  const [tokenTwitter, setTokenTwitter] = useState("")
+  const [tokenImage, setTokenImage] = useState<File | null>(null)
+  const [tokenImagePreview, setTokenImagePreview] = useState("")
+  const [tokenImageUrl, setTokenImageUrl] = useState("")
+  const [metadataUri, setMetadataUri] = useState("")
+  const [devBuyAmount, setDevBuyAmount] = useState("0.1")
+  const [buyAmountPerWallet, setBuyAmountPerWallet] = useState("0.01")
+  const [launchLoading, setLaunchLoading] = useState(false)
+  const [autoFundEnabled, setAutoFundEnabled] = useState(true)
+  const [autoCreateAtaEnabled, setAutoCreateAtaEnabled] = useState(true)
   const [useConnectedFunder, setUseConnectedFunder] = useState(true)
-  const [gasLoading, setGasLoading] = useState(false)
-  const [ataLoading, setAtaLoading] = useState(false)
+  const [funderKey, setFunderKey] = useState("")
+  const [funderAmountPerWallet, setFunderAmountPerWallet] = useState("0.003")
+  const [launchDevWallet, setLaunchDevWallet] = useState("")
+  const [buyerWallets, setBuyerWallets] = useState<BuyerWalletSelection[]>([])
+  const [totalBuyAmount, setTotalBuyAmount] = useState("1")
+  const [launchTemplateMint, setLaunchTemplateMint] = useState("")
+  const [cloneLoading, setCloneLoading] = useState(false)
+  const [cloneDialogOpen, setCloneDialogOpen] = useState(false)
+  const [cloneTokenMint, setCloneTokenMint] = useState("")
+  const [priceSeries, setPriceSeries] = useState<Array<{ time: string; price: number }>>([])
+  const [devKey, setDevKey] = useState("")
+  const [useConnectedDev, setUseConnectedDev] = useState(true)
   const [rugpullLoading, setRugpullLoading] = useState(false)
   const [systemLogs, setSystemLogs] = useState<string[]>([])
   const [rugpullSlippage, setRugpullSlippage] = useState("20")
@@ -168,35 +178,69 @@ export default function DashboardPage() {
   })
   const [manualBuyAmount, setManualBuyAmount] = useState("0.01")
   const [manualSellPercent, setManualSellPercent] = useState("100")
-  const [manualTradeDirty, setManualTradeDirty] = useState(false)
   const [quickTradeWallet, setQuickTradeWallet] = useState<BundlerWallet | null>(null)
   const [quickBuyAmount, setQuickBuyAmount] = useState("0.01")
   const [volumeBotStatus, setVolumeBotStatus] = useState<any>(null)
   const [logMintAddress, setLogMintAddress] = useState("")
   const [holderRows, setHolderRows] = useState<HolderRow[]>([])
   const [holdersLoading, setHoldersLoading] = useState(false)
+  const [tokenFinance, setTokenFinance] = useState<{
+    fundingBalanceSol: number
+    liquiditySol: number
+    currentPriceSol: number
+    marketCapSol: number
+    totalSupply: number
+    complete: boolean
+    volumeSol?: number
+    volumeUsd?: number
+    volumeSource?: string
+  } | null>(null)
+  const [tokenFinanceLoading, setTokenFinanceLoading] = useState(false)
   const holderTrackerRef = useRef<TokenHolderTracker | null>(null)
   const getPairStorageKey = useCallback((mint: string) => `volume_bot_pair_${mint}`, [])
   const getLastTokenKey = useCallback(() => "dashboardLastTokenMint", [])
 
   const activeWallets = useMemo(() => bundlerWallets.filter(w => w.isActive), [bundlerWallets])
-  const selectedActiveWallets = useMemo(
-    () => activeWallets.filter(w => selectedWallets.has(w.publicKey)),
-    [activeWallets, selectedWallets]
-  )
   const activeWalletsWithTokens = useMemo(
     () => activeWallets.filter(w => w.tokenBalance > 0),
     [activeWallets]
   )
-  const walletsNeedingGas = useMemo(
-    () => activeWallets.filter(w => w.solBalance < GAS_TOPUP_TARGET_SOL && w.tokenBalance > 0),
-    [activeWallets]
+  const selectedTokenPnl = useMemo(() => {
+    if (!selectedToken?.mintAddress) return null
+    return tokenPnls.find((pnl) => pnl.mintAddress === selectedToken.mintAddress) || null
+  }, [tokenPnls, selectedToken?.mintAddress])
+  const totalTokensToSell = useMemo(
+    () => activeWalletsWithTokens.reduce((sum, wallet) => sum + wallet.tokenBalance, 0),
+    [activeWalletsWithTokens]
   )
-  const selectedWalletCount = selectedActiveWallets.length
-  const selectedWalletAddressesParam = useMemo(
-    () => selectedActiveWallets.map(w => w.publicKey).join(","),
-    [selectedActiveWallets]
-  )
+  const currentPriceSol = useMemo(() => {
+    if (tokenFinance && Number.isFinite(tokenFinance.currentPriceSol)) {
+      return tokenFinance.currentPriceSol
+    }
+    if (selectedTokenPnl && Number.isFinite(selectedTokenPnl.currentPrice)) {
+      return selectedTokenPnl.currentPrice
+    }
+    const parsed = selectedToken?.price ? Number.parseFloat(selectedToken.price) : NaN
+    return Number.isFinite(parsed) ? parsed : null
+  }, [tokenFinance, selectedTokenPnl, selectedToken?.price])
+  const totalSupplyValue = useMemo(() => {
+    if (tokenFinance && Number.isFinite(tokenFinance.totalSupply)) {
+      return tokenFinance.totalSupply
+    }
+    const parsed = selectedToken?.totalSupply ? Number.parseFloat(selectedToken.totalSupply) : NaN
+    return Number.isFinite(parsed) ? parsed : null
+  }, [tokenFinance, selectedToken?.totalSupply])
+  const marketCapSol = useMemo(() => {
+    if (tokenFinance && Number.isFinite(tokenFinance.marketCapSol)) {
+      return tokenFinance.marketCapSol
+    }
+    if (currentPriceSol == null || totalSupplyValue == null) return null
+    return currentPriceSol * totalSupplyValue
+  }, [tokenFinance, currentPriceSol, totalSupplyValue])
+  const profitEstimateSol = useMemo(() => {
+    if (!selectedTokenPnl?.aggregatedPnl) return null
+    return selectedTokenPnl.aggregatedPnl.totalPnl
+  }, [selectedTokenPnl])
   const poolShortfall = useMemo(() => {
     if (!rugpullEstimate || rugpullEstimate.availableSol === undefined) return false
     return rugpullEstimate.grossSol > rugpullEstimate.availableSol
@@ -212,6 +256,68 @@ export default function DashboardPage() {
       return null
     }
   }, [useConnectedDev, publicKey, devKey])
+  const networkBlocked = pumpFunAvailable === false || rpcHealthy === false
+  const isMainnet = network === "mainnet-beta"
+  const isLaunchStage = dashboardStage === "launch"
+  const canOpenMainStage = Boolean(selectedToken?.mintAddress)
+
+  useEffect(() => {
+    if (activeWallets.length === 0) {
+      if (launchDevWallet) setLaunchDevWallet("")
+      return
+    }
+    const exists = activeWallets.some((wallet) => wallet.publicKey === launchDevWallet)
+    if (!exists) {
+      setLaunchDevWallet(activeWallets[0].publicKey)
+    }
+  }, [activeWallets, launchDevWallet])
+
+  useEffect(() => {
+    if (buyerWallets.length === 0) return
+    const activeKeys = new Set(activeWallets.map((wallet) => wallet.publicKey))
+    setBuyerWallets((prev) => {
+      const next = prev.filter(
+        (wallet) => activeKeys.has(wallet.publicKey) && wallet.publicKey !== launchDevWallet
+      )
+      if (
+        next.length === prev.length &&
+        next.every((wallet, idx) =>
+          wallet.publicKey === prev[idx]?.publicKey && wallet.amount === prev[idx]?.amount
+        )
+      ) {
+        return prev
+      }
+      return next
+    })
+  }, [activeWallets, buyerWallets, launchDevWallet])
+
+  useEffect(() => {
+    if (!selectedToken?.mintAddress) {
+      setTokenFinance(null)
+      return
+    }
+    const controller = new AbortController()
+    setTokenFinanceLoading(true)
+    fetch(`/api/tokens/finance?mintAddress=${selectedToken.mintAddress}`, {
+      signal: controller.signal,
+    })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (!data || data.error) return
+        setTokenFinance(data)
+      })
+      .catch((error) => {
+        if (error?.name !== "AbortError") {
+          console.error("failed to load token finance:", error)
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) {
+          setTokenFinanceLoading(false)
+        }
+      })
+    return () => controller.abort()
+  }, [selectedToken?.mintAddress])
 
   const handleTokenSelect = useCallback((mintAddress: string) => {
     const token = tokens.find(t => t.mintAddress === mintAddress)
@@ -386,6 +492,452 @@ export default function DashboardPage() {
     setSystemLogs([])
   }, [selectedToken?.mintAddress, volumeBotConfig.mintAddress, logMintAddress, getLogStorageKey])
 
+  const parseSol = (value: string) => {
+    const parsed = Number.parseFloat(value)
+    return Number.isFinite(parsed) ? parsed : 0
+  }
+
+  const normalizeTokenList = useCallback((data: any[]): Token[] => {
+    if (!Array.isArray(data)) return []
+    return data.map((token) => ({
+      symbol: token?.symbol || token?.name || (token?.mintAddress ? token.mintAddress.slice(0, 4) : ""),
+      name: token?.name || token?.symbol || "Unknown",
+      price: token?.price != null ? String(token.price) : "",
+      change: token?.change != null ? String(token.change) : "",
+      status: token?.status || "",
+      description: token?.description || "",
+      imageUrl: token?.imageUrl || "",
+      website: token?.website || "",
+      twitter: token?.twitter || "",
+      telegram: token?.telegram || "",
+      mintAddress: token?.mintAddress,
+      creatorWallet: token?.creatorWallet || "",
+      totalSupply: token?.totalSupply != null ? String(token.totalSupply) : "",
+      isMigrated: token?.isMigrated,
+    }))
+  }, [])
+
+  const handleTokenImageChange = (file: File | null) => {
+    if (!file) {
+      setTokenImage(null)
+      setTokenImagePreview("")
+      setTokenImageUrl("")
+      return
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      toast.error("image must be less than 5MB")
+      return
+    }
+    setTokenImage(file)
+    setTokenImageUrl("")
+    const reader = new FileReader()
+    reader.onloadend = () => {
+      setTokenImagePreview((reader.result as string) || "")
+    }
+    reader.readAsDataURL(file)
+    setMetadataUri("")
+  }
+
+  const resetLaunchForm = () => {
+    setLaunchTemplateMint("")
+    setCloneTokenMint("")
+    setTokenName("")
+    setTokenSymbol("")
+    setTokenDescription("")
+    setTokenWebsite("")
+    setTokenTwitter("")
+    setTokenTelegram("")
+    setTokenImage(null)
+    setTokenImagePreview("")
+    setTokenImageUrl("")
+    setMetadataUri("")
+  }
+
+  const handleLaunchTemplateSelect = async (mintAddress: string) => {
+    setLaunchTemplateMint(mintAddress)
+    if (!mintAddress) return
+    setCloneLoading(true)
+    try {
+      const template = tokens.find((token) => token.mintAddress === mintAddress)
+      if (!template) {
+        throw new Error("template not found")
+      }
+      setTokenName(template.name || "")
+      setTokenSymbol((template.symbol || "").toUpperCase())
+      setTokenDescription(template.description || "")
+      setTokenWebsite(template.website || "")
+      setTokenTwitter(template.twitter || "")
+      setTokenTelegram(template.telegram || "")
+      setTokenImageUrl(template.imageUrl || "")
+      setTokenImagePreview(template.imageUrl || "")
+      setTokenImage(null)
+      setMetadataUri("")
+      toast.success("token metadata loaded")
+    } catch (error: any) {
+      toast.error(error?.message || "failed to load metadata")
+    } finally {
+      setCloneLoading(false)
+    }
+  }
+
+  const handleAddBuyerWallet = () => {
+    if (buyerWallets.length >= MAX_LAUNCH_WALLETS - 1) {
+      toast.error(`max ${MAX_LAUNCH_WALLETS - 1} buyer wallets`)
+      return
+    }
+    const used = new Set(buyerWallets.map((wallet) => wallet.publicKey))
+    const available = activeWallets.filter(
+      (wallet) => wallet.publicKey !== launchDevWallet && !used.has(wallet.publicKey)
+    )
+    if (available.length === 0) {
+      toast.error("no available buyer wallets")
+      return
+    }
+    const next = available[0]
+    setBuyerWallets((prev) => [
+      ...prev,
+      {
+        publicKey: next.publicKey,
+        amount: buyAmountPerWallet || "0.01",
+      },
+    ])
+  }
+
+  const handleRemoveBuyerWallet = (index?: number) => {
+    setBuyerWallets((prev) => {
+      if (prev.length === 0) return prev
+      if (index === undefined) return prev.slice(0, -1)
+      return prev.filter((_, idx) => idx !== index)
+    })
+  }
+
+  const handleEqualBuy = () => {
+    if (buyerWallets.length === 0) {
+      toast.error("add buyer wallets first")
+      return
+    }
+    const total = parseSol(totalBuyAmount)
+    if (total <= 0) {
+      toast.error("enter total buy amount")
+      return
+    }
+    const perWallet = total / buyerWallets.length
+    setBuyerWallets((prev) =>
+      prev.map((wallet) => ({ ...wallet, amount: perWallet.toFixed(6) }))
+    )
+  }
+
+  const handleRandomBuy = () => {
+    if (buyerWallets.length === 0) {
+      toast.error("add buyer wallets first")
+      return
+    }
+    const total = parseSol(totalBuyAmount)
+    if (total <= 0) {
+      toast.error("enter total buy amount")
+      return
+    }
+    const weights = buyerWallets.map(() => Math.random())
+    const sum = weights.reduce((acc, value) => acc + value, 0) || 1
+    const amounts = weights.map((weight) => (total * weight) / sum)
+    setBuyerWallets((prev) =>
+      prev.map((wallet, idx) => ({
+        ...wallet,
+        amount: amounts[idx]?.toFixed(6) || "0",
+      }))
+    )
+  }
+
+  const handleImageUpload = async () => {
+    const trimmedName = tokenName.trim()
+    const trimmedSymbol = tokenSymbol.trim()
+    if (!tokenImage || !trimmedName || !trimmedSymbol) {
+      toast.error("fill in name, symbol, and select image")
+      return
+    }
+
+    setLaunchLoading(true)
+    try {
+      const formData = new FormData()
+      formData.append("file", tokenImage)
+      formData.append("name", trimmedName)
+      formData.append("symbol", trimmedSymbol.toUpperCase())
+      formData.append("description", tokenDescription)
+      if (tokenWebsite) formData.append("website", tokenWebsite)
+      if (tokenTwitter) formData.append("twitter", tokenTwitter)
+      if (tokenTelegram) formData.append("telegram", tokenTelegram)
+
+      const res = await fetch("/api/tokens/upload-metadata", {
+        method: "POST",
+        body: formData,
+      })
+
+      const data = await res.json()
+
+      if (data.error) {
+        toast.error(data.error)
+      } else if (data.metadataUri) {
+        setMetadataUri(data.metadataUri)
+        const metadataImage =
+          data?.metadata?.image ||
+          data?.metadata?.image_uri ||
+          data?.metadata?.imageUrl ||
+          ""
+        if (metadataImage) {
+          setTokenImageUrl(metadataImage)
+          setTokenImagePreview(metadataImage)
+        }
+        toast.success("metadata uploaded to IPFS")
+      }
+    } catch {
+      toast.error("failed to upload metadata")
+    } finally {
+      setLaunchLoading(false)
+    }
+  }
+
+  const normalizeLaunchNumbers = () => {
+    return {
+      jitoTipNum: Math.max(0, parseFloat(jitoTipSol)),
+      priorityNum: Math.max(0, parseFloat(priorityFeeSol)),
+      slippageNum: clampNumber(20, 0, 99),
+    }
+  }
+
+  const handleLaunch = async () => {
+    if (networkBlocked) {
+      toast.error("pump.fun unavailable or rpc unhealthy")
+      return
+    }
+    if (!metadataUri) {
+      toast.error("upload metadata first")
+      return
+    }
+    if (!tokenName.trim() || !tokenSymbol.trim()) {
+      toast.error("token name and symbol are required")
+      return
+    }
+    if (!launchDevWallet) {
+      toast.error("select dev wallet")
+      return
+    }
+    if (buyerWallets.length === 0) {
+      toast.error("add buyer wallets")
+      return
+    }
+
+    const buyerKeys = buyerWallets.map((wallet) => wallet.publicKey).filter(Boolean)
+    const uniqueBuyerKeys = new Set(buyerKeys)
+    if (uniqueBuyerKeys.size !== buyerKeys.length) {
+      toast.error("duplicate buyer wallets detected")
+      return
+    }
+    if (uniqueBuyerKeys.has(launchDevWallet)) {
+      toast.error("dev wallet cannot be a buyer wallet")
+      return
+    }
+    if (buyerKeys.length + 1 > MAX_LAUNCH_WALLETS) {
+      toast.error(`max ${MAX_LAUNCH_WALLETS} wallets per bundle`)
+      return
+    }
+
+    const devWallet = bundlerWallets.find((wallet) => wallet.publicKey === launchDevWallet)
+    if (!devWallet) {
+      toast.error("dev wallet not found")
+      return
+    }
+    if (!devWallet.secretKey) {
+      toast.error("dev wallet secret key missing")
+      return
+    }
+
+    const buyersResolved = buyerWallets.map((buyer) => ({
+      buyer,
+      wallet: bundlerWallets.find((wallet) => wallet.publicKey === buyer.publicKey) || null,
+    }))
+    const missingBuyer = buyersResolved.find((entry) => !entry.wallet)
+    if (missingBuyer) {
+      toast.error("buyer wallet not found")
+      return
+    }
+    const missingSecret = buyersResolved.find((entry) => !entry.wallet?.secretKey)
+    if (missingSecret) {
+      toast.error("buyer wallet secret key missing")
+      return
+    }
+
+    const parsedDevBuy = Math.max(0, parseSol(devBuyAmount))
+    const buyerAmounts = buyerWallets.map((buyer) => parseSol(buyer.amount))
+    if (buyerAmounts.some((amount) => amount <= 0)) {
+      toast.error("set valid buy amount for each buyer")
+      return
+    }
+
+    setLaunchLoading(true)
+    try {
+      const { jitoTipNum, priorityNum, slippageNum } = normalizeLaunchNumbers()
+      const launchWallets = [
+        { ...devWallet, isActive: true },
+        ...buyersResolved.map((entry) => ({ ...entry.wallet!, isActive: true })),
+      ]
+      const buyAmounts = [parsedDevBuy, ...buyerAmounts]
+      const funderAmount = parseSol(funderAmountPerWallet)
+
+      if (autoFundEnabled) {
+        if (!Number.isFinite(funderAmount) || funderAmount <= 0) {
+          toast.error("set valid funder amount per wallet")
+          return
+        }
+
+        addSystemLog(`Auto-funding ${launchWallets.length} wallets`, "info")
+        if (useConnectedFunder) {
+          if (!connected || !publicKey) {
+            toast.error("connect funder wallet")
+            return
+          }
+          const connection = await getResilientConnection()
+          const balanceLamports = await connection.getBalance(publicKey)
+          const totalSolNeeded = (funderAmount * launchWallets.length) + 0.01
+          if (balanceLamports / LAMPORTS_PER_SOL < totalSolNeeded) {
+            const message = `Insufficient balance. Need ${totalSolNeeded.toFixed(4)} SOL`
+            toast.error(message)
+            addSystemLog(message, "error")
+            return
+          }
+
+          const BATCH_SIZE = 8
+          for (let i = 0; i < launchWallets.length; i += BATCH_SIZE) {
+            const batch = launchWallets.slice(i, i + BATCH_SIZE)
+            const tx = new Transaction()
+            batch.forEach((wallet) => {
+              tx.add(
+                SystemProgram.transfer({
+                  fromPubkey: publicKey,
+                  toPubkey: new PublicKey(wallet.publicKey),
+                  lamports: Math.floor(funderAmount * LAMPORTS_PER_SOL),
+                })
+              )
+            })
+            const sig = await sendTransaction(tx, connection)
+            await connection.confirmTransaction(sig, "confirmed")
+            addSystemLog(`Funder batch confirmed: ${sig.slice(0, 8)}...`, "success")
+          }
+        } else {
+          const trimmedFunderKey = funderKey.trim()
+          if (!trimmedFunderKey) {
+            toast.error("funder private key required")
+            return
+          }
+          const fundRes = await fetch("/api/bundler/wallets", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              action: "fund",
+              funderSecretKey: trimmedFunderKey,
+              wallets: launchWallets,
+              amounts: launchWallets.map(() => funderAmount),
+            }),
+          })
+          const fundData = await fundRes.json().catch(() => ({}))
+          if (!fundRes.ok || fundData?.error) {
+            const message = fundData?.error || "failed to fund wallets"
+            toast.error(message)
+            addSystemLog(`Auto-fund failed: ${message}`, "error")
+            return
+          }
+          addSystemLog(`Auto-fund ok: ${fundData.signature?.slice(0, 8)}...`, "success")
+        }
+      }
+
+      const res = await fetch("/api/bundler/launch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          wallets: launchWallets,
+          tokenMetadata: {
+            name: tokenName.trim(),
+            symbol: tokenSymbol.trim().toUpperCase(),
+            description: tokenDescription,
+            metadataUri,
+            website: tokenWebsite,
+            twitter: tokenTwitter,
+            telegram: tokenTelegram,
+            imageUrl: tokenImageUrl,
+          },
+          devBuyAmount: parsedDevBuy,
+          buyAmounts,
+          jitoTip: jitoTipNum,
+          priorityFee: priorityNum,
+          slippage: slippageNum,
+          jitoRegion,
+        }),
+      })
+
+      const data = await res.json()
+      if (data.error) {
+        toast.error(data.error)
+        addSystemLog(`launch failed: ${data.error}`, "error")
+      } else {
+        toast.success(`launched! mint: ${data.mintAddress}`)
+        addSystemLog(`launch ok: ${data.mintAddress}`, "success")
+        if (data.mintAddress) {
+          const mintedToken: Token = {
+            name: tokenName.trim() || "New Token",
+            symbol: tokenSymbol.trim().toUpperCase() || "NEW",
+            price: "",
+            change: "",
+            status: "launched",
+            description: tokenDescription,
+            website: tokenWebsite,
+            twitter: tokenTwitter,
+            telegram: tokenTelegram,
+            imageUrl: tokenImageUrl,
+            mintAddress: data.mintAddress,
+          }
+          setSelectedToken(mintedToken)
+          setTokens((prev) => {
+            if (prev.some((token) => token.mintAddress === data.mintAddress)) return prev
+            return [mintedToken, ...prev]
+          })
+          if (typeof window !== "undefined") {
+            window.localStorage.setItem(getLastTokenKey(), data.mintAddress)
+          }
+        }
+        setDashboardStage("main")
+        if (data.mintAddress && autoCreateAtaEnabled) {
+          addSystemLog(`Auto-creating ATAs for ${launchWallets.length} wallets`, "info")
+          const ataRes = await fetch("/api/bundler/wallets", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              action: "create-atas",
+              wallets: launchWallets,
+              mintAddress: data.mintAddress,
+            }),
+          })
+          const ataData = await ataRes.json().catch(() => ({}))
+          if (!ataRes.ok || ataData?.error || ataData?.success === false) {
+            const message =
+              ataData?.error ||
+              (Array.isArray(ataData?.errors) && ataData.errors[0]?.error) ||
+              "failed to create ATAs"
+            toast.error(message)
+            addSystemLog(`Auto-ATA failed: ${message}`, "error")
+          } else {
+            addSystemLog("Auto-ATA created", "success")
+          }
+        }
+        await loadSavedWallets()
+        await fetchDashboardData()
+      }
+    } catch (error: any) {
+      toast.error("launch failed")
+      addSystemLog(`launch failed: ${error?.message || "unknown error"}`, "error")
+    } finally {
+      setLaunchLoading(false)
+    }
+  }
+
   useEffect(() => {
     let cancelled = false
     const loadHolders = async () => {
@@ -426,38 +978,6 @@ export default function DashboardPage() {
       holderTrackerRef.current = null
     }
   }, [selectedToken?.mintAddress, devHolderPubkey, addSystemLog])
-
-  // Toggle wallet selection
-  const toggleWalletSelection = useCallback((publicKey: string) => {
-    setSelectedWallets(prev => {
-      const newSet = new Set(prev)
-      if (newSet.has(publicKey)) {
-        newSet.delete(publicKey)
-      } else {
-        newSet.add(publicKey)
-      }
-      return newSet
-    })
-  }, [])
-
-  // Select all wallets
-  const selectAllWallets = useCallback(() => {
-    setSelectedWallets(new Set(activeWallets.map(w => w.publicKey)))
-  }, [activeWallets])
-
-  // Clear selected wallets
-  const clearSelectedWallets = useCallback(() => {
-    setSelectedWallets(new Set())
-  }, [])
-
-  const saveManualTradeSettings = useCallback(() => {
-    if (typeof window === "undefined") return
-    window.localStorage.setItem("dashboardManualBuyAmount", manualBuyAmount)
-    window.localStorage.setItem("dashboardManualSellPercent", manualSellPercent)
-    setManualTradeDirty(false)
-    addSystemLog("Manual trade settings saved", "success")
-    toast.success("Manual trade settings saved")
-  }, [manualBuyAmount, manualSellPercent, addSystemLog])
 
   // Get volume bot status
   const getVolumeBotStatus = useCallback(async () => {
@@ -524,193 +1044,6 @@ export default function DashboardPage() {
     if (savedSell) setManualSellPercent(savedSell)
   }, [])
 
-  useEffect(() => {
-    if (typeof window === "undefined") return
-    const mintForLogs =
-      selectedToken?.mintAddress ||
-      volumeBotConfig.mintAddress ||
-      logMintAddress
-    if (!mintForLogs) return
-    try {
-      const key = getLogStorageKey(mintForLogs)
-      const raw = window.localStorage.getItem(key)
-      const existing = raw ? (JSON.parse(raw) as string[]) : []
-      if (existing.length > 0) {
-        setSystemLogs(existing)
-      }
-    } catch {
-      // ignore
-    }
-  }, [selectedToken?.mintAddress, volumeBotConfig.mintAddress, logMintAddress, getLogStorageKey])
-
-  // Generate wallets
-  const generateWallets = useCallback(async () => {
-    try {
-      const count = parseInt(walletCount) || 5
-      if (count < 1 || count > 20) {
-        toast.error("count must be between 1 and 20")
-        return
-      }
-
-      const res = await fetch(`/api/bundler/wallets?action=generate-multiple&count=${count}`)
-      const data = await res.json()
-
-      if (data.error) {
-        toast.error(data.error)
-        return
-      }
-
-      if (data.wallets && Array.isArray(data.wallets)) {
-        setBundlerWallets(prev => [...prev, ...data.wallets])
-        toast.success(`generated ${data.wallets.length} wallets`)
-      } else {
-        toast.error("invalid response from server")
-      }
-    } catch (error: any) {
-      console.error("generate wallets error:", error)
-      toast.error(`failed to generate wallets: ${error.message || "unknown error"}`)
-    }
-  }, [walletCount])
-
-  // Clear all wallets
-  const clearWallets = useCallback(() => {
-    setBundlerWallets([])
-    setSelectedWallets(new Set())
-    toast.success("cleared all wallets")
-  }, [])
-
-  // Distribute gas (fund wallets)
-  const distributeGas = useCallback(async () => {
-    const activeWallets = bundlerWallets.filter(w => w.isActive)
-    if (activeWallets.length === 0) {
-      addSystemLog("No active wallets found", 'error')
-      toast.error("no active wallets")
-      return
-    }
-
-    if (useConnectedFunder && (!connected || !publicKey)) {
-      addSystemLog("Wallet not connected", 'error')
-      toast.error("connect wallet first")
-      return
-    }
-
-    setGasLoading(true)
-    addSystemLog(`Starting gas distribution to ${activeWallets.length} wallets`, 'info')
-
-    try {
-      const amountPerWallet = 0.003
-      const totalSolNeeded = (amountPerWallet * activeWallets.length) + 0.01
-      const connection = await getResilientConnection()
-
-      if (useConnectedFunder) {
-        const balance = await connection.getBalance(publicKey!)
-        const balanceInSol = balance / LAMPORTS_PER_SOL
-
-        if (balanceInSol < totalSolNeeded) {
-          const error = `Insufficient balance. Need ${totalSolNeeded.toFixed(4)} SOL, have ${balanceInSol.toFixed(4)} SOL`
-          addSystemLog(error, 'error')
-          toast.error(error)
-          return
-        }
-
-        addSystemLog(`Balance check passed: ${balanceInSol.toFixed(4)} SOL available`, 'success')
-
-        const BATCH_SIZE = 8
-        for (let i = 0; i < activeWallets.length; i += BATCH_SIZE) {
-          const batch = activeWallets.slice(i, i + BATCH_SIZE)
-          const tx = new Transaction()
-          batch.forEach((wallet) => {
-            tx.add(
-              SystemProgram.transfer({
-                fromPubkey: publicKey!,
-                toPubkey: new PublicKey(wallet.publicKey),
-                lamports: Math.floor(amountPerWallet * LAMPORTS_PER_SOL),
-              })
-            )
-          })
-
-          const sig = await sendTransaction(tx, connection)
-          await connection.confirmTransaction(sig, "confirmed")
-          addSystemLog(`Batch ${Math.floor(i / BATCH_SIZE) + 1} confirmed: ${sig.slice(0, 8)}...`, 'success')
-        }
-      } else {
-        const trimmed = funderKey.trim()
-        if (!trimmed) {
-          const error = "Funder private key required"
-          addSystemLog(error, "error")
-          toast.error(error)
-          return
-        }
-
-        let funderPubkey: PublicKey | null = null
-        try {
-          funderPubkey = Keypair.fromSecretKey(bs58.decode(trimmed)).publicKey
-        } catch (error: any) {
-          const message = `Invalid funder key: ${error?.message || error}`
-          addSystemLog(message, "error")
-          toast.error(message)
-          return
-        }
-
-        const balance = await connection.getBalance(funderPubkey)
-        const balanceInSol = balance / LAMPORTS_PER_SOL
-        if (balanceInSol < totalSolNeeded) {
-          const error = `Insufficient balance. Need ${totalSolNeeded.toFixed(4)} SOL, have ${balanceInSol.toFixed(4)} SOL`
-          addSystemLog(error, 'error')
-          toast.error(error)
-          return
-        }
-
-        addSystemLog(`Balance check passed: ${balanceInSol.toFixed(4)} SOL available`, 'success')
-
-        const res = await fetch("/api/bundler/wallets", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            action: "fund",
-            funderSecretKey: trimmed,
-            wallets: activeWallets,
-            amounts: activeWallets.map(() => amountPerWallet),
-          }),
-        })
-
-        const data = await res.json()
-        if (!res.ok || data?.error) {
-          const message = data?.error || "Failed to fund wallets"
-          addSystemLog(message, "error")
-          toast.error(message)
-          return
-        }
-
-        addSystemLog(`Funder tx confirmed: ${data.signature?.slice(0, 8)}...`, "success")
-      }
-
-      addSystemLog(`Successfully funded ${activeWallets.length} wallets`, 'success')
-      toast.success(`funded ${activeWallets.length} wallets`)
-      setTimeout(() => loadSavedWallets(), 2000)
-
-      if (volumeBotConfig.pairId) {
-        addSystemLog(`Gas distributed: ${totalSolNeeded.toFixed(4)} SOL to ${activeWallets.length} wallets`, 'info')
-      }
-    } catch (error: any) {
-      addSystemLog(`Gas distribution error: ${error.message}`, 'error')
-      console.error("distribute gas error:", error)
-      toast.error(`failed to fund wallets: ${error.message}`)
-    } finally {
-      setGasLoading(false)
-    }
-  }, [
-    connected,
-    publicKey,
-    bundlerWallets,
-    useConnectedFunder,
-    funderKey,
-    sendTransaction,
-    addSystemLog,
-    loadSavedWallets,
-    volumeBotConfig.pairId,
-  ])
-
   // Rugpull all wallets
   const rugpullAllWallets = useCallback(async () => {
     if (!selectedToken || activeWalletsWithTokens.length === 0) return
@@ -743,13 +1076,13 @@ export default function DashboardPage() {
         toast.error(data.error)
       } else {
         toast.success(`rugpull executed! sold all tokens from ${data.signatures?.length || 0} wallets`)
-        await loadSavedWallets() // Refresh balances
+        await loadSavedWallets()
       }
     } catch (error: any) {
       console.error("rugpull error:", error)
       toast.error(`rugpull failed: ${error.message}`)
     }
-  }, [selectedToken, activeWalletsWithTokens, jitoTipSol, priorityFeeSol, jitoRegion])
+  }, [selectedToken, activeWalletsWithTokens, jitoTipSol, priorityFeeSol, jitoRegion, loadSavedWallets, rugpullSlippage])
 
   // Rugpull dev wallet
   const rugpullDevWallet = useCallback(async () => {
@@ -792,8 +1125,8 @@ export default function DashboardPage() {
           wallets: [{
             publicKey: devWallet.publicKey.toBase58(),
             secretKey: bs58.default.encode(devWallet.secretKey),
-            solBalance: 0, // Will be checked server-side
-            tokenBalance: 100, // Assume dev wallet has tokens
+            solBalance: 0,
+            tokenBalance: 100,
             isActive: true
           }],
           mintAddress: selectedToken.mintAddress,
@@ -824,65 +1157,8 @@ export default function DashboardPage() {
     priorityFeeSol,
     jitoRegion,
     addSystemLog,
+    rugpullSlippage,
   ])
-
-  // Create buy bundle
-  const createBuyBundle = useCallback(async () => {
-    if (!selectedToken || selectedActiveWallets.length === 0) return
-
-    try {
-      const res = await fetch("/api/bundler/buy", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          wallets: selectedActiveWallets,
-          mintAddress: selectedToken.mintAddress,
-          priorityFeeSol,
-          jitoTipSol,
-          autoJitoTip
-        })
-      })
-
-      const data = await res.json()
-      if (data.success) {
-        toast.success("Buy bundle created successfully")
-      } else {
-        toast.error(data.error || "Failed to create buy bundle")
-      }
-    } catch (error: any) {
-      console.error("create buy bundle error:", error)
-      toast.error(`Failed to create buy bundle: ${error.message}`)
-    }
-  }, [selectedToken, selectedActiveWallets, priorityFeeSol, jitoTipSol, autoJitoTip])
-
-  // Create sell bundle
-  const createSellBundle = useCallback(async () => {
-    if (!selectedToken || activeWalletsWithTokens.length === 0) return
-
-    try {
-      const res = await fetch("/api/bundler/sell", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          wallets: activeWalletsWithTokens,
-          mintAddress: selectedToken.mintAddress,
-          priorityFeeSol,
-          jitoTipSol,
-          autoJitoTip
-        })
-      })
-
-      const data = await res.json()
-      if (data.success) {
-        toast.success("Sell bundle created successfully")
-      } else {
-        toast.error(data.error || "Failed to create sell bundle")
-      }
-    } catch (error: any) {
-      console.error("create sell bundle error:", error)
-      toast.error(`Failed to create sell bundle: ${error.message}`)
-    }
-  }, [selectedToken, activeWalletsWithTokens, priorityFeeSol, jitoTipSol, autoJitoTip])
 
   // Execute wallet trade (buy/sell individual)
   const executeWalletTrade = useCallback(async (
@@ -930,7 +1206,7 @@ export default function DashboardPage() {
           sellAmount = calcSellAmount(effectiveWallet)
         }
       } catch {
-        // ignore refresh errors, fall back to existing balance
+        // ignore refresh errors
       }
     }
     const amount = action === "buy" ? buyAmount : sellAmount
@@ -941,13 +1217,13 @@ export default function DashboardPage() {
       return
     }
     if (action === "sell" && (effectiveWallet.tokenBalance || 0) <= 0) {
-      addSystemLog("Нет токенов для продажи!", "error")
-      toast.error("Нет токенов для продажи!")
+      addSystemLog("No tokens available to sell", "error")
+      toast.error("No tokens available to sell")
       return
     }
     if (action === "sell" && sellAmount <= 0) {
-      addSystemLog("Нет токенов для продажи!", "error")
-      toast.error("Нет токенов для продажи!")
+      addSystemLog("No tokens available to sell", "error")
+      toast.error("No tokens available to sell")
       return
     }
 
@@ -1051,21 +1327,21 @@ export default function DashboardPage() {
       })
 
       const result = await response.json()
-        if (result.success) {
-          const resolvedPairId = result.pairId || volumeBotConfig.pairId
-          if (resolvedPairId && selectedToken.mintAddress && typeof window !== "undefined") {
-            window.localStorage.setItem(getPairStorageKey(selectedToken.mintAddress), resolvedPairId)
-            window.localStorage.setItem(getLastTokenKey(), selectedToken.mintAddress)
-          }
-          setVolumeBotConfig(prev => ({
-            ...prev,
-            isRunning: true,
-            pairId: resolvedPairId || prev.pairId,
-            mintAddress: selectedToken.mintAddress
-          }))
-          addSystemLog("Volume bot started successfully", "success")
-          toast.success("Volume bot started")
-        } else {
+      if (result.success) {
+        const resolvedPairId = result.pairId || volumeBotConfig.pairId
+        if (resolvedPairId && selectedToken.mintAddress && typeof window !== "undefined") {
+          window.localStorage.setItem(getPairStorageKey(selectedToken.mintAddress), resolvedPairId)
+          window.localStorage.setItem(getLastTokenKey(), selectedToken.mintAddress)
+        }
+        setVolumeBotConfig(prev => ({
+          ...prev,
+          isRunning: true,
+          pairId: resolvedPairId || prev.pairId,
+          mintAddress: selectedToken.mintAddress
+        }))
+        addSystemLog("Volume bot started successfully", "success")
+        toast.success("Volume bot started")
+      } else {
         addSystemLog(`Failed to start volume bot: ${result.error}`, "error")
         toast.error(result.error || "Failed to start volume bot")
       }
@@ -1113,95 +1389,40 @@ export default function DashboardPage() {
       setAbortController(null)
     }
 
-    // Stop volume bot if running
     if (volumeBotConfig.isRunning) {
       stopVolumeBot()
     }
 
-    setGasLoading(false)
-    setAtaLoading(false)
     setRugpullLoading(false)
 
     addSystemLog("All processes stopped by user", 'info')
     toast.success("All processes stopped")
   }, [abortController, volumeBotConfig.isRunning, stopVolumeBot, addSystemLog])
 
-  // Create ATAs for all wallets (batched)
-  const createATAs = useCallback(async () => {
-    if (!selectedToken || activeWallets.length === 0) return
-
-    setAtaLoading(true)
-    addSystemLog(`Starting ATA creation for ${activeWallets.length} wallets`, 'info')
-
-    const BATCH_SIZE = 5
-    const batches = []
-    for (let i = 0; i < activeWallets.length; i += BATCH_SIZE) {
-      batches.push(activeWallets.slice(i, i + BATCH_SIZE))
-    }
-
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    const mintForLogs =
+      selectedToken?.mintAddress ||
+      volumeBotConfig.mintAddress ||
+      logMintAddress
+    if (!mintForLogs) return
     try {
-      for (let i = 0; i < batches.length; i++) {
-        const batch = batches[i]
-        addSystemLog(`Creating ATAs for batch ${i + 1}/${batches.length} (${batch.length} wallets)`, 'info')
-        toast.info(`Creating ATAs for batch ${i + 1}/${batches.length} (${batch.length} wallets)`)
-
-        const response = await fetch("/api/bundler/wallets", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            action: "create-atas",
-            wallets: batch,
-            mintAddress: selectedToken.mintAddress
-          })
-        })
-
-          const data = await response.json().catch(() => ({}))
-          if (data.success) {
-            addSystemLog(`Batch ${i + 1}/${batches.length} completed successfully`, 'success')
-            toast.success(`Batch ${i + 1}/${batches.length} completed`)
-          } else {
-            const errMsg =
-              typeof data.error === "string"
-                ? data.error
-                : data.error
-                  ? JSON.stringify(data.error)
-                  : data.errors && Array.isArray(data.errors) && data.errors.length > 0
-                    ? JSON.stringify(data.errors[0])
-                    : `HTTP ${response.status}`
-            addSystemLog(`Batch ${i + 1}/${batches.length} failed: ${errMsg}`, 'error')
-            toast.error(`Batch ${i + 1}/${batches.length} failed: ${errMsg}`)
-            return // Stop on first failure
-          }
-
-        // Small delay between batches to avoid rate limits
-        if (i < batches.length - 1) {
-          await new Promise(resolve => setTimeout(resolve, 1000))
-        }
+      const key = getLogStorageKey(mintForLogs)
+      const raw = window.localStorage.getItem(key)
+      const existing = raw ? (JSON.parse(raw) as string[]) : []
+      if (existing.length > 0) {
+        setSystemLogs(existing)
       }
-
-      addSystemLog(`Successfully created ATAs for all ${activeWallets.length} wallets`, 'success')
-      toast.success(`Created ATAs for all ${activeWallets.length} wallets`)
-      // Auto refresh after 3 seconds to show updated ATA status
-      setTimeout(() => loadSavedWallets(), 3000)
-
-      // Log to volume bot if it's running
-      if (volumeBotConfig.pairId) {
-        addSystemLog(`ATAs created for ${activeWallets.length} wallets in ${batches.length} batches`, 'success')
-      }
-    } catch (error: any) {
-      addSystemLog(`ATA creation error: ${error.message}`, 'error')
-      console.error("Create ATAs error:", error)
-      toast.error(`Failed to create ATAs: ${error.message}`)
-    } finally {
-      setAtaLoading(false)
+    } catch {
+      // ignore
     }
-  }, [selectedToken, activeWallets, addSystemLog])
+  }, [selectedToken?.mintAddress, volumeBotConfig.mintAddress, logMintAddress, getLogStorageKey])
 
   const fetchDashboardData = useCallback(async () => {
     try {
       const [statsRes, tokensRes, activityRes, chartRes, volumeBotRes, pnlRes, tokenPnlsRes, tradesRes] = await Promise.all([
         fetch("/api/stats?type=dashboard"),
-        fetch("/api/stats?type=tokens"),
+        fetch("/api/tokens"),
         fetch("/api/stats?type=activity&limit=5"),
         fetch("/api/stats?type=chart&days=7"),
         fetch("/api/stats?type=volume-bot"),
@@ -1211,7 +1432,8 @@ export default function DashboardPage() {
       ])
 
       const statsData = await statsRes.json()
-      const tokensData = await tokensRes.json()
+      const tokensRaw = await tokensRes.json()
+      const tokensData = normalizeTokenList(tokensRaw)
       const activityData = await activityRes.json()
       const chartDataRes = await chartRes.json()
       const volumeBotData = await volumeBotRes.json()
@@ -1254,7 +1476,34 @@ export default function DashboardPage() {
       console.error("Error fetching dashboard data:", error)
       setLoading(false)
     }
-  }, [selectedToken?.mintAddress, getLastTokenKey])
+  }, [selectedToken, getLastTokenKey, loadSavedWallets, normalizeTokenList])
+
+  useEffect(() => {
+    if (!selectedToken?.mintAddress || tokens.length === 0) return
+    const updated = tokens.find((token) => token.mintAddress === selectedToken.mintAddress)
+    if (!updated) return
+    setSelectedToken((prev) => {
+      if (!prev || prev.mintAddress !== updated.mintAddress) return prev
+      const merged: Token = {
+        ...updated,
+        status: updated.status || prev.status,
+        price: updated.price || prev.price,
+        change: updated.change || prev.change,
+      }
+      if (
+        prev.name === merged.name &&
+        prev.symbol === merged.symbol &&
+        prev.description === merged.description &&
+        prev.imageUrl === merged.imageUrl &&
+        prev.status === merged.status &&
+        prev.price === merged.price &&
+        prev.change === merged.change
+      ) {
+        return prev
+      }
+      return merged
+    })
+  }, [tokens, selectedToken?.mintAddress])
 
   useEffect(() => {
     if (!selectedToken?.mintAddress) return
@@ -1293,18 +1542,20 @@ export default function DashboardPage() {
         const jitoRes = await fetch("/api/jito/tip-floor")
         const jitoData = await jitoRes.json()
         if (jitoData.recommended) {
-          setJitoTipFloor(jitoData)
-          if (autoJitoTip) {
-            setJitoTipSol(jitoData.sol.p75.toFixed(6))
-          }
+          setJitoTipSol(jitoData.sol.p75.toFixed(6))
         }
 
         // Load priority fees
         const priorityRes = await fetch("/api/fees/priority")
         const priorityData = await priorityRes.json()
-        if (priorityData.recommendations) {
-          setPriorityFeeData(priorityData)
-          setPriorityFeeSol(priorityData.fast.lamports.toString())
+        const fastFeeSol =
+          priorityData?.presets?.fast?.feeSol ??
+          priorityData?.fast?.feeSol ??
+          (priorityData?.fast?.lamports != null
+            ? priorityData.fast.lamports / LAMPORTS_PER_SOL
+            : null)
+        if (Number.isFinite(fastFeeSol)) {
+          setPriorityFeeSol(Number(fastFeeSol).toFixed(6))
         }
       } catch (error) {
         console.error("Failed to load network data:", error)
@@ -1312,7 +1563,29 @@ export default function DashboardPage() {
     }
 
     loadNetworkData()
-  }, [autoJitoTip])
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    const loadNetworkStatus = async () => {
+      try {
+        const res = await fetch("/api/network")
+        if (!res.ok) throw new Error("network status failed")
+        const data = await res.json()
+        if (cancelled) return
+        setNetwork(data.network || "unknown")
+        setPumpFunAvailable(data.pumpFunAvailable ?? null)
+        setRpcHealthy(data.rpcHealthy ?? null)
+      } catch (error) {
+        console.error("Failed to load network status:", error)
+      }
+    }
+
+    loadNetworkStatus()
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   // Helper functions
   const formatVolume = (volume: string | number) => {
@@ -1334,20 +1607,41 @@ export default function DashboardPage() {
     return "now"
   }
 
-  const jitoTipStatus = useMemo(() => {
-    if (!jitoTipFloor) return { className: "text-neutral-500", label: "..." }
-    const currentTip = autoJitoTip ? parseFloat(jitoTipFloor.sol.p75.toFixed(6)) : parseFloat(jitoTipSol)
-    const recommended = jitoTipFloor.sol.p75
-    const isGood = currentTip >= recommended * 0.8
-
-    return {
-      className: isGood ? "text-green-400" : "text-yellow-400",
-      label: isGood ? "Good" : "Low"
-    }
-  }, [jitoTipFloor, autoJitoTip, jitoTipSol])
-
   return (
     <div className="p-1 space-y-1">
+      <div className="flex flex-wrap items-center justify-between gap-2 rounded border border-neutral-800 bg-neutral-900/70 px-2 py-1">
+        <div className="flex items-center gap-2 text-xs font-semibold text-white tracking-wider">
+          DASHBOARD FLOW
+          <Badge className={isLaunchStage ? "bg-cyan-500/20 text-cyan-300" : "bg-neutral-800 text-neutral-400"}>
+            1. LAUNCH
+          </Badge>
+          <Badge className={!isLaunchStage ? "bg-green-500/20 text-green-300" : "bg-neutral-800 text-neutral-400"}>
+            2. MAIN STAGE
+          </Badge>
+        </div>
+        <div className="flex items-center gap-2">
+          {isLaunchStage ? (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setDashboardStage("main")}
+              className="h-7 px-2 text-[10px] border-neutral-700 disabled:opacity-50"
+            >
+              Open main stage
+            </Button>
+          ) : (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setDashboardStage("launch")}
+              className="h-7 px-2 text-[10px] border-neutral-700"
+            >
+              Launch another token
+            </Button>
+          )}
+        </div>
+      </div>
+      {!isLaunchStage && (
       <div className="flex flex-col gap-1 xl:flex-row xl:items-center xl:justify-between">
         <div className="space-y-1">
           <div className="text-sm font-semibold text-white tracking-wider">CONTROL PANEL</div>
@@ -1383,7 +1677,12 @@ export default function DashboardPage() {
               <SelectContent>
                 {tokens.map((token) => (
                   <SelectItem key={token.mintAddress || token.symbol} value={token.mintAddress || ""}>
-                    {token.symbol} - {token.price}
+                    {token.symbol ||
+                      token.name ||
+                      (token.mintAddress
+                        ? `${token.mintAddress.slice(0, 6)}...${token.mintAddress.slice(-4)}`
+                        : "Unknown")}
+                    {token.price ? ` - ${token.price}` : ""}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -1403,89 +1702,462 @@ export default function DashboardPage() {
           </Button>
         </div>
       </div>
+      )}
 
       <div className="grid grid-cols-1 xl:grid-cols-12 gap-1">
-        <Card className="xl:col-span-6 bg-neutral-900 border-neutral-700">
-          <CardHeader className="py-1 px-2">
-            <div className="flex items-center justify-between">
-              <CardTitle className="text-xs font-medium text-white tracking-wider flex items-center gap-2 border-b border-slate-800 pb-2">
-                <Rocket className="w-4 h-4 text-blue-400" />
-                VOLUME BOT
-              </CardTitle>
-              <div className="flex items-center gap-2">
-                <Badge className={volumeRunning ? "bg-green-500/20 text-green-400" : "bg-red-500/20 text-red-400"}>
-                  {volumeRunning ? "RUNNING" : "STOPPED"}
-                </Badge>
-                <div className="text-[9px] text-slate-400">
-                  {volumeBotStatus ? (
-                    <>
-                      Trades: {volumeBotStatus.totalTrades || 0} |
-                      Vol: {parseFloat(volumeBotStatus.totalVolume || "0").toFixed(3)} SOL |
-                      Spent: {parseFloat(volumeBotStatus.solSpent || "0").toFixed(3)} SOL
-                    </>
+        {!isLaunchStage && (
+        <>
+          <div className="xl:col-span-7 space-y-1">
+            <Card className="bg-neutral-900 border-neutral-700">
+              <CardHeader className="py-1 px-2">
+                <CardTitle className="text-xs font-medium text-white tracking-wider flex items-center gap-2 border-b border-slate-800 pb-2">
+                  TOKEN INFO
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-2 px-2 pb-2">
+                {!selectedToken ? (
+                  <div className="text-slate-400 text-xs">Select a token to view info</div>
+                ) : (
+                  <>
+                    <div className="grid grid-cols-1 lg:grid-cols-[1.1fr_1fr] gap-2">
+                      <div className="space-y-2">
+                        <div className="text-[10px] text-slate-400 uppercase tracking-wider">Main</div>
+                        <div className="flex items-start gap-2">
+                          <div className="h-16 w-16 shrink-0 rounded border border-neutral-700 bg-neutral-800 overflow-hidden flex items-center justify-center">
+                            {selectedToken?.imageUrl ? (
+                              <img src={selectedToken.imageUrl} alt="Token" className="h-full w-full object-cover" />
+                            ) : (
+                              <div className="text-[9px] text-neutral-400">No image</div>
+                            )}
+                          </div>
+                          <div className="grid flex-1 grid-cols-[120px_1fr] gap-x-2 gap-y-1 text-[11px]">
+                            <div className="text-slate-500">Name</div>
+                            <div className="text-white">{selectedToken?.name || "-"}</div>
+                            <div className="text-slate-500">Symbol</div>
+                            <div className="text-white">{selectedToken?.symbol || "-"}</div>
+                            <div className="text-slate-500">Mint / Token key</div>
+                            <div className="text-white font-mono truncate">
+                              {selectedToken?.mintAddress
+                                ? `${selectedToken.mintAddress.slice(0, 6)}...${selectedToken.mintAddress.slice(-4)}`
+                                : "-"}
+                            </div>
+                            <div className="text-slate-500">Dev key</div>
+                            <div className="text-white font-mono truncate">
+                              {selectedToken?.creatorWallet
+                                ? `${selectedToken.creatorWallet.slice(0, 6)}...${selectedToken.creatorWallet.slice(-4)}`
+                                : "-"}
+                            </div>
+                            <div className="text-slate-500">Pump.fun link</div>
+                            <div className="text-white">
+                              {selectedToken?.mintAddress ? (
+                                <a
+                                  className="text-cyan-300 hover:text-cyan-200 underline"
+                                  href={`https://pump.fun/${selectedToken.mintAddress}`}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                >
+                                  pump.fun/{selectedToken.mintAddress.slice(0, 6)}...
+                                </a>
+                              ) : (
+                                "-"
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                        <div className="space-y-1">
+                          <div className="text-[10px] text-slate-500">Description</div>
+                          <div className="rounded border border-neutral-800 bg-neutral-950/40 p-2 text-[10px] text-white/90 leading-snug">
+                            {selectedToken?.description || "-"}
+                          </div>
+                        </div>
+                      </div>
+                      <div className="space-y-2">
+                        <div className="text-[10px] text-slate-400 uppercase tracking-wider">Finance</div>
+                        <div className="grid grid-cols-[150px_1fr] gap-x-2 gap-y-1 text-[11px]">
+                          <div className="text-slate-500">Current price (SOL)</div>
+                          <div className="text-white font-mono">
+                            {tokenFinanceLoading
+                              ? "..."
+                              : currentPriceSol == null
+                              ? "-"
+                              : currentPriceSol.toFixed(6)}
+                          </div>
+                          <div className="text-slate-500">Market cap</div>
+                          <div className="text-white font-mono">
+                            {tokenFinanceLoading
+                              ? "..."
+                              : marketCapSol == null
+                              ? "-"
+                              : `${marketCapSol.toLocaleString(undefined, { maximumFractionDigits: 2 })} SOL`}
+                          </div>
+                          <div className="text-slate-500">Total supply</div>
+                          <div className="text-white font-mono">
+                            {tokenFinanceLoading
+                              ? "..."
+                              : totalSupplyValue == null
+                              ? "-"
+                              : totalSupplyValue.toLocaleString()}
+                          </div>
+                          <div className="text-slate-500">SOL reserves / Liquidity</div>
+                          <div className="text-white font-mono">
+                            {tokenFinanceLoading
+                              ? "..."
+                              : tokenFinance?.liquiditySol == null
+                              ? "-"
+                              : `${tokenFinance.liquiditySol.toFixed(4)} SOL`}
+                          </div>
+                          <div className="text-slate-500">Funding balance</div>
+                          <div className="text-white font-mono">
+                            {tokenFinanceLoading
+                              ? "..."
+                              : tokenFinance?.fundingBalanceSol == null
+                              ? "-"
+                              : `${tokenFinance.fundingBalanceSol.toFixed(4)} SOL`}
+                          </div>
+                          <div className="text-slate-500">Holders count</div>
+                          <div className="text-white font-mono">
+                            {holdersLoading ? "..." : holderRows.length.toLocaleString()}
+                          </div>
+                          <div className="text-slate-500">24h volume</div>
+                          <div className="text-white font-mono">
+                            {tokenFinanceLoading
+                              ? "..."
+                              : tokenFinance?.volumeSol != null
+                              ? `${tokenFinance.volumeSol.toFixed(2)} SOL`
+                              : tokenFinance?.volumeUsd != null
+                              ? `$${tokenFinance.volumeUsd.toLocaleString()}`
+                              : "-"}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </>
+                )}
+              </CardContent>
+            </Card>
+          </div>
+
+          <div className="xl:col-span-5 space-y-1">
+            <Card className="bg-red-950/20 border-red-500/50">
+              <CardHeader className="py-1 px-2">
+                <CardTitle className="text-xs font-medium text-white tracking-wider flex items-center gap-2 border-b border-slate-800 pb-2">
+                  <Flame className="w-4 h-4 text-red-400" />
+                  RUGPULL
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-1 px-2 pb-2">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-1">
+                  <div className="space-y-1">
+                    <Label className="text-[10px] text-slate-600">Slippage %</Label>
+                    <Input
+                      type="number"
+                      placeholder="20"
+                      value={rugpullSlippage}
+                      onChange={(e) => setRugpullSlippage(e.target.value)}
+                      className="h-7 bg-background border-border text-xs"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <div className="flex items-center justify-between">
+                      <Label className="text-[10px] text-slate-600">Dev Wallet</Label>
+                      <div className="flex items-center gap-1 text-[10px] text-slate-500">
+                        <span>Connected</span>
+                        <Switch checked={useConnectedDev} onCheckedChange={setUseConnectedDev} />
+                      </div>
+                    </div>
+                    <Input
+                      type="password"
+                      placeholder="dev wallet private key"
+                      value={devKey ? "*".repeat(Math.min(devKey.length, 20)) + (devKey.length > 20 ? "..." : "") : ""}
+                      onChange={(e) => setDevKey(e.target.value)}
+                      disabled={useConnectedDev}
+                      className="h-7 bg-background border-border text-xs"
+                    />
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-1 rounded border border-red-500/20 bg-red-950/30 p-2 text-[10px]">
+                  <div className="space-y-1">
+                    <div className="text-red-200/70">Dump estimate</div>
+                    <div className="font-mono text-white">
+                      {rugpullEstimate?.netSol == null ? "-" : `${rugpullEstimate.netSol.toFixed(4)} SOL`}
+                    </div>
+                  </div>
+                  <div className="space-y-1">
+                    <div className="text-red-200/70">Tokens sold</div>
+                    <div className="font-mono text-white">
+                      {Number.isFinite(totalTokensToSell) ? totalTokensToSell.toFixed(2) : "-"}
+                    </div>
+                  </div>
+                  <div className="col-span-2 flex items-center justify-between pt-1 text-[10px]">
+                    <span className="text-red-200/70">Profit estimate</span>
+                    <span
+                      className={`font-mono ${
+                        profitEstimateSol == null
+                          ? "text-white"
+                          : profitEstimateSol >= 0
+                          ? "text-green-300"
+                          : "text-red-300"
+                      }`}
+                    >
+                      {profitEstimateSol == null
+                        ? "-"
+                        : `${profitEstimateSol >= 0 ? "+" : ""}${profitEstimateSol.toFixed(4)} SOL`}
+                    </span>
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-1">
+                  <Button
+                    onClick={rugpullAllWallets}
+                    disabled={!selectedToken || activeWalletsWithTokens.length === 0}
+                    className="h-6 bg-red-600 hover:bg-red-700 text-[10px]"
+                  >
+                    <Flame className="w-3 h-3 mr-1" />
+                    Dump from buyer
+                  </Button>
+                  <Button
+                    onClick={rugpullDevWallet}
+                    disabled={!selectedToken || (useConnectedDev ? !publicKey : !devKey.trim())}
+                    className="h-6 bg-red-600 hover:bg-red-700 text-[10px]"
+                  >
+                    <Flame className="w-3 h-3 mr-1" />
+                    Dump from dev
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="bg-neutral-900 border-neutral-700">
+              <CardHeader className="py-1 px-2">
+                <div className="flex items-center justify-between">
+                  <CardTitle className="text-xs font-medium text-white tracking-wider flex items-center gap-2 border-b border-slate-800 pb-2">
+                    <Rocket className="w-4 h-4 text-blue-400" />
+                    VOLUME BOT
+                  </CardTitle>
+                  <div className="flex items-center gap-2">
+                    <Badge className={volumeRunning ? "bg-green-500/20 text-green-400" : "bg-red-500/20 text-red-400"}>
+                      {volumeRunning ? "RUNNING" : "STOPPED"}
+                    </Badge>
+                    <div className="text-[9px] text-slate-400">
+                      {volumeBotStatus ? (
+                        <>
+                          Trades: {volumeBotStatus.totalTrades || 0} |
+                          Vol: {parseFloat(volumeBotStatus.totalVolume || "0").toFixed(3)} SOL |
+                          Spent: {parseFloat(volumeBotStatus.solSpent || "0").toFixed(3)} SOL
+                        </>
+                      ) : (
+                        volumeBotConfig.amountMode === "fixed"
+                          ? `Fixed: ${volumeBotConfig.fixedAmount} SOL`
+                          : volumeBotConfig.amountMode === "random"
+                          ? `Range: ${volumeBotConfig.minAmount}-${volumeBotConfig.maxAmount} SOL`
+                          : `Perc: ${volumeBotConfig.minPercentage}-${volumeBotConfig.maxPercentage}%`
+                      )}
+                    </div>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7"
+                      onClick={() => setSettingsOpen(true)}
+                    >
+                      <Settings className="w-4 h-4" />
+                    </Button>
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent className="space-y-1 px-2 pb-2">
+                <div className="flex flex-wrap items-center gap-1">
+                  {volumeRunning ? (
+                    <Button onClick={stopVolumeBot} className="h-8 bg-red-500 hover:bg-red-600">
+                      <Pause className="w-4 h-4 mr-2" />
+                      Stop
+                    </Button>
                   ) : (
-                    volumeBotConfig.amountMode === "fixed"
-                      ? `Fixed: ${volumeBotConfig.fixedAmount} SOL`
-                      : volumeBotConfig.amountMode === "random"
-                      ? `Range: ${volumeBotConfig.minAmount}-${volumeBotConfig.maxAmount} SOL`
-                      : `Perc: ${volumeBotConfig.minPercentage}-${volumeBotConfig.maxPercentage}%`
+                    <Button onClick={startVolumeBot} disabled={!selectedToken} className="h-8 bg-green-500 hover:bg-green-600">
+                      <Play className="w-4 h-4 mr-2" />
+                      Start
+                    </Button>
+                  )}
+                  <div className="flex items-center gap-3 text-[11px] text-neutral-400">
+                    <span>Pairs: {loading ? "..." : volumeBotStats.activePairs}</span>
+                    <span>Trades: {loading ? "..." : volumeBotStats.tradesToday.toLocaleString()}</span>
+                    <span>Vol: {loading ? "..." : `${parseFloat(volumeBotStats.volumeGenerated).toLocaleString()} SOL`}</span>
+                  </div>
+                </div>
+
+                <div className="max-h-20 overflow-y-auto">
+                  <div className="grid grid-cols-6 sm:grid-cols-8 lg:grid-cols-12 gap-1 auto-rows-min">
+                    {activeWallets.length === 0 ? (
+                      <div className="col-span-full text-xs text-neutral-500">No active wallets</div>
+                    ) : (
+                      activeWallets.map((wallet) => (
+                      <button
+                        key={wallet.publicKey}
+                        type="button"
+                        onClick={() => setQuickTradeWallet(wallet)}
+                        className="h-10 rounded border border-orange-500 bg-white p-1 text-left text-[9px] leading-tight hover:border-orange-400 transition"
+                      >
+                        <div className="text-[9px]" style={{ color: "#000", fontWeight: 700 }}>Wallet</div>
+                        <div className="font-mono text-[9px] text-neutral-900 truncate">
+                          {wallet.publicKey.slice(0, 6)}...{wallet.publicKey.slice(-4)}
+                        </div>
+                      </button>
+                    ))
+                  )}
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+
+          <div className="xl:col-span-12 grid grid-cols-1 xl:grid-cols-2 gap-1">
+            <Card className="bg-neutral-900 border-neutral-700">
+              <CardHeader className="py-1 px-2">
+                <CardTitle className="text-xs font-medium text-white tracking-wider flex items-center gap-2 border-b border-slate-800 pb-2">
+                  <Users className="w-4 h-4" />
+                  HOLDERS
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="px-2 pb-2">
+                <div className="space-y-1 max-h-24 overflow-y-auto">
+                  {holdersLoading ? (
+                    <div className="text-slate-400 text-xs p-2 text-center">Loading holders...</div>
+                  ) : holderRows.length === 0 ? (
+                    <div className="text-slate-400 text-xs p-2 text-center">No holders yet</div>
+                  ) : (
+                    holderRows.map((wallet) => (
+                      <div key={wallet.address} className="flex items-center justify-between text-[11px]">
+                        <span className="font-mono text-neutral-400">
+                          {wallet.address.slice(0, 6)}...{wallet.address.slice(-4)}
+                        </span>
+                        <span className="text-white">
+                          {wallet.balance.toFixed(2)} ({wallet.percentage.toFixed(2)}%)
+                        </span>
+                      </div>
+                    ))
                   )}
                 </div>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-7 w-7"
-                  onClick={() => setSettingsOpen(true)}
-                >
-                  <Settings className="w-4 h-4" />
-                </Button>
-              </div>
-            </div>
-          </CardHeader>
-          <CardContent className="space-y-1 px-2 pb-2">
-            <div className="flex flex-wrap items-center gap-1">
-              {volumeRunning ? (
-                <Button onClick={stopVolumeBot} className="h-8 bg-red-500 hover:bg-red-600">
-                  <Pause className="w-4 h-4 mr-2" />
-                  Stop
-                </Button>
-              ) : (
-                <Button onClick={startVolumeBot} disabled={!selectedToken} className="h-8 bg-green-500 hover:bg-green-600">
-                  <Play className="w-4 h-4 mr-2" />
-                  Start
-                </Button>
-              )}
-              <div className="flex items-center gap-3 text-[11px] text-neutral-400">
-                <span>Pairs: {loading ? "..." : volumeBotStats.activePairs}</span>
-                <span>Trades: {loading ? "..." : volumeBotStats.tradesToday.toLocaleString()}</span>
-                <span>Vol: {loading ? "..." : `${parseFloat(volumeBotStats.volumeGenerated).toLocaleString()} SOL`}</span>
-              </div>
-            </div>
-
-            <div className="max-h-40 overflow-y-auto">
-              <div className="grid grid-cols-6 sm:grid-cols-8 lg:grid-cols-12 gap-1">
-                {activeWallets.length === 0 ? (
-                  <div className="col-span-full text-xs text-neutral-500">No active wallets</div>
-                ) : (
-                  activeWallets.map((wallet) => (
-                  <button
-                    key={wallet.publicKey}
-                    type="button"
-                    onClick={() => setQuickTradeWallet(wallet)}
-                    className="aspect-square rounded border border-orange-500 bg-white p-0.5 text-left text-[8px] hover:border-orange-400 transition"
-                  >
-                    <div className="text-[8px]" style={{ color: "#000", fontWeight: 700 }}>Wallet</div>
-                    <div className="font-mono text-[8px] text-neutral-900 truncate">
-                      {wallet.publicKey.slice(0, 6)}...{wallet.publicKey.slice(-4)}
+              </CardContent>
+            </Card>
+            <Card className="bg-neutral-900 border-neutral-700">
+              <Tabs defaultValue="trades" className="w-full">
+                <CardHeader className="py-1 px-2">
+                  <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+                    <TabsList className="h-7 bg-neutral-800 border border-neutral-700">
+                      <TabsTrigger value="trades" className="text-[10px]">
+                        <Activity className="w-3 h-3 mr-1" />
+                        LIVE TRADES
+                      </TabsTrigger>
+                      <TabsTrigger value="logs" className="text-[10px]">
+                        <AlertTriangle className="w-3 h-3 mr-1" />
+                        SYSTEM LOGS
+                      </TabsTrigger>
+                    </TabsList>
+                  </div>
+                </CardHeader>
+                <CardContent className="px-2 pb-2">
+                  <TabsContent value="trades" className="mt-0">
+                    <div className="space-y-1 max-h-24 overflow-y-auto">
+                      {trades.length === 0 ? (
+                        <div className="text-slate-400 text-xs p-2 text-center">No trades yet</div>
+                      ) : (
+                        trades.slice(0, 6).map((trade) => (
+                          <div key={trade.id} className="flex items-center justify-between text-[11px]">
+                            <div className="flex items-center gap-2">
+                              <Badge className={trade.type === "buy" ? "bg-green-500/20 text-green-400" : "bg-red-500/20 text-red-400"}>
+                                {trade.type.toUpperCase()}
+                              </Badge>
+                              <span className="font-mono text-neutral-400">
+                                {trade.mintAddress.slice(0, 6)}...{trade.mintAddress.slice(-4)}
+                              </span>
+                            </div>
+                            <div className="text-right">
+                              <div className="text-white">{trade.solAmount.toFixed(3)} SOL</div>
+                              <div className="text-[10px] text-neutral-500">{formatTimeAgo(new Date(trade.timestamp).toISOString())}</div>
+                            </div>
+                          </div>
+                        ))
+                      )}
                     </div>
-                  </button>
-                ))
-              )}
+                  </TabsContent>
+                  <TabsContent value="logs" className="mt-0">
+                    <div className="flex items-center justify-end pb-1">
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={clearSystemLogs}
+                        className="h-6 px-2 text-[10px] text-slate-400 hover:text-slate-200"
+                      >
+                        <Trash2 className="w-3 h-3 mr-1" />
+                        Clear
+                      </Button>
+                    </div>
+                    <div className="space-y-1 max-h-24 overflow-y-auto bg-neutral-950 rounded p-2">
+                      {systemLogs.length === 0 && (!volumeBotStatus || volumeBotStatus.recentLogs?.length === 0) ? (
+                        <div className="text-slate-400 text-xs">No logs yet</div>
+                      ) : (
+                        <>
+                          {systemLogs.slice(0, 8).map((log, index) => (
+                            <div key={`system-${index}`} className="text-[9px] font-mono text-slate-300">
+                              {log}
+                            </div>
+                          ))}
+                          {volumeBotStatus?.recentLogs?.slice(0, 8).map((log: any, index: number) => (
+                            <div key={`bot-${index}`} className="text-[9px] font-mono text-slate-300">
+                              [{new Date(log.createdAt).toLocaleTimeString()}] {log.type.toUpperCase()}: {log.message}
+                            </div>
+                          ))}
+                        </>
+                      )}
+                    </div>
+                  </TabsContent>
+                </CardContent>
+              </Tabs>
+            </Card>
+          </div>
+        </>
+        )}
+        <Dialog open={cloneDialogOpen} onOpenChange={setCloneDialogOpen}>
+          <DialogContent className="bg-neutral-900 border-neutral-700 max-w-md">
+            <DialogHeader>
+              <DialogTitle className="text-sm text-white">Clone from existing</DialogTitle>
+            </DialogHeader>
+            <div className="space-y-3">
+              <Select value={cloneTokenMint} onValueChange={setCloneTokenMint}>
+                <SelectTrigger className="h-8 bg-background border-border text-xs">
+                  <SelectValue placeholder="Pick token to clone" />
+                </SelectTrigger>
+                <SelectContent>
+                    {tokens.filter((token) => token.mintAddress).map((token) => (
+                      <SelectItem key={token.mintAddress!} value={token.mintAddress!}>
+                        {(token.name || token.symbol || "Unknown")} ({token.symbol || "N/A"}) - {token.mintAddress!.slice(0, 6)}...{token.mintAddress!.slice(-4)}
+                      </SelectItem>
+                    ))}
+                </SelectContent>
+              </Select>
+              <div className="flex gap-2 justify-end">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => setCloneDialogOpen(false)}
+                  className="h-8 px-2 text-[10px]"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  size="sm"
+                  onClick={() => {
+                    if (!cloneTokenMint) return
+                    handleLaunchTemplateSelect(cloneTokenMint)
+                    setCloneDialogOpen(false)
+                  }}
+                  className="h-8 px-2 text-[10px] bg-blue-600 hover:bg-blue-700"
+                  disabled={!cloneTokenMint}
+                >
+                  Clone
+                </Button>
               </div>
             </div>
-          </CardContent>
-        </Card>
-
+          </DialogContent>
+        </Dialog>
         <Dialog open={!!quickTradeWallet} onOpenChange={(open) => { if (!open) setQuickTradeWallet(null) }}>
           <DialogContent className="bg-white border-neutral-300 text-neutral-900 max-w-sm">
             <DialogHeader>
@@ -1507,8 +2179,8 @@ export default function DashboardPage() {
                   onChange={(e) => setQuickBuyAmount(e.target.value)}
                 />
               </div>
-              <div className="grid grid-cols-4 gap-2">
-                {["0.005", "0.01", "0.02", "0.05"].map((preset) => (
+              <div className="grid grid-cols-5 gap-2">
+                {["0.02", "0.05", "0.1", "0.2", "0.3", "0.5", "0.7", "0.8", "1", "2", "3", "4.5", "7", "8", "10"].map((preset) => (
                   <Button
                     key={preset}
                     variant="outline"
@@ -1555,459 +2227,484 @@ export default function DashboardPage() {
           </DialogContent>
         </Dialog>
 
-        <Card className="xl:col-span-6 bg-neutral-900 border-neutral-700">
-          <CardHeader className="py-1 px-2">
+        {isLaunchStage && (
+        <div className="xl:col-span-12 space-y-1">
+          <Card className="bg-neutral-900 border-cyan-500/30">
+            <CardHeader className="py-1 px-2">
               <CardTitle className="text-xs font-medium text-white tracking-wider flex items-center gap-2 border-b border-slate-800 pb-2">
-                <Package className="w-4 h-4 text-cyan-400" />
-                BUNDLER
+                <span className="flex h-4 w-4 items-center justify-center rounded bg-cyan-500/20 text-[9px] text-cyan-300">
+                  1
+                </span>
+                SELECT TOKEN TO LAUNCH
               </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-1 px-2 pb-2">
-            <div className="grid grid-cols-2 gap-1">
+            </CardHeader>
+            <CardContent className="space-y-2 px-2 pb-2">
               <div className="space-y-1">
-                <Label className="text-[11px] text-neutral-500">Priority Fee Preset</Label>
-                <Select value={priorityFeePreset} onValueChange={(value) => setPriorityFeePreset(value as any)}>
+                <Label className="text-[10px] text-black">Prefill</Label>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => {
+                      setCloneTokenMint(launchTemplateMint)
+                      setCloneDialogOpen(true)
+                    }}
+                    className="h-8 px-2 text-[10px] border-neutral-700"
+                  >
+                    Clone from existing
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={resetLaunchForm}
+                    className="h-8 px-2 text-[10px] text-neutral-400 hover:text-white"
+                  >
+                    New
+                  </Button>
+                  <span className="text-[10px] text-slate-500">
+                    {launchTemplateMint
+                      ? `Template: ${launchTemplateMint.slice(0, 6)}...${launchTemplateMint.slice(-4)}`
+                      : "No template selected"}
+                  </span>
+                </div>
+                {cloneLoading && (
+                  <div className="text-[10px] text-slate-500">Loading metadata...</div>
+                )}
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                <div className="space-y-1">
+                  <Label className="text-[10px] text-black">Name</Label>
+                  <Input
+                    value={tokenName}
+                    onChange={(e) => setTokenName(e.target.value)}
+                    placeholder="Token Name"
+                    className="h-8 bg-background border-border text-xs"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-[10px] text-black">Symbol</Label>
+                  <Input
+                    value={tokenSymbol}
+                    onChange={(e) => setTokenSymbol(e.target.value.toUpperCase())}
+                    placeholder="SYMBOL"
+                    maxLength={10}
+                    className="h-8 bg-background border-border text-xs"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-1">
+                <Label className="text-[10px] text-black">Description</Label>
+                <Textarea
+                  value={tokenDescription}
+                  onChange={(e) => setTokenDescription(e.target.value)}
+                  placeholder="Token description..."
+                  className="min-h-[48px] bg-background border-border text-xs"
+                  rows={2}
+                />
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                <div className="space-y-1">
+                  <Label className="text-[10px] text-black">Website</Label>
+                  <Input
+                    value={tokenWebsite}
+                    onChange={(e) => setTokenWebsite(e.target.value)}
+                    placeholder="https://example.com"
+                    className="h-8 bg-background border-border text-xs"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-[10px] text-black">Twitter</Label>
+                  <Input
+                    value={tokenTwitter}
+                    onChange={(e) => setTokenTwitter(e.target.value)}
+                    placeholder="https://x.com/..."
+                    className="h-8 bg-background border-border text-xs"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-[10px] text-black">Telegram</Label>
+                  <Input
+                    value={tokenTelegram}
+                    onChange={(e) => setTokenTelegram(e.target.value)}
+                    placeholder="https://t.me/..."
+                    className="h-8 bg-background border-border text-xs"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-2 items-start">
+                <div className="space-y-1">
+                  <Label className="text-[10px] text-black">Image</Label>
+                  <Input
+                    type="file"
+                    accept="image/*"
+                    onChange={(e) => handleTokenImageChange(e.target.files?.[0] || null)}
+                    className="h-8 bg-background border-border text-xs"
+                  />
+                </div>
+                <div className="rounded border border-neutral-800 bg-neutral-950/40 p-2">
+                  <div className="flex items-center gap-2">
+                    <div className="h-10 w-10 overflow-hidden rounded bg-neutral-800">
+                      {tokenImagePreview ? (
+                        <img src={tokenImagePreview} alt="token preview" className="h-full w-full object-cover" />
+                      ) : (
+                        <div className="flex h-full w-full items-center justify-center text-[9px] text-neutral-500">
+                          No image
+                        </div>
+                      )}
+                    </div>
+                    <div className="text-[10px] text-neutral-400 space-y-0.5">
+                      <div>Name: <span className="text-white">{tokenName || "-"}</span></div>
+                      <div>Symbol: <span className="text-white">{tokenSymbol || "-"}</span></div>
+                      <div>Website: <span className="text-white">{tokenWebsite || "-"}</span></div>
+                      <div>Telegram: <span className="text-white">{tokenTelegram || "-"}</span></div>
+                      <div>Twitter: <span className="text-white">{tokenTwitter || "-"}</span></div>
+                      <div>Template: <span className="text-white">{launchTemplateMint ? `${launchTemplateMint.slice(0, 6)}...${launchTemplateMint.slice(-4)}` : "-"}</span></div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  onClick={handleImageUpload}
+                  disabled={launchLoading || !tokenImage || !tokenName || !tokenSymbol}
+                  className="h-8 bg-cyan-500 hover:bg-cyan-600 text-xs text-black"
+                >
+                  <Upload className="w-3 h-3 mr-2" />
+                  Upload to IPFS
+                </Button>
+                {metadataUri && (
+                  <div className="rounded border border-green-500/30 bg-green-500/10 px-2 py-1 text-[9px] text-green-300">
+                    Metadata: <span className="font-mono break-all">{metadataUri}</span>
+                  </div>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="bg-neutral-900 border-cyan-500/30">
+            <CardHeader className="py-1 px-2">
+              <CardTitle className="text-xs font-medium text-white tracking-wider flex items-center gap-2 border-b border-slate-800 pb-2">
+                <span className="flex h-4 w-4 items-center justify-center rounded bg-cyan-500/20 text-[9px] text-cyan-300">
+                  2
+                </span>
+                SELECT DEV WALLET
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-2 px-2 pb-2">
+              <div className="space-y-1">
+                <Label className="text-[10px] text-black">Dev address</Label>
+                <Select
+                  value={launchDevWallet}
+                  onValueChange={(value) => {
+                    setLaunchDevWallet(value)
+                    setBuyerWallets((prev) => prev.filter((wallet) => wallet.publicKey !== value))
+                  }}
+                >
                   <SelectTrigger className="h-8 bg-background border-border text-xs">
-                    <SelectValue />
+                    <SelectValue placeholder="Pick dev wallet" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="default">Default</SelectItem>
-                    <SelectItem value="fast">Fast</SelectItem>
-                    <SelectItem value="turbo">Turbo</SelectItem>
-                    <SelectItem value="custom">Custom</SelectItem>
+                    {activeWallets.map((wallet) => (
+                      <SelectItem key={wallet.publicKey} value={wallet.publicKey}>
+                        Balance: {wallet.solBalance.toFixed(4)} SOL - {wallet.publicKey.slice(0, 6)}...{wallet.publicKey.slice(-4)}
+                      </SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </div>
-              <div className="space-y-1">
-                <Label className="text-[11px] text-neutral-500">Priority Fee (SOL/tx)</Label>
-                <Input
-                  type="number"
-                  step="0.000001"
-                  className="h-7 bg-background border-border text-xs"
-                  value={priorityFeeSol}
-                  onChange={(e) => {
-                    setPriorityFeePreset("custom")
-                    setPriorityFeeSol(e.target.value)
-                  }}
-                  disabled={priorityFeePreset !== "custom"}
-                />
+              <div className="text-[10px] text-slate-500">
+                {launchDevWallet
+                  ? `Selected: ${launchDevWallet.slice(0, 8)}...${launchDevWallet.slice(-4)}`
+                  : "No dev wallet selected"}
               </div>
-            </div>
+            </CardContent>
+          </Card>
 
-            <div className="grid grid-cols-2 gap-1">
-              <div className="flex items-center justify-between rounded bg-neutral-900 px-2 py-1">
-                <span className="text-[11px] text-neutral-400">Auto Jito Tip</span>
-                <Switch checked={autoJitoTip} onCheckedChange={setAutoJitoTip} />
-              </div>
-              <div className="space-y-1">
-                <Label className="text-[11px] text-neutral-500">Jito Tip (SOL)</Label>
-                <Input
-                  type="number"
-                  step="0.000001"
-                  className="h-7 bg-background border-border text-xs"
-                  value={jitoTipSol}
-                  onChange={(e) => setJitoTipSol(e.target.value)}
-                  disabled={autoJitoTip}
-                />
-              </div>
-            </div>
-
-            <div className="flex items-center justify-between text-[11px] text-neutral-500">
-              <span>Market Tip (p75): {jitoTipFloor ? `${jitoTipFloor.sol.p75.toFixed(6)} SOL` : "..."}</span>
-              <span className={jitoTipStatus.className}>Status: {jitoTipStatus.label}</span>
-            </div>
-
-            <div className="grid grid-cols-2 gap-1">
-              <Button
-                onClick={createBuyBundle}
-                disabled={!selectedToken || activeWallets.length === 0}
-                className="h-7 bg-blue-500 hover:bg-blue-600 text-xs"
-              >
-                <Package className="w-3 h-3 mr-1" />
-                Buy ({activeWallets.length})
-              </Button>
-              <Button
-                onClick={createSellBundle}
-                disabled={!selectedToken || activeWalletsWithTokens.length === 0}
-                className="h-7 bg-orange-500 hover:bg-orange-600 text-xs"
-              >
-                <Send className="w-3 h-3 mr-1" />
-                Sell ({activeWalletsWithTokens.length})
-              </Button>
-            </div>
-            <div className="text-[8px] text-slate-500 text-center">
-              Bundle for warming up liquidity • Use Rugpull for final exit
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Rugpull Section */}
-      <div className="grid grid-cols-1 xl:grid-cols-12 gap-1">
-        <Card className="xl:col-span-12 bg-red-950/20 border-red-500/50">
-          <CardHeader className="py-1 px-2">
-              <CardTitle className="text-xs font-medium text-white tracking-wider flex items-center gap-2 border-b border-slate-800 pb-2">
-              <Flame className="w-4 h-4 text-red-400" />
-              RUGPULL
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-1 px-2 pb-2">
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-1">
-              <div className="space-y-1">
-                <Label className="text-[10px] text-slate-600">Slippage %</Label>
-                <Input
-                  type="number"
-                  placeholder="20"
-                  value={rugpullSlippage}
-                  onChange={(e) => setRugpullSlippage(e.target.value)}
-                  className="h-7 bg-background border-border text-xs"
-                />
-              </div>
-              <div className="space-y-1">
-                <div className="flex items-center justify-between">
-                  <Label className="text-[10px] text-slate-600">Dev Wallet</Label>
-                  <div className="flex items-center gap-1 text-[10px] text-slate-500">
-                    <span>Connected</span>
-                    <Switch checked={useConnectedDev} onCheckedChange={setUseConnectedDev} />
-                  </div>
+          <Card className="bg-neutral-900 border-cyan-500/30">
+            <CardHeader className="py-1 px-2">
+              <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+                <CardTitle className="text-xs font-medium text-white tracking-wider flex items-center gap-2">
+                  <span className="flex h-4 w-4 items-center justify-center rounded bg-cyan-500/20 text-[9px] text-cyan-300">
+                    3
+                  </span>
+                  ADD BUYER WALLETS
+                </CardTitle>
+                <div className="text-[10px] text-slate-500">
+                  {buyerWallets.length}/{Math.max(0, MAX_LAUNCH_WALLETS - 1)} buyers
                 </div>
-                <Input
-                  type="password"
-                  placeholder="dev wallet private key"
-                  value={devKey ? "*".repeat(Math.min(devKey.length, 20)) + (devKey.length > 20 ? "..." : "") : ""}
-                  onChange={(e) => setDevKey(e.target.value)}
-                  disabled={useConnectedDev}
-                  className="h-7 bg-background border-border text-xs"
-                />
               </div>
-              <div className="space-y-1">
-                <div className="flex items-center justify-between">
-                  <Label className="text-[10px] text-slate-600">Funder Wallet</Label>
-                  <div className="flex items-center gap-1 text-[10px] text-slate-500">
-                    <span>Connected</span>
-                    <Switch checked={useConnectedFunder} onCheckedChange={setUseConnectedFunder} />
-                  </div>
+            </CardHeader>
+            <CardContent className="space-y-2 px-2 pb-2">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                <div className="space-y-1">
+                  <Label className="text-[10px] text-black">Total buy amount (SOL)</Label>
+                  <Input
+                    type="number"
+                    step="0.0001"
+                    value={totalBuyAmount}
+                    onChange={(e) => setTotalBuyAmount(e.target.value)}
+                    className="h-8 bg-background border-border text-xs"
+                  />
                 </div>
-                <Input
-                  type="password"
-                  placeholder="funder wallet private key"
-                  value={funderKey ? "*".repeat(Math.min(funderKey.length, 20)) + (funderKey.length > 20 ? "..." : "") : ""}
-                  onChange={(e) => setFunderKey(e.target.value)}
-                  disabled={useConnectedFunder}
-                  className="h-7 bg-background border-border text-xs"
-                />
-              </div>
-            </div>
-            <div className="text-[9px] text-slate-500">
-              Gas funder: {useConnectedFunder
-                ? connected
-                  ? `${publicKey?.toBase58().slice(0, 8)}...${publicKey?.toBase58().slice(-4)}`
-                  : "Not connected"
-                : funderKey
-                  ? "Manual key"
-                  : "Not set"}
-            </div>
-            <div className="grid grid-cols-2 gap-1">
-              <Button
-                onClick={rugpullDevWallet}
-                disabled={!selectedToken || (useConnectedDev ? !publicKey : !devKey.trim())}
-                className="h-7 bg-red-600 hover:bg-red-700 text-xs"
-              >
-                <Flame className="w-3 h-3 mr-1" />
-                Rugpull Dev
-              </Button>
-              <Button
-                onClick={rugpullAllWallets}
-                disabled={!selectedToken || activeWalletsWithTokens.length === 0}
-                className="h-7 bg-red-600 hover:bg-red-700 text-xs"
-              >
-                <Flame className="w-3 h-3 mr-1" />
-                Rugpull All ({activeWalletsWithTokens.length})
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-
-      <div className="grid grid-cols-1 xl:grid-cols-3 gap-1">
-        <Card className="bg-neutral-900 border-neutral-700">
-          <CardHeader className="py-1 px-2">
-            <div className="flex items-center justify-between">
-            <CardTitle className="text-xs font-medium text-white tracking-wider flex items-center gap-2 border-b border-slate-800 pb-2">
-                <Wallet className="w-4 h-4" />
-                WALLETS
-              </CardTitle>
-              <div className="flex items-center gap-1">
-                <Input
-                  type="number"
-                  placeholder="5"
-                  value={walletCount}
-                  onChange={(e) => setWalletCount(e.target.value)}
-                  className="h-6 w-10 bg-background border-border text-xs"
-                />
-                <Button size="sm" onClick={generateWallets} className="h-6 px-2 bg-purple-500 hover:bg-purple-600 text-xs">
-                  <Plus className="w-3 h-3" />
-                </Button>
-                <Button size="sm" variant="outline" onClick={clearWallets} className="h-6 px-2 border-neutral-700">
-                  <Trash2 className="w-3 h-3" />
-                </Button>
-                <TooltipProvider>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button
-                        size="sm"
-                        onClick={distributeGas}
-                        disabled={!connected || activeWallets.length === 0 || gasLoading}
-                        className="h-6 px-2 bg-blue-600 hover:bg-blue-700 text-xs disabled:opacity-50"
-                      >
-                        {gasLoading ? (
-                          <div className="w-3 h-3 border border-white border-t-transparent rounded-full animate-spin" />
-                        ) : (
-                          <Zap className="w-3 h-3" />
-                        )}
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent>
-                      {connected
-                        ? `Distribute 0.002 SOL to ${activeWallets.length} wallets from connected wallet`
-                        : "Connect wallet to distribute gas"
-                      }
-                    </TooltipContent>
-                  </Tooltip>
-                </TooltipProvider>
-                <TooltipProvider>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button
-                        size="sm"
-                        onClick={createATAs}
-                        disabled={!selectedToken || activeWallets.length === 0 || activeWallets.some(w => w.solBalance < 0.001) || ataLoading}
-                        className="h-6 px-2 bg-purple-600 hover:bg-purple-700 text-xs disabled:opacity-50"
-                      >
-                        {ataLoading ? (
-                          <div className="w-3 h-3 border border-white border-t-transparent rounded-full animate-spin" />
-                        ) : (
-                          <Package className="w-3 h-3" />
-                        )}
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent>
-                      {activeWallets.some(w => w.solBalance < 0.001)
-                        ? "Distribute Gas first - wallets need SOL for ATA creation"
-                        : "Create Associated Token Accounts for selected wallets"
-                      }
-                    </TooltipContent>
-                  </Tooltip>
-                </TooltipProvider>
-              </div>
-            </div>
-            <div className="text-[10px] text-slate-400">Selected: {selectedWalletCount}/{activeWallets.length} active</div>
-          </CardHeader>
-          <CardContent className="px-2 pb-2">
-            <div className="grid grid-cols-2 gap-2 mb-2">
-              <div className="space-y-1">
-                <Label className="text-[10px] text-slate-400">Manual Buy (SOL)</Label>
-                <Input
-                  type="number"
-                  step="0.0001"
-                  value={manualBuyAmount}
-                  onChange={(e) => {
-                    setManualBuyAmount(e.target.value)
-                    setManualTradeDirty(true)
-                  }}
-                  className="h-6 bg-background border-border text-xs"
-                />
-              </div>
-              <div className="space-y-1">
-                <Label className="text-[10px] text-slate-400">Manual Sell (%)</Label>
-                <Input
-                  type="number"
-                  min="1"
-                  max="100"
-                  step="1"
-                  value={manualSellPercent}
-                  onChange={(e) => {
-                    setManualSellPercent(e.target.value)
-                    setManualTradeDirty(true)
-                  }}
-                  className="h-6 bg-background border-border text-xs"
-                />
-              </div>
-            </div>
-            <div className="flex justify-end mb-2">
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={saveManualTradeSettings}
-                disabled={!manualTradeDirty}
-                className="h-6 px-2 border-neutral-700 text-[10px]"
-              >
-                Save
-              </Button>
-            </div>
-            {/* Select All checkbox */}
-            <div className="flex items-center gap-2 mb-2 pb-1 border-b border-slate-800">
-              <input
-                type="checkbox"
-                className="h-3 w-3 accent-cyan-500"
-                checked={selectedWalletCount === activeWallets.length && activeWallets.length > 0}
-                onChange={(e) => {
-                  if (e.target.checked) {
-                    selectAllWallets()
-                  } else {
-                    clearSelectedWallets()
-                  }
-                }}
-              />
-              <span className="text-[10px] text-slate-400">Select All ({selectedWalletCount}/{activeWallets.length})</span>
-            </div>
-            <div className="space-y-1 max-h-48 overflow-y-auto">
-              {bundlerWallets.length === 0 ? (
-                <div className="text-slate-400 text-xs p-2 text-center">No wallets loaded</div>
-              ) : (
-                bundlerWallets.map((wallet) => (
-                  <div
-                    key={wallet.publicKey}
-                    className={`p-2 rounded border text-[11px] flex items-center justify-between ${
-                      wallet.isActive ? "border-cyan-500/30 bg-cyan-500/5" : "border-neutral-700 bg-neutral-800"
-                    }`}
+                <div className="flex flex-wrap gap-2 md:col-span-2 md:items-end">
+                  <Button
+                    size="sm"
+                    onClick={handleAddBuyerWallet}
+                    className="h-8 px-2 text-[10px] bg-blue-600 hover:bg-blue-700"
                   >
-                    <div className="flex items-center gap-2 min-w-0">
-                      <input
-                        type="checkbox"
-                        className="h-3 w-3 accent-cyan-500 disabled:opacity-50"
-                        checked={selectedWallets.has(wallet.publicKey)}
-                        onChange={() => toggleWalletSelection(wallet.publicKey)}
-                        disabled={!wallet.isActive}
-                      />
-                      <div className="min-w-0">
-                        <div className="text-neutral-400 font-mono truncate">
-                          {wallet.publicKey.slice(0, 8)}...{wallet.publicKey.slice(-4)}
+                    Add wallet
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => handleRemoveBuyerWallet()}
+                    className="h-8 px-2 text-[10px] border-neutral-700"
+                  >
+                    Delete wallet
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={handleEqualBuy}
+                    className="h-8 px-2 text-[10px] border-neutral-700"
+                  >
+                    Equal buy
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={handleRandomBuy}
+                    className="h-8 px-2 text-[10px] border-neutral-700"
+                  >
+                    Random buy
+                  </Button>
+                </div>
+              </div>
+
+              <div className="space-y-1">
+                {buyerWallets.length === 0 ? (
+                  <div className="text-[10px] text-slate-500">No buyer wallets selected</div>
+                ) : (
+                  buyerWallets.map((wallet, index) => {
+                    const usedKeys = new Set(buyerWallets.map((entry) => entry.publicKey))
+                    const options = activeWallets.filter((option) => {
+                      if (option.publicKey === launchDevWallet) return false
+                      if (option.publicKey === wallet.publicKey) return true
+                      return !usedKeys.has(option.publicKey)
+                    })
+                    return (
+                      <div key={`${wallet.publicKey}-${index}`} className="grid grid-cols-12 gap-2 items-center rounded border border-neutral-800 bg-neutral-950/40 p-2">
+                        <div className="col-span-1 text-[10px] text-slate-400">{index + 1}</div>
+                        <div className="col-span-7">
+                          <Select
+                            value={wallet.publicKey}
+                            onValueChange={(value) => {
+                              setBuyerWallets((prev) =>
+                                prev.map((entry, idx) =>
+                                  idx === index ? { ...entry, publicKey: value } : entry
+                                )
+                              )
+                            }}
+                          >
+                            <SelectTrigger className="h-8 bg-background border-border text-xs">
+                              <SelectValue placeholder="Select wallet" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {options.map((option) => (
+                                <SelectItem key={option.publicKey} value={option.publicKey}>
+                                  {option.label ? `${option.label} - ` : ""}
+                                  {option.publicKey.slice(0, 6)}...{option.publicKey.slice(-4)} ({option.solBalance.toFixed(3)} SOL)
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
                         </div>
-                        <div className="flex gap-2 text-[10px] text-slate-500">
-                          <span className="text-emerald-300/70">SOL: {wallet.solBalance.toFixed(3)}</span>
-                          <span className="text-cyan-300/70">Tokens: {wallet.tokenBalance.toFixed(2)}</span>
-                          <span className={wallet.ataExists ? "text-green-300/70" : "text-red-300/70"}>
-                            ATA: {wallet.ataExists ? "✓" : "✗"}
-                          </span>
+                        <div className="col-span-3">
+                          <Input
+                            type="number"
+                            step="0.0001"
+                            value={wallet.amount}
+                            onChange={(e) => {
+                              setBuyerWallets((prev) =>
+                                prev.map((entry, idx) =>
+                                  idx === index ? { ...entry, amount: e.target.value } : entry
+                                )
+                              )
+                            }}
+                            className="h-8 bg-background border-border text-xs"
+                          />
+                        </div>
+                        <div className="col-span-1 flex justify-end">
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            onClick={() => handleRemoveBuyerWallet(index)}
+                            className="h-8 w-8 text-red-400 hover:text-red-300"
+                          >
+                            <Trash2 className="h-3 w-3" />
+                          </Button>
                         </div>
                       </div>
-                    </div>
-                    <Badge className={wallet.isActive ? "bg-green-500/20 text-green-400" : "bg-neutral-600"}>
-                      {wallet.isActive ? "Active" : "Inactive"}
-                    </Badge>
-                  </div>
-                ))
-              )}
-            </div>
-          </CardContent>
-        </Card>
+                    )
+                  })
+                )}
+              </div>
+            </CardContent>
+          </Card>
 
-        <Card className="bg-neutral-900 border-neutral-700">
-          <CardHeader className="py-1 px-2">
-            <CardTitle className="text-xs font-medium text-white tracking-wider flex items-center gap-2 border-b border-slate-800 pb-2">
-              <Users className="w-4 h-4" />
-              HOLDERS
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="px-2 pb-2">
-            <div className="space-y-1 max-h-48 overflow-y-auto">
-              {holdersLoading ? (
-                <div className="text-slate-400 text-xs p-2 text-center">Loading holders...</div>
-              ) : holderRows.length === 0 ? (
-                <div className="text-slate-400 text-xs p-2 text-center">No holders yet</div>
-              ) : (
-                holderRows.map((wallet) => (
-                  <div key={wallet.address} className="flex items-center justify-between text-[11px]">
-                    <span className="font-mono text-neutral-400">
-                      {wallet.address.slice(0, 6)}...{wallet.address.slice(-4)}
-                    </span>
-                    <span className="text-white">
-                      {wallet.balance.toFixed(2)} ({wallet.percentage.toFixed(2)}%)
-                    </span>
-                  </div>
-                ))
-              )}
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="bg-neutral-900 border-neutral-700">
-          <CardHeader className="py-1 px-2">
-            <CardTitle className="text-xs font-medium text-white tracking-wider flex items-center gap-2 border-b border-slate-800 pb-2">
-              <Activity className="w-4 h-4" />
-              LIVE TRADES
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="px-2 pb-2">
-            <div className="space-y-1 max-h-48 overflow-y-auto">
-              {trades.length === 0 ? (
-                <div className="text-slate-400 text-xs p-2 text-center">No trades yet</div>
-              ) : (
-                trades.slice(0, 6).map((trade) => (
-                  <div key={trade.id} className="flex items-center justify-between text-[11px]">
-                    <div className="flex items-center gap-2">
-                      <Badge className={trade.type === "buy" ? "bg-green-500/20 text-green-400" : "bg-red-500/20 text-red-400"}>
-                        {trade.type.toUpperCase()}
-                      </Badge>
-                      <span className="font-mono text-neutral-400">
-                        {trade.mintAddress.slice(0, 6)}...{trade.mintAddress.slice(-4)}
-                      </span>
-                    </div>
-                    <div className="text-right">
-                      <div className="text-white">{trade.solAmount.toFixed(3)} SOL</div>
-                      <div className="text-[10px] text-neutral-500">{formatTimeAgo(new Date(trade.timestamp).toISOString())}</div>
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* System Logs */}
-      <div className="grid grid-cols-1 xl:grid-cols-1 gap-1">
-        <Card className="bg-neutral-900 border-neutral-700">
-          <CardHeader className="py-1 px-2">
-            <div className="flex items-center justify-between border-b border-slate-800 pb-2">
-              <CardTitle className="text-xs font-medium text-white tracking-wider flex items-center gap-2">
-                <AlertTriangle className="w-4 h-4 text-yellow-400" />
-                SYSTEM LOGS
+          <Card className="bg-neutral-900 border-cyan-500/30">
+            <CardHeader className="py-1 px-2">
+              <CardTitle className="text-xs font-medium text-white tracking-wider flex items-center gap-2 border-b border-slate-800 pb-2">
+                <span className="flex h-4 w-4 items-center justify-center rounded bg-cyan-500/20 text-[9px] text-cyan-300">
+                  4
+                </span>
+                AUTO FUNDING + ATA
               </CardTitle>
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={clearSystemLogs}
-                className="h-6 px-2 text-[10px] text-slate-400 hover:text-slate-200"
-              >
-                <Trash2 className="w-3 h-3" />
-              </Button>
-            </div>
-          </CardHeader>
-          <CardContent className="px-2 pb-2">
-            <div className="space-y-1 max-h-32 overflow-y-auto bg-neutral-950 rounded p-2">
-              {systemLogs.length === 0 && (!volumeBotStatus || volumeBotStatus.recentLogs?.length === 0) ? (
-                <div className="text-slate-400 text-xs">No logs yet</div>
-              ) : (
-                <>
-                  {/* System logs */}
-                  {systemLogs.slice(0, 5).map((log, index) => (
-                    <div key={`system-${index}`} className="text-[9px] font-mono text-slate-300">
-                      {log}
-                    </div>
-                  ))}
-                  {/* Volume bot logs */}
-                  {volumeBotStatus?.recentLogs?.slice(0, 5).map((log: any, index: number) => (
-                    <div key={`bot-${index}`} className="text-[9px] font-mono text-slate-300">
-                      [{new Date(log.createdAt).toLocaleTimeString()}] {log.type.toUpperCase()}: {log.message}
-                    </div>
-                  ))}
-                </>
+            </CardHeader>
+            <CardContent className="space-y-2 px-2 pb-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="flex items-center gap-2 rounded border border-neutral-800 bg-neutral-950/40 px-2 py-1 text-[10px] text-slate-400">
+                  <span>Auto fund</span>
+                  <Switch checked={autoFundEnabled} onCheckedChange={setAutoFundEnabled} />
+                </div>
+                <div className="flex items-center gap-2 rounded border border-neutral-800 bg-neutral-950/40 px-2 py-1 text-[10px] text-slate-400">
+                  <span>Auto ATA</span>
+                  <Switch checked={autoCreateAtaEnabled} onCheckedChange={setAutoCreateAtaEnabled} />
+                </div>
+                <div className="flex items-center gap-2 rounded border border-neutral-800 bg-neutral-950/40 px-2 py-1 text-[10px] text-slate-400">
+                  <span>Use connected funder</span>
+                  <Switch checked={useConnectedFunder} onCheckedChange={setUseConnectedFunder} />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                <div className="space-y-1">
+                  <Label className="text-[10px] text-black">Amount per wallet (SOL)</Label>
+                  <Input
+                    type="number"
+                    step="0.0001"
+                    value={funderAmountPerWallet}
+                    onChange={(e) => setFunderAmountPerWallet(e.target.value)}
+                    className="h-8 bg-background border-border text-xs"
+                    disabled={!autoFundEnabled}
+                  />
+                </div>
+                <div className="space-y-1 md:col-span-2">
+                  <Label className="text-[10px] text-black">Funder private key</Label>
+                  <Input
+                    type="password"
+                    placeholder="funder wallet private key"
+                    value={funderKey}
+                    onChange={(e) => setFunderKey(e.target.value)}
+                    className="h-8 bg-background border-border text-xs"
+                    disabled={!autoFundEnabled || useConnectedFunder}
+                  />
+                </div>
+              </div>
+              <div className="text-[10px] text-slate-500">
+                Auto-fund runs before launch. Auto-ATA runs after mint is created.
+                {useConnectedFunder ? " Uses connected wallet for funding." : ""}
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="bg-neutral-900 border-cyan-500/30">
+            <CardHeader className="py-1 px-2">
+              <CardTitle className="text-xs font-medium text-white tracking-wider flex items-center gap-2 border-b border-slate-800 pb-2">
+                <span className="flex h-4 w-4 items-center justify-center rounded bg-cyan-500/20 text-[9px] text-cyan-300">
+                  5
+                </span>
+                LAUNCH SETTINGS
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-2 px-2 pb-2">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                <div className="space-y-1">
+                  <Label className="text-[10px] text-black">Dev buy (SOL)</Label>
+                  <Input
+                    type="number"
+                    step="0.001"
+                    value={devBuyAmount}
+                    onChange={(e) => setDevBuyAmount(e.target.value)}
+                    className="h-8 bg-background border-border text-xs"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-[10px] text-black">Default buyer (SOL)</Label>
+                  <Input
+                    type="number"
+                    step="0.001"
+                    value={buyAmountPerWallet}
+                    onChange={(e) => setBuyAmountPerWallet(e.target.value)}
+                    className="h-8 bg-background border-border text-xs"
+                  />
+                </div>
+              </div>
+
+              <div className="rounded bg-neutral-800 p-2 text-[11px]">
+                <div className="flex justify-between">
+                  <span className="text-neutral-400">Wallets</span>
+                  <span className="text-white font-mono">{(launchDevWallet ? 1 : 0) + buyerWallets.length}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-neutral-400">Dev buy</span>
+                  <span className="text-white font-mono">{parseSol(devBuyAmount).toFixed(4)} SOL</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-neutral-400">Buyer total</span>
+                  <span className="text-cyan-300 font-mono">
+                    {buyerWallets.reduce((sum, wallet) => sum + parseSol(wallet.amount), 0).toFixed(4)} SOL
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-neutral-400">Jito tip</span>
+                  <span className="text-white font-mono">{parseSol(jitoTipSol).toFixed(6)} SOL</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-neutral-400">Priority fee</span>
+                  <span className="text-white font-mono">{parseSol(priorityFeeSol).toFixed(6)} SOL</span>
+                </div>
+                <div className="flex justify-between border-t border-neutral-700 pt-1">
+                  <span className="text-neutral-400">Estimated total</span>
+                  <span className="text-green-400 font-mono">
+                    {(
+                      parseSol(devBuyAmount) +
+                      buyerWallets.reduce((sum, wallet) => sum + parseSol(wallet.amount), 0) +
+                      parseSol(jitoTipSol) +
+                      ((launchDevWallet ? 1 : 0) + buyerWallets.length) * parseSol(priorityFeeSol)
+                    ).toFixed(4)} SOL
+                  </span>
+                </div>
+              </div>
+
+              {networkBlocked && (
+                <Alert className="bg-red-950/30 border-red-500/30 text-red-200">
+                  <AlertDescription className="text-[10px]">
+                    pump.fun unavailable or rpc unhealthy
+                  </AlertDescription>
+                </Alert>
               )}
-            </div>
-          </CardContent>
-        </Card>
+
+              <Button
+                onClick={handleLaunch}
+                disabled={launchLoading || !metadataUri || !launchDevWallet || buyerWallets.length === 0 || !isMainnet || networkBlocked}
+                className="h-8 w-full bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600 text-xs text-white font-bold"
+              >
+                <Rocket className="w-3 h-3 mr-2" />
+                {launchLoading ? "LAUNCHING..." : "LAUNCH TOKEN + BUNDLE"}
+              </Button>
+              <p className="text-[10px] text-neutral-500 text-center">
+                creates token + {buyerWallets.length} bundled buys via jito
+              </p>
+            </CardContent>
+          </Card>
+        </div>
+        )}
       </div>
 
       <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
@@ -2136,3 +2833,6 @@ export default function DashboardPage() {
     </div>
   )
 }
+
+
+

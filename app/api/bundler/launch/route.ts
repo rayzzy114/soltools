@@ -69,12 +69,17 @@ export async function POST(request: NextRequest) {
 
     // persist token + bundle into DB (launch = create token + dev buy + bundled buys)
     const mintAddress = result.mintAddress as string
+    const imageUrl = tokenMetadata.imageUrl || ""
     const token = await prisma.token.upsert({
       where: { mintAddress },
       update: {
         name: tokenMetadata.name,
         symbol: tokenMetadata.symbol,
         description: tokenMetadata.description || "",
+        ...(tokenMetadata.website !== undefined && { website: tokenMetadata.website || null }),
+        ...(tokenMetadata.twitter !== undefined && { twitter: tokenMetadata.twitter || null }),
+        ...(tokenMetadata.telegram !== undefined && { telegram: tokenMetadata.telegram || null }),
+        ...(tokenMetadata.imageUrl !== undefined && { imageUrl }),
         creatorWallet: (wallets as BundlerWallet[])[0]?.publicKey || "",
       },
       create: {
@@ -84,7 +89,10 @@ export async function POST(request: NextRequest) {
         decimals: 6,
         totalSupply: "0",
         description: tokenMetadata.description || "",
-        imageUrl: "",
+        imageUrl: imageUrl || "",
+        website: tokenMetadata.website || null,
+        twitter: tokenMetadata.twitter || null,
+        telegram: tokenMetadata.telegram || null,
         creatorWallet: (wallets as BundlerWallet[])[0]?.publicKey || "",
       },
       select: { id: true },

@@ -35,15 +35,38 @@ export const JITO_TIP_ACCOUNTS = [
   "3AVi9Tg9Uo68tJfuvoKvqKNWKkC5wPdSSdeBnizKZ6jT",
 ]
 
-const AUTH_SECRET =
+const AUTH_UUID =
+  process.env.JITO_AUTH_UUID ||
+  process.env.NEXT_PUBLIC_JITO_AUTH_UUID
+
+const AUTH_KEYPAIR =
   process.env.JITO_AUTH_KEYPAIR ||
   process.env.NEXT_PUBLIC_JITO_AUTH_KEYPAIR ||
-  process.env.JITO_AUTH_SECRET ||
-  // approved auth key for 5 RPC limit - this is a token, not a keypair
-  "8nobkWiDUsDF6rdzXWAeieHDZynpeHA4iaBKBsSkRRz5"
+  process.env.JITO_AUTH_SECRET
 
-// For gRPC, we might need to use the token differently
-const JITO_AUTH_TOKEN = AUTH_SECRET
+// approved auth key for 5 RPC limit - this is a token, not a keypair
+const FALLBACK_AUTH_TOKEN = "8nobkWiDUsDF6rdzXWAeieHDZynpeHA4iaBKBsSkRRz5"
+
+// For HTTP JSON-RPC, use UUID when available; otherwise fallback to keypair token or legacy token.
+const JITO_AUTH_TOKEN = AUTH_UUID || AUTH_KEYPAIR || FALLBACK_AUTH_TOKEN
+const JITO_UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+function isUuid(value: string | undefined): boolean {
+  if (!value) return false
+  return JITO_UUID_REGEX.test(value.trim())
+}
+
+function withUuidParam(url: string, uuid: string): string {
+  try {
+    const u = new URL(url)
+    if (!u.searchParams.has("uuid")) {
+      u.searchParams.set("uuid", uuid)
+    }
+    return u.toString()
+  } catch {
+    return url
+  }
+}
 
 // default config
 const MIN_JITO_TIP_LAMPORTS = 1000 // minimum tip per jito docs
@@ -118,14 +141,18 @@ async function jsonRpcPost<T>(url: string, payload: any): Promise<JsonRpcRespons
 
   const headers: Record<string, string> = { "Content-Type": "application/json" }
 
-  // Add authorization header if we have an auth token
+  let requestUrl = url
   if (JITO_AUTH_TOKEN && JITO_AUTH_TOKEN.length > 10) {
-    headers["Authorization"] = `Bearer ${JITO_AUTH_TOKEN}`
-    // or maybe: headers["X-Jito-Auth"] = JITO_AUTH_TOKEN
+    if (isUuid(JITO_AUTH_TOKEN)) {
+      headers["x-jito-auth"] = JITO_AUTH_TOKEN
+      requestUrl = withUuidParam(url, JITO_AUTH_TOKEN)
+    } else {
+      headers["Authorization"] = `Bearer ${JITO_AUTH_TOKEN}`
+    }
   }
 
   try {
-    const res = await fetch(url, {
+    const res = await fetch(requestUrl, {
       method: "POST",
       headers,
       body: JSON.stringify(payload),
@@ -317,7 +344,7 @@ function getBlockEngineEndpoint(region: JitoRegion = DEFAULT_REGION): string {
 }
 
 function parseAuthKeypair(): Keypair {
-  const raw = AUTH_SECRET
+  const raw = AUTH_KEYPAIR
   if (raw) {
     const value = raw.trim()
     try {
@@ -382,10 +409,10 @@ function getSearcher(region: JitoRegion) {
 
   const endpoint = getBlockEngineEndpoint(region)
 
-  // Try to use the auth token as a keypair first, if it fails, use ephemeral
+  // Try to use the auth keypair first, if it fails, use ephemeral
   let keypair
   try {
-    const decoded = bs58.decode(JITO_AUTH_TOKEN)
+    const decoded = AUTH_KEYPAIR ? bs58.decode(AUTH_KEYPAIR) : new Uint8Array()
     if (decoded.length === 64) {
       keypair = Keypair.fromSecretKey(decoded)
     } else {

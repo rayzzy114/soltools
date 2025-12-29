@@ -80,6 +80,7 @@ export default function TokenLauncherPage() {
   const [imageFile, setImageFile] = useState<File | null>(null)
   const [imagePreview, setImagePreview] = useState<string>("")
   const [metadataUri, setMetadataUri] = useState<string>("")
+  const [metadataImageUrl, setMetadataImageUrl] = useState<string>("")
   const [lastCreatedMint, setLastCreatedMint] = useState<string>("")
   const [customKeypair, setCustomKeypair] = useState<string>("")
   const [cloneAddress, setCloneAddress] = useState("")
@@ -114,61 +115,31 @@ export default function TokenLauncherPage() {
   }
 
   const handleClone = async () => {
-    // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/e23f7788-0527-4cc5-ae49-c1d5738f268a',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app/token-launcher/page.tsx:handleClone',message:'handleClone entry',data:{cloneAddress},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H1'})}).catch(()=>{});
-    // #endregion
-    const { primary, alt } = normalizeCloneAddress(cloneAddress)
-    // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/e23f7788-0527-4cc5-ae49-c1d5738f268a',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app/token-launcher/page.tsx:handleClone',message:'normalizeCloneAddress result',data:{cloneAddress,primary,alt},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H1'})}).catch(()=>{});
-    // #endregion
-    const normalized = primary
-    if (!normalized) {
-      // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/e23f7788-0527-4cc5-ae49-c1d5738f268a',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app/token-launcher/page.tsx:handleClone',message:'invalid address',data:{cloneAddress,primary,alt},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H1'})}).catch(()=>{});
-      // #endregion
+    const { primary } = normalizeCloneAddress(cloneAddress)
+    if (!primary) {
       toast.error("enter valid token address")
       return
     }
-    if (network !== "mainnet-beta") {
-      toast.message("cloning uses mainnet metadata", {
-        description: "reading on-chain mainnet metadata even on devnet",
-      })
-    }
     setCloning(true)
-
     try {
-      // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/e23f7788-0527-4cc5-ae49-c1d5738f268a',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app/token-launcher/page.tsx:handleClone',message:'fetch start',data:{normalized,url:`/api/clone?mint=${normalized}`},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H6'})}).catch(()=>{});
-      // #endregion
-      const res = await fetch(`/api/clone?mint=${normalized}`)
-      // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/e23f7788-0527-4cc5-ae49-c1d5738f268a',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app/token-launcher/page.tsx:handleClone',message:'fetch response',data:{normalized,ok:res.ok,status:res.status,statusText:res.statusText},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H6'})}).catch(()=>{});
-      // #endregion
-      const body = await res.json().catch(() => ({}))
-      // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/e23f7788-0527-4cc5-ae49-c1d5738f268a',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app/token-launcher/page.tsx:handleClone',message:'response body parsed',data:{normalized,ok:res.ok,hasError:!!body.error,hasName:!!body.name,hasImage:!!body.image},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H6'})}).catch(()=>{});
-      // #endregion
-      if (!res.ok) {
-        // #region agent log
-        fetch('http://127.0.0.1:7242/ingest/e23f7788-0527-4cc5-ae49-c1d5738f268a',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app/token-launcher/page.tsx:handleClone',message:'response not ok',data:{normalized,status:res.status,error:body?.error,attempts:body?.attempts},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H6'})}).catch(()=>{});
-        // #endregion
-        throw new Error(body?.error || `clone failed (${res.status})`)
+      const token = tokens.find((entry) => entry.mintAddress === primary)
+      if (!token) {
+        toast.error("token not found in database")
+        return
       }
-      // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/e23f7788-0527-4cc5-ae49-c1d5738f268a',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app/token-launcher/page.tsx:handleClone',message:'setting form values',data:{normalized,name:body.name,symbol:body.symbol,hasImage:!!body.image},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H6'})}).catch(()=>{});
-      // #endregion
-      setTokenName(body.name || "")
-      setTokenSymbol(body.symbol || "")
-      setDescription(body.description || "")
-      setWebsite(body.website || "")
-      setTwitter(body.twitter || "")
-      setTelegram(body.telegram || "")
-      if (body.image) setImagePreview(body.image)
-      toast.success(`cloned metadata from chain`)
+      setTokenName(token.name || "")
+      setTokenSymbol(token.symbol || "")
+      setDescription(token.description || "")
+      setWebsite(token.website || "")
+      setTwitter(token.twitter || "")
+      setTelegram(token.telegram || "")
+      if (token.imageUrl) {
+        setImagePreview(token.imageUrl)
+        setMetadataImageUrl(token.imageUrl)
+      }
+      setMetadataUri("")
+      toast.success("cloned metadata from database")
     } catch (error: any) {
-      // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/e23f7788-0527-4cc5-ae49-c1d5738f268a',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app/token-launcher/page.tsx:handleClone',message:'handleClone error',data:{normalized,error:error?.message||String(error),errorStack:error?.stack},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H6'})}).catch(()=>{});
-      // #endregion
       toast.error(error?.message || "Failed to clone metadata")
     } finally {
       setCloning(false)
@@ -185,24 +156,24 @@ export default function TokenLauncherPage() {
 
     setCloning(true)
     try {
-      const res = await fetch(`https://frontend-api.pump.fun/coins/${target}`)
-      if (!res.ok) {
-        throw new Error("token not found on pump.fun")
+      const token = tokens.find((entry) => entry.mintAddress === target)
+      if (!token) {
+        throw new Error("token not found in database")
       }
-      const data = await res.json()
-      
-      setTokenName(data.name || "")
-      setTokenSymbol(data.symbol || "")
-      setDescription(data.description || "")
-      setWebsite(data.website || "")
-      setTwitter(data.twitter || "")
-      setTelegram(data.telegram || "")
-      
-      if (data.image_uri) {
-        setImagePreview(data.image_uri)
+
+      setTokenName(token.name || "")
+      setTokenSymbol(token.symbol || "")
+      setDescription(token.description || "")
+      setWebsite(token.website || "")
+      setTwitter(token.twitter || "")
+      setTelegram(token.telegram || "")
+
+      if (token.imageUrl) {
+        setImagePreview(token.imageUrl)
+        setMetadataImageUrl(token.imageUrl)
       }
-      
-      toast.success(`cloned metadata from ${data.symbol}!`)
+
+      toast.success(`cloned metadata from ${token.symbol || "token"}`)
       setCloneAddress("")
     } catch (error: any) {
       toast.error(error.message || "failed to clone metadata")
@@ -409,6 +380,7 @@ export default function TokenLauncherPage() {
       }
       reader.readAsDataURL(file)
       setMetadataUri("") // reset metadata when image changes
+      setMetadataImageUrl("")
     }
   }
 
@@ -445,6 +417,12 @@ export default function TokenLauncherPage() {
 
       const data = await res.json()
       setMetadataUri(data.metadataUri)
+      const imageUrl =
+        data?.metadata?.image ||
+        data?.metadata?.image_uri ||
+        data?.metadata?.imageUrl ||
+        ""
+      setMetadataImageUrl(imageUrl)
       toast.success("metadata uploaded to IPFS!")
     } catch (error: any) {
       toast.error(error.message || "failed to upload metadata")
@@ -498,6 +476,10 @@ export default function TokenLauncherPage() {
           symbol: tokenSymbol,
           description: description || "",
           metadataUri,
+          website,
+          twitter,
+          telegram,
+          imageUrl: metadataImageUrl || "",
           creatorWallet: publicKey.toBase58(),
           mintKeypair,
         }),
@@ -534,6 +516,7 @@ export default function TokenLauncherPage() {
       setImageFile(null)
       setImagePreview("")
       setMetadataUri("")
+      setMetadataImageUrl("")
       setWebsite("")
       setTwitter("")
       setTelegram("")

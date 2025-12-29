@@ -4,7 +4,7 @@ import bs58 from "bs58"
 
 dotenv.config()
 
-const ENV_KEYS = ["TEST_WALLET_SECRET", "JITO_AUTH_KEYPAIR"] as const
+const ENV_KEYS = ["TEST_WALLET_SECRET", "JITO_AUTH_UUID", "JITO_AUTH_KEYPAIR"] as const
 
 function sanitize(raw: string): string {
   return raw.trim().replace(/^['"]|['"]$/g, "").replace(/\s/g, "")

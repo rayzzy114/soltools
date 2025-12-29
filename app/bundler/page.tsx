@@ -10,7 +10,7 @@ import { Switch } from "@/components/ui/switch"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Textarea } from "@/components/ui/textarea"
+import { LaunchPanel } from "@/components/bundler/LaunchPanel"
 import { toast } from "sonner"
 import { clampNumber } from "@/lib/ui-utils"
 import {
@@ -22,7 +22,6 @@ import {
   Copy,
   AlertTriangle,
   Download,
-  Upload,
   Zap,
   TrendingUp,
   TrendingDown,
@@ -1948,165 +1947,30 @@ export default function BundlerPage() {
 
         {/* LAUNCH TAB */}
         <TabsContent value="launch" className="space-y-4">
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            {/* token metadata */}
-            <Card className="bg-neutral-900 border-neutral-700">
-              <CardHeader className="pb-3">
-                <CardTitle className="text-sm text-neutral-300 flex items-center gap-2">
-                  <Rocket className="w-4 h-4 text-purple-400" />
-                  Token Metadata
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="space-y-2">
-                    <Label className="text-neutral-400 text-xs">Name</Label>
-                    <Input
-                      value={tokenName}
-                      onChange={(e) => setTokenName(e.target.value)}
-                      placeholder="Token Name"
-                      className="bg-neutral-800 border-neutral-700 text-white"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label className="text-neutral-400 text-xs">Symbol</Label>
-                    <Input
-                      value={tokenSymbol}
-                      onChange={(e) => setTokenSymbol(e.target.value)}
-                      placeholder="SYMBOL"
-                      className="bg-neutral-800 border-neutral-700 text-white"
-                    />
-                  </div>
-                </div>
-
-                <div className="space-y-2">
-                  <Label className="text-neutral-400 text-xs">Description</Label>
-                  <Textarea
-                    value={tokenDescription}
-                    onChange={(e) => setTokenDescription(e.target.value)}
-                    placeholder="Token description..."
-                    className="bg-neutral-800 border-neutral-700 text-white resize-none"
-                    rows={2}
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <Label className="text-neutral-400 text-xs">Image</Label>
-                  <Input
-                    type="file"
-                    accept="image/*"
-                    onChange={(e) => setTokenImage(e.target.files?.[0] || null)}
-                    className="bg-neutral-800 border-neutral-700 text-white"
-                  />
-                </div>
-
-                <Button
-                  onClick={handleImageUpload}
-                  disabled={loading || !tokenImage || !tokenName || !tokenSymbol}
-                  className="w-full bg-cyan-500 hover:bg-cyan-600"
-                >
-                  <Upload className="w-4 h-4 mr-2" />
-                  Upload to IPFS
-                </Button>
-
-                {metadataUri && (
-                  <div className="p-2 bg-green-900/20 border border-green-500/30 rounded text-xs">
-                    <span className="text-green-400">Metadata URI:</span>
-                    <span className="text-white ml-2 font-mono break-all">{metadataUri}</span>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-
-            {/* launch settings */}
-            <Card className="bg-neutral-900 border-neutral-700">
-              <CardHeader className="pb-3 flex flex-col gap-2">
-                <div className="flex items-center justify-between">
-                  <CardTitle className="text-sm text-neutral-300 flex items-center gap-2">
-                    <DollarSign className="w-4 h-4 text-green-400" />
-                    Launch Settings
-                  </CardTitle>
-                  <div className="flex gap-2">
-                    <Button variant="outline" size="sm" onClick={() => applyStaggerPreset("fast")}>
-                      fast stagger
-                    </Button>
-                    <Button variant="outline" size="sm" onClick={() => applyStaggerPreset("human")}>
-                      human
-                    </Button>
-                    <Button variant="outline" size="sm" onClick={() => applyStaggerPreset("slow")}>
-                      slow
-                    </Button>
-                  </div>
-                </div>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="space-y-2">
-                    <Label className="text-neutral-400 text-xs">Dev Buy (SOL)</Label>
-                    <Input
-                      type="number"
-                      step="0.01"
-                      value={devBuyAmount}
-                      onChange={(e) => setDevBuyAmount(e.target.value)}
-                      className="bg-neutral-800 border-neutral-700 text-white"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label className="text-neutral-400 text-xs">Per Wallet (SOL)</Label>
-                    <Input
-                      type="number"
-                      step="0.001"
-                      value={buyAmountPerWallet}
-                      onChange={(e) => setBuyAmountPerWallet(e.target.value)}
-                      className="bg-neutral-800 border-neutral-700 text-white"
-                    />
-                  </div>
-                </div>
-
-                <div className="p-3 bg-neutral-800 rounded space-y-2">
-                  <div className="flex justify-between text-sm">
-                    <span className="text-neutral-400">Active Wallets:</span>
-                    <span className="text-white font-mono">{activeWalletCount}</span>
-                  </div>
-                  <div className="flex justify-between text-sm">
-                    <span className="text-neutral-400">Dev Buy:</span>
-                    <span className="text-cyan-400 font-mono">{devBuyAmount} SOL</span>
-                  </div>
-                  <div className="flex justify-between text-sm">
-                    <span className="text-neutral-400">Bundled Buys:</span>
-                    <span className="text-cyan-400 font-mono">
-                      {Math.max(0, activeWalletCount - 1)} × {buyAmountPerWallet} SOL
-                    </span>
-                  </div>
-                  <div className="flex justify-between text-sm border-t border-neutral-700 pt-2">
-                    <span className="text-neutral-400">Estimated Total:</span>
-                    <span className="text-green-400 font-mono">
-                      {(
-                        parseFloat(devBuyAmount) +
-                        Math.max(0, activeWalletCount - 1) * parseFloat(buyAmountPerWallet) +
-                        parseFloat(jitoTip) +
-                        activeWalletCount * parseFloat(priorityFee)
-                      ).toFixed(4)}{" "}
-                      SOL
-                    </span>
-                  </div>
-                </div>
-
-                <Button
-                  onClick={handleLaunch}
-                  disabled={loading || !metadataUri || activeWalletCount === 0 || !isMainnet}
-                  className="w-full bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600 text-white font-bold"
-                >
-                  <Rocket className="w-4 h-4 mr-2" />
-                  {loading ? "LAUNCHING..." : "🚀 LAUNCH TOKEN + BUNDLE"}
-                </Button>
-
-                <p className="text-xs text-neutral-500 text-center">creates token + {activeWalletCount} bundled buys via jito</p>
-              </CardContent>
-            </Card>
-          </div>
+          <LaunchPanel
+            tokenName={tokenName}
+            onTokenNameChange={setTokenName}
+            tokenSymbol={tokenSymbol}
+            onTokenSymbolChange={setTokenSymbol}
+            tokenDescription={tokenDescription}
+            onTokenDescriptionChange={setTokenDescription}
+            tokenImage={tokenImage}
+            onTokenImageChange={setTokenImage}
+            metadataUri={metadataUri}
+            onUploadMetadata={handleImageUpload}
+            devBuyAmount={devBuyAmount}
+            onDevBuyAmountChange={setDevBuyAmount}
+            buyAmountPerWallet={buyAmountPerWallet}
+            onBuyAmountPerWalletChange={setBuyAmountPerWallet}
+            activeWalletCount={activeWalletCount}
+            jitoTip={jitoTip}
+            priorityFee={priorityFee}
+            onApplyStaggerPreset={applyStaggerPreset}
+            onLaunch={handleLaunch}
+            loading={loading}
+            isMainnet={isMainnet}
+          />
         </TabsContent>
-
         {/* TRADE TAB */}
         <TabsContent value="trade" className="space-y-4">
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -2498,3 +2362,4 @@ export default function BundlerPage() {
     </div>
   )
 }
+
