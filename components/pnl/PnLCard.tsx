@@ -190,7 +190,9 @@ interface MiniPnLCardProps {
   label?: string
 }
 
-export function MiniPnLCard({ totalPnl, roi, label = "PnL" }: MiniPnLCardProps) {
+import { memo } from "react"
+
+export const MiniPnLCard = memo(function MiniPnLCard({ totalPnl, roi, label = "PnL" }: MiniPnLCardProps) {
   const isProfitable = totalPnl >= 0
 
   return (
@@ -211,7 +213,7 @@ export function MiniPnLCard({ totalPnl, roi, label = "PnL" }: MiniPnLCardProps) 
       </div>
     </div>
   )
-}
+})
 
 // Export card for social sharing
 interface ShareablePnLCardProps {
