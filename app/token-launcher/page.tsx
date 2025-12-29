@@ -221,7 +221,9 @@ export default function TokenLauncherPage() {
       if (!res.ok) throw new Error("failed to fetch tokens")
       return res.json()
     },
-    refetchInterval: 10_000,
+    refetchInterval: 60_000,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
   })
   useEffect(() => {
     if (tokensQuery.data) {
@@ -275,7 +277,9 @@ export default function TokenLauncherPage() {
       return res.json()
     },
     enabled: !!selectedToken,
-    refetchInterval: 10_000,
+    refetchInterval: 60_000,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
   })
   useEffect(() => {
     if (!priceQuery.data || !selectedToken) return

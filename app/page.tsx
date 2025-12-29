@@ -3,8 +3,7 @@ import dynamic from "next/dynamic"
 import { useState, useEffect } from "react"
 import { ChevronRight, LayoutDashboard, Bot, Package, Rocket, Bell, RefreshCw, Wallet, PlayCircle, BarChart3, TestTube } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import { useWallet, useConnection } from "@solana/wallet-adapter-react"
-import { LAMPORTS_PER_SOL } from "@solana/web3.js"
+import { useWallet } from "@solana/wallet-adapter-react"
 import DashboardPage from "./dashboard/page"
 import VolumeBotPage from "./volume-bot/page"
 import SolanaBundlerPage from "./solana-bundler/page"
@@ -22,18 +21,24 @@ export default function CryptoDashboard() {
   const [activeSection, setActiveSection] = useState("dashboard")
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const { publicKey, connected } = useWallet()
-  const { connection } = useConnection()
   const [balance, setBalance] = useState<number>(0)
 
   useEffect(() => {
-    if (connected && publicKey) {
-      connection.getBalance(publicKey).then((bal) => {
-        setBalance(bal / LAMPORTS_PER_SOL)
-      })
-    } else {
+    if (!connected || !publicKey) {
       setBalance(0)
+      return
     }
-  }, [connected, publicKey, connection])
+    fetch(`/api/solana/balance?publicKey=${publicKey.toBase58()}`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (data && Number.isFinite(data.sol)) {
+          setBalance(data.sol)
+        }
+      })
+      .catch(() => {
+        setBalance(0)
+      })
+  }, [connected, publicKey])
 
   return (
     <div className="flex h-screen">

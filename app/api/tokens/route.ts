@@ -11,6 +11,11 @@ import { createUmi } from "@metaplex-foundation/umi-bundle-defaults"
 import { fetchMetadata, findMetadataPda } from "@metaplex-foundation/mpl-token-metadata"
 import { publicKey } from "@metaplex-foundation/umi"
 
+const HYDRATE_COOLDOWN_MS = 10 * 60 * 1000
+const HYDRATE_MAX_TOKENS_PER_RUN = 2
+const HYDRATE_SIGNATURE_LIMIT = 5
+let lastHydrateAt = 0
+
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url)
@@ -40,9 +45,11 @@ export async function GET(request: NextRequest) {
       return false
     }
 
-    const candidates = trash ? [] : tokens.filter(isPlaceholder).slice(0, 5)
+    const candidates = trash ? [] : tokens.filter(isPlaceholder).slice(0, HYDRATE_MAX_TOKENS_PER_RUN)
 
-    if (candidates.length) {
+    const now = Date.now()
+    if (candidates.length && now - lastHydrateAt > HYDRATE_COOLDOWN_MS) {
+      lastHydrateAt = now
       const mainnetRpc = RPC_ENDPOINT || "https://api.mainnet-beta.solana.com"
       const devnetRpc = "https://api.devnet.solana.com"
       const umiMainnet = createUmi(mainnetRpc)
@@ -84,7 +91,7 @@ export async function GET(request: NextRequest) {
       ): Promise<null | { name: string; symbol: string; uri: string; signature?: string }> => {
         try {
           const mintPk = new PublicKey(mintAddr)
-          const sigs = await connection.getSignaturesForAddress(mintPk, { limit: 50 })
+          const sigs = await connection.getSignaturesForAddress(mintPk, { limit: HYDRATE_SIGNATURE_LIMIT })
           for (const s of sigs) {
             if (!s?.signature) continue
             const tx = await connection.getTransaction(s.signature, { maxSupportedTransactionVersion: 0 })

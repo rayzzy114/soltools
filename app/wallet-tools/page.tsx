@@ -152,49 +152,7 @@ export default function WalletToolsPage() {
     }
   }, [tokens])
 
-  const refreshWalletBalancesBatch = useCallback(async (wallets: BundlerWallet[], mintAddress: string) => {
-    const BATCH_SIZE = 20
-    const batches = []
-    for (let i = 0; i < wallets.length; i += BATCH_SIZE) {
-      batches.push(wallets.slice(i, i + BATCH_SIZE))
-    }
-
-    for (const batch of batches) {
-      try {
-        const res = await fetch("/api/bundler/wallets", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            action: "refresh",
-            wallets: batch,
-            mintAddress
-          })
-        })
-
-        const data = await res.json()
-        if (data.wallets) {
-          setBundlerWallets(prev => {
-            const updated = [...prev]
-            data.wallets.forEach((refreshedWallet: BundlerWallet) => {
-              const index = updated.findIndex(w => w.publicKey === refreshedWallet.publicKey)
-              if (index !== -1) {
-                updated[index] = refreshedWallet
-              }
-            })
-            return updated
-          })
-        }
-
-        if (batches.length > 1) {
-          await new Promise(resolve => setTimeout(resolve, 200))
-        }
-      } catch (error) {
-        console.error("batch refresh error:", error)
-      }
-    }
-  }, [])
-
-  const loadSavedWallets = useCallback(async () => {
+  const loadSavedWallets = useCallback(async (opts?: { silent?: boolean }) => {
     try {
       const res = await fetch("/api/bundler/wallets?action=load-all")
       if (!res.ok) {
@@ -206,17 +164,15 @@ export default function WalletToolsPage() {
         return
       }
       if (data.wallets && Array.isArray(data.wallets)) {
-        if (selectedToken?.mintAddress) {
-          await refreshWalletBalancesBatch(data.wallets, selectedToken.mintAddress)
-        } else {
-          setBundlerWallets(data.wallets)
-        }
+        setBundlerWallets(data.wallets)
       }
     } catch (error: any) {
       console.error("failed to load saved wallets:", error)
-      toast.error(`failed to load wallets: ${error.message || "unknown error"}`)
+      if (!opts?.silent) {
+        toast.error(`failed to load wallets: ${error.message || "unknown error"}`)
+      }
     }
-  }, [refreshWalletBalancesBatch, selectedToken?.mintAddress])
+  }, [])
 
   const loadTokens = useCallback(async () => {
     try {
@@ -474,10 +430,10 @@ export default function WalletToolsPage() {
       const amountPerWallet = 0.003
       const totalSolNeeded = (amountPerWallet * active.length) + 0.01
       const connection = await getResilientConnection()
-
       if (useConnectedFunder) {
-        const balance = await connection.getBalance(publicKey!)
-        const balanceInSol = balance / LAMPORTS_PER_SOL
+        const balanceRes = await fetch(`/api/solana/balance?publicKey=${publicKey!.toBase58()}`)
+        const balanceData = await balanceRes.json()
+        const balanceInSol = Number(balanceData?.sol ?? 0)
 
         if (balanceInSol < totalSolNeeded) {
           const error = `Insufficient balance. Need ${totalSolNeeded.toFixed(4)} SOL, have ${balanceInSol.toFixed(4)} SOL`
@@ -525,8 +481,9 @@ export default function WalletToolsPage() {
           return
         }
 
-        const balance = await connection.getBalance(funderPubkey)
-        const balanceInSol = balance / LAMPORTS_PER_SOL
+        const balanceRes = await fetch(`/api/solana/balance?publicKey=${funderPubkey.toBase58()}`)
+        const balanceData = await balanceRes.json()
+        const balanceInSol = Number(balanceData?.sol ?? 0)
         if (balanceInSol < totalSolNeeded) {
           const error = `Insufficient balance. Need ${totalSolNeeded.toFixed(4)} SOL, have ${balanceInSol.toFixed(4)} SOL`
           addSystemLog(error, "error")
@@ -649,6 +606,14 @@ export default function WalletToolsPage() {
   useEffect(() => {
     loadSavedWallets()
   }, [loadSavedWallets])
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      loadTokens()
+      loadSavedWallets({ silent: true })
+    }, 60000)
+    return () => clearInterval(interval)
+  }, [loadTokens, loadSavedWallets])
 
   useEffect(() => {
     loadFunderWallet()

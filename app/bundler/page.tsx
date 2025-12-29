@@ -217,7 +217,10 @@ export default function BundlerPage() {
       if (!res.ok) throw new Error("network status failed")
       return res.json()
     },
-    staleTime: 10_000,
+    staleTime: 60_000,
+    refetchInterval: 60_000,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
     retry: 1,
   })
 
@@ -311,16 +314,17 @@ export default function BundlerPage() {
   // refresh dev/funder balances
   const refreshDevFunderBalances = async () => {
     try {
-      const { PublicKey, LAMPORTS_PER_SOL } = await import("@solana/web3.js")
-      const connection = await getResilientConnection()
-      
       if (devWallet) {
-        const balance = await connection.getBalance(new PublicKey(devWallet.publicKey))
-        setDevWallet(prev => prev ? { ...prev, solBalance: balance / LAMPORTS_PER_SOL } : null)
+        const res = await fetch(`/api/solana/balance?publicKey=${devWallet.publicKey}`)
+        const data = await res.json()
+        const sol = Number(data?.sol ?? 0)
+        setDevWallet(prev => prev ? { ...prev, solBalance: sol } : null)
       }
       if (funderWallet) {
-        const balance = await connection.getBalance(new PublicKey(funderWallet.publicKey))
-        setFunderWallet(prev => prev ? { ...prev, solBalance: balance / LAMPORTS_PER_SOL } : null)
+        const res = await fetch(`/api/solana/balance?publicKey=${funderWallet.publicKey}`)
+        const data = await res.json()
+        const sol = Number(data?.sol ?? 0)
+        setFunderWallet(prev => prev ? { ...prev, solBalance: sol } : null)
       }
     } catch (error) {
       console.error("failed to refresh balances:", error)
@@ -500,7 +504,7 @@ export default function BundlerPage() {
   }, [])
 
   // load saved wallets from DB
-  const loadSavedWallets = async () => {
+  const loadSavedWallets = async (opts?: { silent?: boolean }) => {
     try {
       const res = await fetch("/api/bundler/wallets?action=load-all")
       if (!res.ok) {
@@ -523,15 +527,25 @@ export default function BundlerPage() {
           }
           return prev
         })
-        if (data.wallets.length > 0) {
+        if (data.wallets.length > 0 && !opts?.silent) {
           toast.success(`loaded ${data.wallets.length} saved wallets`)
         }
       }
     } catch (error: any) {
       console.error("failed to load saved wallets:", error)
-      toast.error(`failed to load wallets: ${error.message || "unknown error"}`)
+      if (!opts?.silent) {
+        toast.error(`failed to load wallets: ${error.message || "unknown error"}`)
+      }
     }
   }
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      loadWalletGroups()
+      loadSavedWallets({ silent: true })
+    }, 60000)
+    return () => clearInterval(interval)
+  }, [])
 
   // use all active wallets
   const useAllActiveWallets = () => {

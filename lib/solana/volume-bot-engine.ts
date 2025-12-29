@@ -961,6 +961,7 @@ export class VolumeBotRunner {
   private stopRequested: boolean = false
   private onUpdate?: (state: VolumeBotState) => void
   private lastActions: Map<string, "buy" | "sell"> = new Map()
+  private pendingByWallet: Map<string, { sol: number; token: number }> = new Map()
   
   constructor(
     config: VolumeBotConfig,
@@ -1087,8 +1088,15 @@ export class VolumeBotRunner {
       action = getNextWashAction(wallet, this.lastActions.get(wallet.publicKey))
     }
     
+    const reserved = this.pendingByWallet.get(wallet.publicKey) || { sol: 0, token: 0 }
+    const availableWallet: VolumeWallet = {
+      ...wallet,
+      solBalance: Math.max(0, wallet.solBalance - reserved.sol),
+      tokenBalance: Math.max(0, wallet.tokenBalance - reserved.token),
+    }
+
     // calculate amount
-    const amount = calculateTradeAmount(this.config, wallet, action)
+    const amount = calculateTradeAmount(this.config, availableWallet, action)
     
     if (amount <= 0) {
       return // skip if no valid amount
@@ -1097,33 +1105,57 @@ export class VolumeBotRunner {
     // execute
     let tx: VolumeTransaction
     
-    if (action === "buy") {
-      tx = await executeBuy(
-        wallet,
-        this.config.mintAddress,
-        amount,
-        this.config.slippage,
-        this.config.priorityFee,
-        bondingCurve
-      )
-      
-      if (tx.status === "success") {
-        this.state.totalBuys++
-        this.state.totalVolume += amount
+    const buyReserveBuffer = 0.005
+    const reserveSol = action === "buy" ? amount + buyReserveBuffer : 0
+    const reserveToken = action === "sell" ? amount : 0
+    if (reserveSol > 0 || reserveToken > 0) {
+      const current = this.pendingByWallet.get(wallet.publicKey) || { sol: 0, token: 0 }
+      this.pendingByWallet.set(wallet.publicKey, {
+        sol: current.sol + reserveSol,
+        token: current.token + reserveToken,
+      })
+    }
+
+    try {
+      if (action === "buy") {
+        tx = await executeBuy(
+          availableWallet,
+          this.config.mintAddress,
+          amount,
+          this.config.slippage,
+          this.config.priorityFee,
+          bondingCurve
+        )
+        
+        if (tx.status === "success") {
+          this.state.totalBuys++
+          this.state.totalVolume += amount
+        }
+      } else {
+        tx = await executeSell(
+          availableWallet,
+          this.config.mintAddress,
+          amount,
+          this.config.slippage,
+          this.config.priorityFee,
+          bondingCurve
+        )
+        
+        if (tx.status === "success") {
+          this.state.totalSells++
+          this.state.totalVolume += tx.tokensOrSol
+        }
       }
-    } else {
-      tx = await executeSell(
-        wallet,
-        this.config.mintAddress,
-        amount,
-        this.config.slippage,
-        this.config.priorityFee,
-        bondingCurve
-      )
-      
-      if (tx.status === "success") {
-        this.state.totalSells++
-        this.state.totalVolume += tx.tokensOrSol
+    } finally {
+      if (reserveSol > 0 || reserveToken > 0) {
+        const current = this.pendingByWallet.get(wallet.publicKey) || { sol: 0, token: 0 }
+        const nextSol = Math.max(0, current.sol - reserveSol)
+        const nextToken = Math.max(0, current.token - reserveToken)
+        if (nextSol === 0 && nextToken === 0) {
+          this.pendingByWallet.delete(wallet.publicKey)
+        } else {
+          this.pendingByWallet.set(wallet.publicKey, { sol: nextSol, token: nextToken })
+        }
       }
     }
     
@@ -1171,6 +1203,7 @@ export class VolumeBotPairEngine {
   private solSpent = "0"
   private isActive = false
   private connection: Connection | null = null
+  private pendingByWallet: Map<string, { sol: number; token: number }> = new Map()
 
   // Callbacks
   private onTrade?: (pairId: string, trade: any) => void
@@ -1327,16 +1360,23 @@ export class VolumeBotPairEngine {
   }
 
   private async executeTrade(wallet: VolumeWallet, action: "buy" | "sell", solAmount: number): Promise<void> {
+    const buyReserveBuffer = 0.005
+    let reservedSol = 0
+    let reservedToken = 0
+    let reservationApplied = false
     try {
       const balances = await this.fetchWalletBalances(wallet.publicKey)
       wallet.solBalance = balances.solBalance
       wallet.tokenBalance = balances.tokenBalance
+      const pending = this.pendingByWallet.get(wallet.publicKey) || { sol: 0, token: 0 }
+      const availableSol = Math.max(0, balances.solBalance - pending.sol)
+      const availableToken = Math.max(0, balances.tokenBalance - pending.token)
 
-      if (action === "sell" && wallet.tokenBalance <= 0) {
+      if (action === "sell" && availableToken <= 0) {
         this.onLog?.(this.pairId, "Skip sell: token balance is zero", "warning")
         return
       }
-      if (action === "buy" && wallet.solBalance <= solAmount) {
+      if (action === "buy" && availableSol <= solAmount + buyReserveBuffer) {
         this.onLog?.(this.pairId, "Skip buy: insufficient SOL balance", "warning")
         return
       }
@@ -1377,6 +1417,14 @@ export class VolumeBotPairEngine {
       console.log("Mint owner:", mintOwner)
 
       if (action === "buy") {
+        reservedSol = solAmount + buyReserveBuffer
+        reservationApplied = true
+        const current = this.pendingByWallet.get(wallet.publicKey) || { sol: 0, token: 0 }
+        this.pendingByWallet.set(wallet.publicKey, {
+          sol: current.sol + reservedSol,
+          token: current.token,
+        })
+
         const bondingCurve = await getBondingCurveData(mintPubkey)
         if (!bondingCurve) throw new Error("Bonding curve not found")
 
@@ -1414,7 +1462,18 @@ export class VolumeBotPairEngine {
         tokenAmount = Number(tokensOut) / 1e6 // Convert to token units
       } else {
         // For sell, calculate based on token balance
-        tokenAmount = Math.min(wallet.tokenBalance, solAmount) // Use solAmount as proxy for token amount
+        tokenAmount = Math.min(availableToken, solAmount) // Use solAmount as proxy for token amount
+        if (tokenAmount <= 0) {
+          this.onLog?.(this.pairId, "Skip sell: insufficient available tokens", "warning")
+          return
+        }
+        reservedToken = tokenAmount
+        reservationApplied = true
+        const current = this.pendingByWallet.get(wallet.publicKey) || { sol: 0, token: 0 }
+        this.pendingByWallet.set(wallet.publicKey, {
+          sol: current.sol,
+          token: current.token + reservedToken,
+        })
         const bondingCurve = await getBondingCurveData(mintPubkey)
         if (!bondingCurve) throw new Error("Bonding curve not found")
 
@@ -1554,6 +1613,17 @@ export class VolumeBotPairEngine {
 
     } catch (error) {
       throw new Error(`Trade execution failed: ${error}`)
+    } finally {
+      if (reservationApplied) {
+        const current = this.pendingByWallet.get(wallet.publicKey) || { sol: 0, token: 0 }
+        const nextSol = Math.max(0, current.sol - reservedSol)
+        const nextToken = Math.max(0, current.token - reservedToken)
+        if (nextSol === 0 && nextToken === 0) {
+          this.pendingByWallet.delete(wallet.publicKey)
+        } else {
+          this.pendingByWallet.set(wallet.publicKey, { sol: nextSol, token: nextToken })
+        }
+      }
     }
   }
 

@@ -197,6 +197,7 @@ export default function DashboardPage() {
   } | null>(null)
   const [tokenFinanceLoading, setTokenFinanceLoading] = useState(false)
   const holderTrackerRef = useRef<TokenHolderTracker | null>(null)
+  const hydratedMintsRef = useRef<Set<string>>(new Set())
   const getPairStorageKey = useCallback((mint: string) => `volume_bot_pair_${mint}`, [])
   const getLastTokenKey = useCallback(() => "dashboardLastTokenMint", [])
 
@@ -346,63 +347,12 @@ export default function DashboardPage() {
       }
 
       if (data.wallets && Array.isArray(data.wallets)) {
-        // If we have a selected token, refresh balances in batches to avoid rate limits
-        if (selectedToken?.mintAddress) {
-          await refreshWalletBalancesBatch(data.wallets, selectedToken.mintAddress)
-        } else {
-          setBundlerWallets(data.wallets)
-        }
-
+        setBundlerWallets(data.wallets)
         // no toast: avoid noisy "loaded X saved wallets" popup
       }
     } catch (error: any) {
       console.error("failed to load saved wallets:", error)
       toast.error(`failed to load wallets: ${error.message || "unknown error"}`)
-    }
-  }, [selectedToken?.mintAddress])
-
-  // Batch refresh wallet balances to avoid RPC rate limits
-  const refreshWalletBalancesBatch = useCallback(async (wallets: BundlerWallet[], mintAddress: string) => {
-    const BATCH_SIZE = 20 // Get up to 20 accounts per RPC call
-    const batches = []
-    for (let i = 0; i < wallets.length; i += BATCH_SIZE) {
-      batches.push(wallets.slice(i, i + BATCH_SIZE))
-    }
-
-    for (const batch of batches) {
-      try {
-        const res = await fetch("/api/bundler/wallets", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            action: "refresh",
-            wallets: batch,
-            mintAddress
-          })
-        })
-
-        const data = await res.json()
-        if (data.wallets) {
-          setBundlerWallets(prev => {
-            // Merge refreshed wallets with existing ones
-            const updated = [...prev]
-            data.wallets.forEach((refreshedWallet: BundlerWallet) => {
-              const index = updated.findIndex(w => w.publicKey === refreshedWallet.publicKey)
-              if (index !== -1) {
-                updated[index] = refreshedWallet
-              }
-            })
-            return updated
-          })
-        }
-
-        // Small delay between batches to respect rate limits
-        if (batches.length > 1) {
-          await new Promise(resolve => setTimeout(resolve, 200))
-        }
-      } catch (error) {
-        console.error("Batch refresh error:", error)
-      }
     }
   }, [])
 
@@ -558,18 +508,33 @@ export default function DashboardPage() {
     if (!mintAddress) return
     setCloneLoading(true)
     try {
-      const template = tokens.find((token) => token.mintAddress === mintAddress)
-      if (!template) {
-        throw new Error("template not found")
+      const cloneRes = await fetch(`/api/clone?mint=${mintAddress}`)
+      const cloneData = await cloneRes.json().catch(() => ({}))
+
+      if (cloneRes.ok && cloneData) {
+        setTokenName(cloneData.name || "")
+        setTokenSymbol(cloneData.symbol || "")
+        setTokenDescription(cloneData.description || "")
+        setTokenWebsite(cloneData.website || "")
+        setTokenTwitter(cloneData.twitter || "")
+        setTokenTelegram(cloneData.telegram || "")
+        const image = cloneData.image || cloneData.imageUrl || cloneData.logoURI || ""
+        setTokenImageUrl(image || "")
+        setTokenImagePreview(image || "")
+      } else {
+        const template = tokens.find((token) => token.mintAddress === mintAddress)
+        if (!template) {
+          throw new Error("template not found")
+        }
+        setTokenName(template.name || "")
+        setTokenSymbol(template.symbol || "")
+        setTokenDescription(template.description || "")
+        setTokenWebsite(template.website || "")
+        setTokenTwitter(template.twitter || "")
+        setTokenTelegram(template.telegram || "")
+        setTokenImageUrl(template.imageUrl || "")
+        setTokenImagePreview(template.imageUrl || "")
       }
-      setTokenName(template.name || "")
-      setTokenSymbol((template.symbol || "").toUpperCase())
-      setTokenDescription(template.description || "")
-      setTokenWebsite(template.website || "")
-      setTokenTwitter(template.twitter || "")
-      setTokenTelegram(template.telegram || "")
-      setTokenImageUrl(template.imageUrl || "")
-      setTokenImagePreview(template.imageUrl || "")
       setTokenImage(null)
       setMetadataUri("")
       toast.success("token metadata loaded")
@@ -795,8 +760,9 @@ export default function DashboardPage() {
             toast.error("connect funder wallet")
             return
           }
-          const connection = await getResilientConnection()
-          const balanceLamports = await connection.getBalance(publicKey)
+          const balanceRes = await fetch(`/api/solana/balance?publicKey=${publicKey.toBase58()}`)
+          const balanceData = await balanceRes.json()
+          const balanceLamports = Number(balanceData?.lamports ?? 0)
           const totalSolNeeded = (funderAmount * launchWallets.length) + 0.01
           if (balanceLamports / LAMPORTS_PER_SOL < totalSolNeeded) {
             const message = `Insufficient balance. Need ${totalSolNeeded.toFixed(4)} SOL`
@@ -1007,12 +973,12 @@ export default function DashboardPage() {
     }
   }, [volumeBotConfig.pairId])
 
-  // Poll bot status every 5 seconds when running
+  // Poll bot status every 60 seconds when running
   useEffect(() => {
     if (!volumeBotConfig.pairId || !volumeBotConfig.isRunning) return
 
     getVolumeBotStatus()
-    const interval = setInterval(getVolumeBotStatus, 5000)
+    const interval = setInterval(getVolumeBotStatus, 60000)
     return () => clearInterval(interval)
   }, [volumeBotConfig.pairId, volumeBotConfig.isRunning, getVolumeBotStatus])
 
@@ -1035,6 +1001,63 @@ export default function DashboardPage() {
       window.localStorage.setItem("dashboardLogMint", selectedToken.mintAddress)
     }
   }, [selectedToken?.mintAddress])
+
+  useEffect(() => {
+    const mint = selectedToken?.mintAddress
+    if (!mint) return
+    if (hydratedMintsRef.current.has(mint)) return
+
+    const name = String(selectedToken?.name || "")
+    const symbol = String(selectedToken?.symbol || "")
+    const isPlaceholder =
+      !name ||
+      !symbol ||
+      name === mint.slice(0, 6) ||
+      symbol === mint.slice(0, 4)
+
+    if (!isPlaceholder) return
+    hydratedMintsRef.current.add(mint)
+
+    fetch(`/api/clone?mint=${mint}`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (!data) return
+        setSelectedToken((prev) => {
+          if (!prev || prev.mintAddress !== mint) return prev
+          return {
+            ...prev,
+            name: data.name || prev.name,
+            symbol: data.symbol || prev.symbol,
+            description: data.description || prev.description,
+            website: data.website || prev.website,
+            twitter: data.twitter || prev.twitter,
+            telegram: data.telegram || prev.telegram,
+            imageUrl: data.image || data.imageUrl || prev.imageUrl,
+            creatorWallet: data.creatorWallet || prev.creatorWallet,
+          }
+        })
+        setTokens((prev) =>
+          prev.map((token) =>
+            token.mintAddress === mint
+              ? {
+                  ...token,
+                  name: data.name || token.name,
+                  symbol: data.symbol || token.symbol,
+                  description: data.description || token.description,
+                  website: data.website || token.website,
+                  twitter: data.twitter || token.twitter,
+                  telegram: data.telegram || token.telegram,
+                  imageUrl: data.image || data.imageUrl || token.imageUrl,
+                  creatorWallet: data.creatorWallet || token.creatorWallet,
+                }
+              : token
+          )
+        )
+      })
+      .catch(() => {
+        hydratedMintsRef.current.delete(mint)
+      })
+  }, [selectedToken?.mintAddress, selectedToken?.name, selectedToken?.symbol])
 
   useEffect(() => {
     if (typeof window === "undefined") return
@@ -1468,15 +1491,12 @@ export default function DashboardPage() {
           setSelectedToken(resolvedToken)
         }
 
-      // Load wallets
-      await loadSavedWallets()
-
       setLoading(false)
     } catch (error) {
       console.error("Error fetching dashboard data:", error)
       setLoading(false)
     }
-  }, [selectedToken, getLastTokenKey, loadSavedWallets, normalizeTokenList])
+  }, [selectedToken, getLastTokenKey, normalizeTokenList])
 
   useEffect(() => {
     if (!selectedToken?.mintAddress || tokens.length === 0) return
@@ -1525,7 +1545,7 @@ export default function DashboardPage() {
 
   useEffect(() => {
     fetchDashboardData()
-    const interval = setInterval(fetchDashboardData, 30000) // Refresh every 30s
+    const interval = setInterval(fetchDashboardData, 60000)
     return () => clearInterval(interval)
   }, [fetchDashboardData])
 

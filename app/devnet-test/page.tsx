@@ -114,7 +114,7 @@ export default function DevnetTestPage() {
     setStreaming(true)
     const id = setInterval(() => {
       loadStats()
-    }, 1000)
+    }, 60000)
     return () => {
       clearInterval(id)
       setStreaming(false)
