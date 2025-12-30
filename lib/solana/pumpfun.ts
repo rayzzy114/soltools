@@ -19,6 +19,15 @@ import bs58 from "bs58"
 // Pump.fun Program ID
 export const PUMPFUN_PROGRAM_ID = new PublicKey("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P")
 
+// Instruction Discriminators (Anchor 8-byte)
+export const CREATE_DISCRIMINATOR = Buffer.from([24, 30, 200, 40, 5, 28, 7, 119])
+export const BUY_DISCRIMINATOR = Buffer.from([102, 6, 61, 18, 1, 218, 235, 234])
+export const SELL_DISCRIMINATOR = Buffer.from([51, 230, 133, 164, 1, 127, 131, 173])
+
+// Constants
+export const LAMPORTS_PER_SOL = 1_000_000_000n
+export const TOKEN_DECIMALS_FACTOR = 1_000_000n
+
 // Bonding curve account (derived from mint)
 // NOTE: Seed may need adjustment after testing with real transactions
 export function getBondingCurveAddress(mint: PublicKey): PublicKey {
@@ -62,11 +71,11 @@ export interface PumpFunTokenInfo {
   metadata: string
   isComplete: boolean
   marketCap: number
-  virtualTokenReserves: number
-  virtualSolReserves: number
-  realTokenReserves: number
-  realSolReserves: number
-  tokenTotalSupply: number
+  virtualTokenReserves: bigint
+  virtualSolReserves: bigint
+  realTokenReserves: bigint
+  realSolReserves: bigint
+  tokenTotalSupply: bigint
   creator?: string
   isMayhemMode?: boolean
 }
@@ -159,10 +168,10 @@ export function createPumpFunTokenInstruction(
     { pubkey: SYSVAR_RENT_PUBKEY, isSigner: false, isWritable: false },
   ]
 
-  // Instruction discriminator for create (0)
-  const instructionData = Buffer.alloc(1 + metadataData.length)
-  instructionData.writeUInt8(0, 0)
-  metadataData.copy(instructionData, 1)
+  // Instruction discriminator for create
+  const instructionData = Buffer.alloc(8 + metadataData.length)
+  CREATE_DISCRIMINATOR.copy(instructionData, 0)
+  metadataData.copy(instructionData, 8)
 
   return new TransactionInstruction({
     programId: PUMPFUN_PROGRAM_ID,
@@ -177,7 +186,8 @@ export function createPumpFunTokenInstruction(
 export async function createBuyInstruction(
   buyer: PublicKey,
   mint: PublicKey,
-  solAmount: number
+  tokenAmount: bigint,
+  maxSolCost: bigint
 ): Promise<TransactionInstruction> {
   const bondingCurve = getBondingCurveAddress(mint)
   const bondingCurveTokenAccount = getBondingCurveTokenAccount(mint, bondingCurve)
@@ -194,12 +204,11 @@ export async function createBuyInstruction(
     { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
   ]
 
-  // Instruction discriminator for buy (1)
-  // Amount in lamports (8 bytes)
-  const instructionData = Buffer.alloc(9)
-  instructionData.writeUInt8(1, 0)
-  const lamports = Math.floor(solAmount * 1e9)
-  instructionData.writeBigUInt64LE(BigInt(lamports), 1)
+  // Instruction discriminator for buy + args
+  const instructionData = Buffer.alloc(8 + 8 + 8)
+  BUY_DISCRIMINATOR.copy(instructionData, 0)
+  instructionData.writeBigUInt64LE(tokenAmount, 8)
+  instructionData.writeBigUInt64LE(maxSolCost, 16)
 
   return new TransactionInstruction({
     programId: PUMPFUN_PROGRAM_ID,
@@ -214,7 +223,8 @@ export async function createBuyInstruction(
 export async function createSellInstruction(
   seller: PublicKey,
   mint: PublicKey,
-  tokenAmount: bigint
+  tokenAmount: bigint,
+  minSolOut: bigint
 ): Promise<TransactionInstruction> {
   const bondingCurve = getBondingCurveAddress(mint)
   const bondingCurveTokenAccount = getBondingCurveTokenAccount(mint, bondingCurve)
@@ -230,11 +240,11 @@ export async function createSellInstruction(
     { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
   ]
 
-  // Instruction discriminator for sell (2)
-  // Token amount (8 bytes)
-  const instructionData = Buffer.alloc(9)
-  instructionData.writeUInt8(2, 0)
-  instructionData.writeBigUInt64LE(tokenAmount, 1)
+  // Instruction discriminator for sell + args
+  const instructionData = Buffer.alloc(8 + 8 + 8)
+  SELL_DISCRIMINATOR.copy(instructionData, 0)
+  instructionData.writeBigUInt64LE(tokenAmount, 8)
+  instructionData.writeBigUInt64LE(minSolOut, 16)
 
   return new TransactionInstruction({
     programId: PUMPFUN_PROGRAM_ID,
@@ -263,15 +273,15 @@ export async function getPumpFunTokenInfo(mintAddress: string): Promise<PumpFunT
     
     // Skip discriminator and parse fields
     let offset = DISCRIMINATOR_LENGTH
-    const virtualTokenReserves = Number(data.readBigUInt64LE(offset))
+    const virtualTokenReserves = data.readBigUInt64LE(offset)
     offset += 8
-    const virtualSolReserves = Number(data.readBigUInt64LE(offset))
+    const virtualSolReserves = data.readBigUInt64LE(offset)
     offset += 8
-    const realTokenReserves = Number(data.readBigUInt64LE(offset))
+    const realTokenReserves = data.readBigUInt64LE(offset)
     offset += 8
-    const realSolReserves = Number(data.readBigUInt64LE(offset))
+    const realSolReserves = data.readBigUInt64LE(offset)
     offset += 8
-    const tokenTotalSupply = Number(data.readBigUInt64LE(offset))
+    const tokenTotalSupply = data.readBigUInt64LE(offset)
     offset += 8
     const isComplete = data[offset] === 1
     offset += 1
@@ -281,7 +291,8 @@ export async function getPumpFunTokenInfo(mintAddress: string): Promise<PumpFunT
     const isMayhemMode = data[offset] === 1
 
     // Calculate market cap (virtual reserves)
-    const marketCap = (virtualSolReserves / 1e9) * 2 // SOL price * 2 (virtual reserves)
+    // Convert to number only for display/estimation, keeping math in BigInt when possible
+    const marketCap = (Number(virtualSolReserves) / 1e9) * 2
 
     return {
       mintAddress,
@@ -308,19 +319,33 @@ export async function getPumpFunTokenInfo(mintAddress: string): Promise<PumpFunT
  * Uses constant product formula: x * y = k
  */
 export function calculateBuyPrice(
-  solAmount: number,
-  virtualTokenReserves: number,
-  virtualSolReserves: number
-): { tokensOut: number; newPrice: number } {
+  solAmount: bigint, // input in lamports
+  virtualTokenReserves: bigint,
+  virtualSolReserves: bigint
+): { tokensOut: bigint; newPrice: number } {
   const k = virtualTokenReserves * virtualSolReserves
-  const newSolReserves = virtualSolReserves + solAmount * 1e9
+  const newSolReserves = virtualSolReserves + solAmount
+
+  // Prevent division by zero
+  if (newSolReserves <= 0n) {
+      return { tokensOut: 0n, newPrice: 0 }
+  }
+
   const newTokenReserves = k / newSolReserves
   const tokensOut = virtualTokenReserves - newTokenReserves
-  const newPrice = (newSolReserves / 1e9) / newTokenReserves
+
+  // Calculate new price (SOL per Token)
+  // Price = VirtualSol / VirtualToken
+  // Scale up for precision if needed, but here we return a number for UI
+  const newPrice = Number(newSolReserves) / Number(newTokenReserves) / 1000 // approx correction for units difference (1e9 vs 1e6)
+
+  // Correct price calculation: (SOL/1e9) / (Tokens/1e6)
+  // = (SOL * 1e6) / (Tokens * 1e9)
+  // = SOL / (Tokens * 1000)
 
   return {
-    tokensOut: tokensOut / 1e6, // Assuming 6 decimals
-    newPrice,
+    tokensOut,
+    newPrice: (Number(newSolReserves) / 1e9) / (Number(newTokenReserves) / 1e6),
   }
 }
 
@@ -328,19 +353,22 @@ export function calculateBuyPrice(
  * Calculate SOL received for selling tokens
  */
 export function calculateSellPrice(
-  tokenAmount: number,
-  virtualTokenReserves: number,
-  virtualSolReserves: number
-): { solOut: number; newPrice: number } {
+  tokenAmount: bigint, // input in token units (with decimals)
+  virtualTokenReserves: bigint,
+  virtualSolReserves: bigint
+): { solOut: bigint; newPrice: number } {
   const k = virtualTokenReserves * virtualSolReserves
-  const newTokenReserves = virtualTokenReserves + tokenAmount * 1e6
+  const newTokenReserves = virtualTokenReserves + tokenAmount
+
+  if (newTokenReserves <= 0n) {
+      return { solOut: 0n, newPrice: 0 }
+  }
+
   const newSolReserves = k / newTokenReserves
   const solOut = virtualSolReserves - newSolReserves
-  const newPrice = (newSolReserves / 1e9) / newTokenReserves
 
   return {
-    solOut: solOut / 1e9,
-    newPrice,
+    solOut,
+    newPrice: (Number(newSolReserves) / 1e9) / (Number(newTokenReserves) / 1e6),
   }
 }
-
