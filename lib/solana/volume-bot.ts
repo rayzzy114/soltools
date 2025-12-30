@@ -190,19 +190,19 @@ export async function executeTrade(
         )
         tokensTraded = Number(sellAmount) / 1e6
       } else {
-      const { solOut } = calculateSellAmount(bondingCurve, sellAmount)
+        const { solOut } = calculateSellAmount(bondingCurve, sellAmount)
         const minSolOut = solOut > BigInt(0)
           ? (solOut * BigInt(100 - safeSlippage)) / BigInt(100)
           : BigInt(0)
       
-      transaction = await buildSellTransaction(
-        wallet.publicKey,
-        tokenMint,
-        sellAmount,
-        minSolOut,
-        params.priorityFee
-      )
-      tokensTraded = Number(sellAmount) / 1e6
+        transaction = await buildSellTransaction(
+          wallet.publicKey,
+          tokenMint,
+          sellAmount,
+          minSolOut,
+          params.priorityFee
+        )
+        tokensTraded = Number(sellAmount) / 1e6
       }
     }
 
@@ -343,4 +343,3 @@ export function shouldExecuteTrade(antiDetection: boolean): boolean {
   if (!antiDetection) return true
   return Math.random() > 0.1 // 90% chance
 }
-

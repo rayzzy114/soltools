@@ -18,6 +18,7 @@ import {
   GRADUATION_SOL_THRESHOLD,
   BondingCurveData,
   isPumpFunAvailable,
+  calculateBondingCurveProgress as sdkCalculateProgress
 } from "./pumpfun-sdk"
 import { sendBundle, createTipInstruction } from "./jito"
 import bs58 from "bs58"
@@ -25,7 +26,7 @@ import bs58 from "bs58"
 // graduation happens when bonding curve complete flag is set
 // approximately when realSolReserves reaches ~85 SOL
 // ⚠️ always use bondingCurve.complete for actual check!
-const GRADUATION_SOL_LAMPORTS = GRADUATION_SOL_THRESHOLD * LAMPORTS_PER_SOL
+const GRADUATION_SOL_LAMPORTS = BigInt(GRADUATION_SOL_THRESHOLD * LAMPORTS_PER_SOL)
 
 export interface GraduationTarget {
   mintAddress: string
@@ -93,7 +94,7 @@ export async function checkGraduationProgress(mintAddress: string): Promise<Grad
       return null // already graduated or doesn't exist
     }
     
-    const progressPercent = (Number(bondingCurve.realSolReserves) / GRADUATION_SOL_LAMPORTS) * 100
+    const progressPercent = sdkCalculateProgress(bondingCurve)
     
     return {
       mintAddress,
@@ -115,7 +116,7 @@ export function estimateTimeToGraduation(
 ): number | undefined {
   if (recentVolumePerHour <= 0) return undefined
   
-  const remaining = GRADUATION_SOL_LAMPORTS - Number(currentReserves)
+  const remaining = Number(GRADUATION_SOL_LAMPORTS - currentReserves)
   if (remaining <= 0) return 0
   
   const hoursRemaining = remaining / (recentVolumePerHour * LAMPORTS_PER_SOL)
@@ -330,10 +331,8 @@ export { DEFAULT_CONFIG as DEFAULT_SNIPER_CONFIG }
  * calculate bonding curve progress (0-100%)
  */
 export function calculateBondingCurveProgress(bondingCurve: BondingCurveData): number {
-  if (bondingCurve.complete) return 100
-  
-  const currentSol = Number(bondingCurve.realSolReserves) / LAMPORTS_PER_SOL
-  return Math.min((currentSol / GRADUATION_SOL_THRESHOLD) * 100, 100)
+  // Delegate to SDK impl
+  return sdkCalculateProgress(bondingCurve)
 }
 
 /**
