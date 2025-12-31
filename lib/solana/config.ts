@@ -170,7 +170,21 @@ export async function getRpcHealth(): Promise<{ endpoint: string; healthy: boole
   return { endpoint, healthy }
 }
 
-export const connection = getConnection()
+// Lazy initialization to avoid crash on import if RPC is missing
+let connectionInstance: Connection | null = null;
+export const connection = new Proxy({} as Connection, {
+  get(_target, prop) {
+    if (!connectionInstance) {
+      connectionInstance = getConnection()
+    }
+    // @ts-ignore
+    const value = connectionInstance[prop]
+    if (typeof value === "function") {
+      return value.bind(connectionInstance)
+    }
+    return value
+  },
+})
 
 // Log network info and warnings
 if (typeof window === "undefined") {
