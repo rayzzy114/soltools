@@ -13,7 +13,7 @@ import {
 } from "@/lib/solana/bundler-engine"
 import { getAssociatedTokenAddress, createAssociatedTokenAccountInstruction } from "@solana/spl-token"
 import { isPumpFunAvailable } from "@/lib/solana/pumpfun-sdk"
-import { SOLANA_NETWORK } from "@/lib/solana/config"
+import { SOLANA_NETWORK, RPC_ENDPOINTS } from "@/lib/solana/config"
 import { prisma } from "@/lib/prisma"
 import bs58 from "bs58"
 import { logger, getCorrelationId } from "@/lib/logger"
@@ -104,7 +104,21 @@ export async function GET(request: NextRequest) {
     // load all wallets from DB
     if (action === "load-all") {
       const wallets = await loadWalletsFromDB()
+
+      // If asking to refresh balances (implicitly or explicitly via future params), check RPC
+      if (!RPC_ENDPOINTS.length && mintAddress) {
+          // If mintAddress is provided, we intend to fetch token balances, which requires RPC
+          console.warn("RPC not configured, skipping balance refresh")
+          // We return cached wallets, but maybe we should warn the user?
+          // Since the client polls this, returning error 500 might be too aggressive if they just want to see the list.
+          // But "Wallet balances still show 0.0000" implies they expect live data.
+          // We will return what we have, but if balances are 0, it's because of this.
+      }
+
       if (mintAddress) {
+        if (!RPC_ENDPOINTS.length) {
+             return NextResponse.json({ error: "RPC not configured: cannot refresh balances" }, { status: 503 })
+        }
         const refreshed = await refreshWalletBalances(wallets, mintAddress)
         return NextResponse.json({ wallets: refreshed.map(sanitizeWallet) })
       }
@@ -128,6 +142,11 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
     const { action } = body
+
+    // Check RPC for actions that require it
+    if (["refresh", "fund", "collect", "create-atas"].includes(action) && !RPC_ENDPOINTS.length) {
+        return NextResponse.json({ error: "RPC not configured" }, { status: 503 })
+    }
 
     // import wallet
     if (action === "import") {
