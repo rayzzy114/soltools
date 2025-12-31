@@ -21,19 +21,21 @@ import {
   getAssociatedBondingCurveAddress,
   getMintAuthorityAddress,
   getMetadataAddress,
-  getBondingCurveData,
-  createBuyInstruction,
-  createSellInstruction,
-  createCreateTokenInstruction,
-  calculateBuyAmount,
-  calculateSellAmount,
   getPumpfunGlobalState,
   getPumpswapPoolData,
   calculatePumpswapSwapAmount,
   buildPumpswapSwapTransaction,
   calculateBundlerRugpullProfit,
   isPumpFunAvailable,
+  calculateBuyAmount,
+  calculateSellAmount,
+  getBondingCurveData,
 } from "./pumpfun-sdk"
+import {
+  createBuyInstruction,
+  createSellInstruction,
+  createPumpFunCreateInstruction as createCreateTokenInstruction,
+} from "./pumpfun"
 import { buildSellPlan } from "./sell-plan"
 import { sendBundle, createTipInstruction, JitoRegion, JITO_ENDPOINTS } from "./jito"
 import bs58 from "bs58"
