@@ -24,8 +24,11 @@ export const WalletProvider: FC<WalletProviderProps> = ({ children }) => {
     [network]
   )
 
+  // Ensure we have a valid endpoint for the UI, even if RPC_ENDPOINT is empty or restricted
+  const endpoint = RPC_ENDPOINT || "https://api.mainnet-beta.solana.com"
+
   return (
-    <ConnectionProvider endpoint={RPC_ENDPOINT}>
+    <ConnectionProvider endpoint={endpoint}>
       <SolanaWalletProvider wallets={wallets} autoConnect>
         <WalletModalProvider>
           {children}
@@ -34,4 +37,3 @@ export const WalletProvider: FC<WalletProviderProps> = ({ children }) => {
     </ConnectionProvider>
   )
 }
-

@@ -7,8 +7,11 @@ const envRpcPrimary = process.env.RPC || ENV.rpcPrimary || ""
 
 const envRpcList = envRpcPrimary ? [envRpcPrimary] : []
 
-// build RPC endpoints list (no public fallback)
-export const RPC_ENDPOINTS = envRpcList.length ? [...envRpcList] : []
+// Fallback to public Mainnet if no RPC is configured, to prevent crash.
+const DEFAULT_RPC = "https://api.mainnet-beta.solana.com"
+
+// build RPC endpoints list
+export const RPC_ENDPOINTS = envRpcList.length ? [...envRpcList] : [DEFAULT_RPC]
 
 export const RPC_ENDPOINT = RPC_ENDPOINTS[0] || ""
 const toWs = (url: string) => (url?.startsWith("http") ? url.replace(/^http/, "ws") : url)
@@ -118,7 +121,8 @@ async function probeEndpoint(endpoint: string, timeoutMs = 1500): Promise<boolea
 
 export async function selectHealthyRpcEndpoint(): Promise<string> {
   if (!RPC_ENDPOINTS.length) {
-    throw new Error("RPC is not configured")
+    // Should not happen due to fallback, but keep safe
+    return DEFAULT_RPC
   }
   const attempts = Math.min(RPC_ENDPOINTS.length * 2, 6)
   for (let i = 0; i < attempts; i++) {
@@ -137,9 +141,6 @@ export async function selectHealthyRpcEndpoint(): Promise<string> {
 }
 
 export const getConnection = () => {
-  if (!RPC_ENDPOINTS.length) {
-    throw new Error("RPC is not configured")
-  }
   if (!cachedConnection) {
     cachedConnection = new Connection(selectedRpcEndpoint, {
       commitment: "confirmed",
@@ -150,9 +151,6 @@ export const getConnection = () => {
 }
 
 export async function getResilientConnection(): Promise<Connection> {
-  if (!RPC_ENDPOINTS.length) {
-    throw new Error("RPC is not configured")
-  }
   const endpoint = await selectHealthyRpcEndpoint()
   if (!cachedConnection || endpoint !== selectedRpcEndpoint) {
     selectedRpcEndpoint = endpoint
@@ -179,6 +177,9 @@ if (typeof window === "undefined") {
     console.log(`RPC Endpoint: ${RPC_ENDPOINT}`)
     if (RPC_ENDPOINTS.length > 1) {
       console.log(`RPC fallbacks: ${RPC_ENDPOINTS.slice(1).join(", ")}`)
+    }
+    if (RPC_ENDPOINT === DEFAULT_RPC && !envRpcList.length) {
+       console.error("CRITICAL: RPC is not configured in .env! Using public fallback.")
     }
   } else {
     console.error("RPC Endpoint missing: set RPC in .env")
