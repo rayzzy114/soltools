@@ -137,7 +137,9 @@ describe("Graduation Sniper", () => {
         lastChecked: new Date(),
       }
 
-      expect(mockTarget.mintAddress.length).toBe(44)
+      // Base58 encoded addresses can be 43 or 44 chars
+      expect(mockTarget.mintAddress.length).toBeGreaterThanOrEqual(43)
+      expect(mockTarget.mintAddress.length).toBeLessThanOrEqual(44)
       expect(typeof mockTarget.progressPercent).toBe("number")
       expect(mockTarget.progressPercent).toBeGreaterThanOrEqual(0)
       expect(mockTarget.progressPercent).toBeLessThanOrEqual(100)

@@ -750,7 +750,7 @@ export default function TokenLauncherPage() {
   const setImageUrl = (url: string) => {}
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-6 space-y-6 bg-background min-h-screen text-foreground overflow-y-auto">
       {/* network warning */}
       {!isMainnet && network !== "unknown" && (
       <Alert className="border-yellow-500/50 bg-yellow-500/10">
@@ -765,75 +765,74 @@ export default function TokenLauncherPage() {
       {/* header */}
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-foreground tracking-wider">PUMP.FUN LAUNCHER</h1>
-          <p className="text-sm text-muted-foreground">create tokens on pump.fun bonding curve</p>
+          <h1 className="text-2xl font-bold text-foreground tracking-tight">PUMP.FUN LAUNCHER</h1>
+          <p className="text-sm text-muted-foreground">Create tokens on pump.fun bonding curve</p>
         </div>
-        <Badge className={isMainnet ? "bg-green-500/20 text-green-400" : "bg-yellow-500/20 text-yellow-400"}>
+        <Badge className={isMainnet ? "bg-green-500/20 text-green-600 border-green-200" : "bg-yellow-500/20 text-yellow-600 border-yellow-200"}>
           {network.toUpperCase()}
         </Badge>
       </div>
 
       {/* stats */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <Card className="bg-card border-border">
+        <Card className="bg-card border-border shadow-sm">
           <CardContent className="p-4">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-xs text-muted-foreground tracking-wider">TOKENS CREATED</p>
-                <p className="text-2xl font-bold text-foreground font-mono">{loading ? "..." : tokens.length}</p>
+                <p className="text-xs text-muted-foreground uppercase tracking-wider font-medium">Tokens Created</p>
+                <p className="text-2xl font-bold text-foreground font-mono mt-1">{loading ? "..." : tokens.length}</p>
               </div>
-              <Coins className="w-8 h-8 text-cyan-400" />
+              <Coins className="w-8 h-8 text-cyan-500" />
             </div>
           </CardContent>
         </Card>
 
-        <Card className="bg-card border-border">
+        <Card className="bg-card border-border shadow-sm">
           <CardContent className="p-4">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-xs text-muted-foreground tracking-wider">WALLET</p>
-                <p className="text-sm font-mono text-foreground truncate w-32">
-                  {connected ? publicKey?.toBase58().slice(0, 8) + "..." : "not connected"}
+                <p className="text-xs text-muted-foreground uppercase tracking-wider font-medium">Wallet</p>
+                <p className="text-sm font-mono text-foreground truncate w-32 mt-1 font-medium">
+                  {connected ? publicKey?.toBase58().slice(0, 8) + "..." : "Not connected"}
                 </p>
               </div>
-              <Users className="w-8 h-8 text-cyan-400" />
+              <Users className="w-8 h-8 text-cyan-500" />
             </div>
           </CardContent>
         </Card>
 
-        <Card className="bg-card border-border">
+        <Card className="bg-card border-border shadow-sm">
           <CardContent className="p-4">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-xs text-muted-foreground tracking-wider">PLATFORM</p>
-                <p className="text-lg font-bold text-foreground">pump.fun</p>
+                <p className="text-xs text-muted-foreground uppercase tracking-wider font-medium">Platform</p>
+                <p className="text-lg font-bold text-foreground mt-1">pump.fun</p>
               </div>
-              <Droplets className="w-8 h-8 text-cyan-400" />
+              <Droplets className="w-8 h-8 text-cyan-500" />
             </div>
           </CardContent>
         </Card>
 
-        <Card className="bg-card border-border">
+        <Card className="bg-card border-border shadow-sm">
           <CardContent className="p-4">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-xs text-muted-foreground tracking-wider">FEE</p>
-                <p className="text-2xl font-bold text-foreground font-mono">~0.02 SOL</p>
+                <p className="text-xs text-muted-foreground uppercase tracking-wider font-medium">Fee</p>
+                <p className="text-2xl font-bold text-foreground font-mono mt-1">~0.02 SOL</p>
               </div>
               <div className="flex items-center gap-2">
                 <Input
-                  placeholder="import mint..."
+                  placeholder="Import mint..."
                   value={importMint}
                   onChange={(e) => setImportMint(e.target.value)}
-                  className="bg-background border-border text-foreground w-48"
+                  className="w-40 text-xs"
                 />
                 <Button
                   size="sm"
                   variant="outline"
-                  className="border-border text-foreground hover:bg-muted"
                   onClick={handleImportMint}
                 >
-                  import
+                  Import
                 </Button>
               </div>
             </div>

@@ -20,8 +20,11 @@ describe("Bundler", () => {
         type: "buy",
       }
       
-      expect(tx.walletAddress).toHaveLength(44)
-      expect(tx.tokenMint).toHaveLength(44)
+      // Base58 encoded addresses can be 43 or 44 chars
+      expect(tx.walletAddress.length).toBeGreaterThanOrEqual(43)
+      expect(tx.walletAddress.length).toBeLessThanOrEqual(44)
+      expect(tx.tokenMint.length).toBeGreaterThanOrEqual(43)
+      expect(tx.tokenMint.length).toBeLessThanOrEqual(44)
       expect(tx.type).toBe("buy")
       expect(parseFloat(tx.amount)).toBe(0.1)
     })

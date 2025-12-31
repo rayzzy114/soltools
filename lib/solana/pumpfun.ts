@@ -87,7 +87,7 @@ export interface PumpFunTokenInfo {
  * NOTE: Instruction structure based on standard Anchor patterns.
  * May need adjustment after analyzing real pump.fun transactions.
  */
-export function createPumpFunTokenInstruction(
+export function createPumpFunCreateInstruction(
   creator: PublicKey,
   mint: PublicKey,
   params: CreatePumpFunTokenParams
