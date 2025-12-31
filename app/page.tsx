@@ -1,17 +1,11 @@
 "use client"
 import dynamic from "next/dynamic"
 import { useState, useEffect, useCallback } from "react"
-import { ChevronRight, LayoutDashboard, Bot, Package, Rocket, Bell, RefreshCw, Wallet, PlayCircle, BarChart3, TestTube, X, Loader2 } from "lucide-react"
+import { ChevronRight, LayoutDashboard, RefreshCw, Wallet, X, Loader2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { useWallet } from "@solana/wallet-adapter-react"
 import DashboardPage from "./dashboard/page"
-import VolumeBotPage from "./volume-bot/page"
-import SolanaBundlerPage from "./bundler/page"
-import TokenLauncherPage from "./token-launcher/page"
 import WalletToolsPage from "./wallet-tools/page"
-import DevnetTestPage from "./devnet-test/page"
-import DemoPage from "./demo/page"
-import TestsPage from "./tests/page"
 import { toast } from "sonner"
 
 const WalletMultiButton = dynamic(
@@ -97,12 +91,6 @@ export default function CryptoDashboard() {
             {[
               { id: "dashboard", icon: LayoutDashboard, label: "DASHBOARD" },
               { id: "wallet-tools", icon: Wallet, label: "WALLET TOOLS" },
-              { id: "volume-bot", icon: Bot, label: "VOLUME BOT" },
-              { id: "bundler", icon: Package, label: "SOLANA BUNDLER" },
-              { id: "token-launcher", icon: Rocket, label: "TOKEN LAUNCHER" },
-              { id: "tests", icon: TestTube, label: "ТЕСТЫ" },
-              { id: "devnet-test", icon: PlayCircle, label: "DEVNET TEST" },
-              { id: "demo", icon: BarChart3, label: "DEMO" },
             ].map((item) => (
               <button
                 key={item.id}
@@ -189,9 +177,6 @@ export default function CryptoDashboard() {
               <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
               <span className="text-xs text-green-500">MAINNET</span>
             </div>
-            <Button variant="ghost" size="icon" className="text-neutral-400 hover:text-cyan-400">
-              <Bell className="w-4 h-4" />
-            </Button>
             <Button variant="ghost" size="icon" onClick={() => window.location.reload()} className="text-neutral-400 hover:text-cyan-400" title="Reload App">
               <RefreshCw className="w-4 h-4" />
             </Button>
@@ -202,12 +187,6 @@ export default function CryptoDashboard() {
         <div className="flex-1 overflow-auto">
           {activeSection === "dashboard" && <DashboardPage />}
           {activeSection === "wallet-tools" && <WalletToolsPage />}
-          {activeSection === "volume-bot" && <VolumeBotPage />}
-          {activeSection === "bundler" && <SolanaBundlerPage />}
-          {activeSection === "token-launcher" && <TokenLauncherPage />}
-          {activeSection === "tests" && <TestsPage />}
-          {activeSection === "devnet-test" && <DevnetTestPage />}
-          {activeSection === "demo" && <DemoPage />}
         </div>
       </div>
     </div>

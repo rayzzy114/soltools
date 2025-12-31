@@ -3,6 +3,8 @@ services:
     image: postgres:16-alpine
     container_name: panel-db
     restart: unless-stopped
+    env_file:
+      - .env
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-pumpfun_panel}
       POSTGRES_USER: ${POSTGRES_USER:-panel}
@@ -28,10 +30,12 @@ services:
         condition: service_healthy
     ports:
       - "${APP_PORT:-3000}:3000"
+    env_file:
+      - .env
     environment:
       NODE_ENV: production
       # Prisma
-      DATABASE_URL: ${DATABASE_URL}
+      DATABASE_URL: ${DATABASE_URL:-postgresql://${POSTGRES_USER:-panel}:${POSTGRES_PASSWORD:-change_me}@db:5432/${POSTGRES_DB:-pumpfun_panel}}
       # App env (public)
       NEXT_PUBLIC_SOLANA_NETWORK: ${NEXT_PUBLIC_SOLANA_NETWORK:-mainnet-beta}
       RPC: ${RPC}
@@ -39,16 +43,8 @@ services:
       # App env (server)
       EXPOSE_WALLET_SECRETS: ${EXPOSE_WALLET_SECRETS:-false}
       LOG_LEVEL: ${LOG_LEVEL:-info}
-      # Jito
-      JITO_USE_SDK: ${JITO_USE_SDK:-true}
-      JITO_AUTH_UUID: ${JITO_AUTH_UUID}
-      JITO_AUTH_KEYPAIR: ${JITO_AUTH_KEYPAIR}
-      JITO_BUNDLE_API_URL: ${JITO_BUNDLE_API_URL}
-      JITO_BLOCK_ENGINE_URL: ${JITO_BLOCK_ENGINE_URL}
-      # Telegram alerts (optional)
-      TELEGRAM_ALERTS_ENABLED: ${TELEGRAM_ALERTS_ENABLED:-false}
-      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
-      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID}
+      BASIC_AUTH_USER: ${BASIC_AUTH_USER}
+      BASIC_AUTH_PASS: ${BASIC_AUTH_PASS}
 
 volumes:
   panel_db_data:

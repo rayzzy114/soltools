@@ -89,7 +89,6 @@ interface RugpullEstimate {
 
 const PRIORITY_FEE_COMPUTE_UNITS = 400000
 const PRICE_SERIES_MAX_POINTS = 60
-const MAX_LAUNCH_WALLETS = 5
 
 export default function DashboardPage() {
   const [stats, setStats] = useState<DashboardStats>({
@@ -202,6 +201,18 @@ export default function DashboardPage() {
   const getLastTokenKey = useCallback(() => "dashboardLastTokenMint", [])
 
   const activeWallets = useMemo(() => bundlerWallets.filter(w => w.isActive), [bundlerWallets])
+  const connectedWalletKey = publicKey?.toBase58() || ""
+  const connectedDevWallet = useMemo(() => {
+    if (!connectedWalletKey) return null
+    return bundlerWallets.find((wallet) => wallet.publicKey === connectedWalletKey) || null
+  }, [bundlerWallets, connectedWalletKey])
+  const devWalletOptions = useMemo(() => {
+    if (!connectedDevWallet) return activeWallets
+    if (activeWallets.some((wallet) => wallet.publicKey === connectedDevWallet.publicKey)) {
+      return activeWallets
+    }
+    return [connectedDevWallet, ...activeWallets]
+  }, [activeWallets, connectedDevWallet])
   const activeWalletsWithTokens = useMemo(
     () => activeWallets.filter(w => w.tokenBalance > 0),
     [activeWallets]
@@ -263,15 +274,15 @@ export default function DashboardPage() {
   const canOpenMainStage = Boolean(selectedToken?.mintAddress)
 
   useEffect(() => {
-    if (activeWallets.length === 0) {
+    if (devWalletOptions.length === 0) {
       if (launchDevWallet) setLaunchDevWallet("")
       return
     }
-    const exists = activeWallets.some((wallet) => wallet.publicKey === launchDevWallet)
+    const exists = devWalletOptions.some((wallet) => wallet.publicKey === launchDevWallet)
     if (!exists) {
-      setLaunchDevWallet(activeWallets[0].publicKey)
+      setLaunchDevWallet(devWalletOptions[0].publicKey)
     }
-  }, [activeWallets, launchDevWallet])
+  }, [devWalletOptions, launchDevWallet])
 
   useEffect(() => {
     if (buyerWallets.length === 0) return
@@ -565,10 +576,6 @@ export default function DashboardPage() {
   }
 
   const handleAddBuyerWallet = () => {
-    if (buyerWallets.length >= MAX_LAUNCH_WALLETS - 1) {
-      toast.error(`max ${MAX_LAUNCH_WALLETS - 1} buyer wallets`)
-      return
-    }
     const used = new Set(buyerWallets.map((wallet) => wallet.publicKey))
     const available = activeWallets.filter(
       (wallet) => wallet.publicKey !== launchDevWallet && !used.has(wallet.publicKey)
@@ -720,11 +727,6 @@ export default function DashboardPage() {
       toast.error("dev wallet cannot be a buyer wallet")
       return
     }
-    if (buyerKeys.length + 1 > MAX_LAUNCH_WALLETS) {
-      toast.error(`max ${MAX_LAUNCH_WALLETS} wallets per bundle`)
-      return
-    }
-
     const devWallet = bundlerWallets.find((wallet) => wallet.publicKey === launchDevWallet)
     if (!devWallet) {
       toast.error("dev wallet not found")
@@ -1682,27 +1684,6 @@ export default function DashboardPage() {
       </div>
       {!isLaunchStage && (
       <div className="flex flex-col gap-1 xl:flex-row xl:items-center xl:justify-between">
-        <div className="space-y-1">
-          <div className="text-sm font-semibold text-white tracking-wider">CONTROL PANEL</div>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-1 text-[10px]">
-              <div className="flex items-center justify-between rounded border border-neutral-800 bg-neutral-900/70 px-1 py-0.5">
-              <span className="text-white/80">Active tokens</span>
-              <span className="font-mono text-white">{loading ? "..." : stats.activeTokens}</span>
-            </div>
-              <div className="flex items-center justify-between rounded border border-neutral-800 bg-neutral-900/70 px-1 py-0.5">
-              <span className="text-white/80">Volume 24h</span>
-              <span className="font-mono text-white">{loading ? "..." : formatVolume(stats.totalVolume24h)}</span>
-            </div>
-              <div className="flex items-center justify-between rounded border border-neutral-800 bg-neutral-900/70 px-1 py-0.5">
-              <span className="text-white/80">Bundled txs</span>
-              <span className="font-mono text-white">{loading ? "..." : stats.bundledTxs}</span>
-            </div>
-              <div className="flex items-center justify-between rounded border border-neutral-800 bg-neutral-900/70 px-1 py-0.5">
-              <span className="text-white/80">Holders gained</span>
-              <span className="font-mono text-white">{loading ? "..." : stats.holdersGained.toLocaleString()}</span>
-            </div>
-          </div>
-        </div>
         <div className="flex flex-wrap items-center gap-2">
           {pnlSummary && (
             <MiniPnLCard totalPnl={pnlSummary.totalPnl} roi={pnlSummary.overallRoi} label="PnL" />
@@ -2062,16 +2043,26 @@ export default function DashboardPage() {
                   ) : holderRows.length === 0 ? (
                     <div className="text-slate-400 text-xs p-2 text-center">No holders yet</div>
                   ) : (
-                    holderRows.map((wallet) => (
-                      <div key={wallet.address} className="flex items-center justify-between text-[11px]">
-                        <span className="font-mono text-neutral-400">
-                          {wallet.address.slice(0, 6)}...{wallet.address.slice(-4)}
-                        </span>
-                        <span className="text-white">
-                          {wallet.balance.toFixed(2)} ({wallet.percentage.toFixed(2)}%)
-                        </span>
-                      </div>
-                    ))
+                    holderRows.map((wallet, index) => {
+                      const isLiquidityPool = wallet.isBondingCurve || index === 0
+                      return (
+                        <div key={wallet.address} className="flex items-center justify-between text-[11px]">
+                          <div className="flex items-center gap-2">
+                            <span className="font-mono text-neutral-400">
+                              {wallet.address.slice(0, 6)}...{wallet.address.slice(-4)}
+                            </span>
+                            {isLiquidityPool && (
+                              <span className="rounded bg-cyan-500/10 px-1 text-[9px] text-cyan-300">
+                                Liquidity pool
+                              </span>
+                            )}
+                          </div>
+                          <span className="text-white">
+                            {wallet.balance.toFixed(2)} ({wallet.percentage.toFixed(2)}%)
+                          </span>
+                        </div>
+                      )
+                    })
                   )}
                 </div>
               </CardContent>
@@ -2237,7 +2228,6 @@ export default function DashboardPage() {
                     if (!quickTradeWallet) return
                     const parsed = Number.parseFloat(quickBuyAmount)
                     executeWalletTrade(quickTradeWallet, "buy", { buyAmount: parsed })
-                    setQuickTradeWallet(null)
                   }}
                   disabled={!selectedToken || !quickTradeWallet}
                 >
@@ -2254,7 +2244,6 @@ export default function DashboardPage() {
                     onClick={() => {
                       if (!quickTradeWallet) return
                       executeWalletTrade(quickTradeWallet, "sell", { sellPercent: pct })
-                      setQuickTradeWallet(null)
                     }}
                     disabled={!selectedToken || !quickTradeWallet}
                   >
@@ -2448,11 +2437,15 @@ export default function DashboardPage() {
                     <SelectValue placeholder="Pick dev wallet" />
                   </SelectTrigger>
                   <SelectContent>
-                    {activeWallets.map((wallet) => (
-                      <SelectItem key={wallet.publicKey} value={wallet.publicKey}>
-                        Balance: {wallet.solBalance.toFixed(4)} SOL - {wallet.publicKey.slice(0, 6)}...{wallet.publicKey.slice(-4)}
-                      </SelectItem>
-                    ))}
+                    {devWalletOptions.map((wallet) => {
+                      const isConnectedWallet = connectedWalletKey.length > 0 && wallet.publicKey === connectedWalletKey
+                      const labelPrefix = isConnectedWallet ? "Connected wallet" : "Balance"
+                      return (
+                        <SelectItem key={wallet.publicKey} value={wallet.publicKey}>
+                          {labelPrefix}: {wallet.solBalance.toFixed(4)} SOL - {wallet.publicKey.slice(0, 6)}...{wallet.publicKey.slice(-4)}
+                        </SelectItem>
+                      )
+                    })}
                   </SelectContent>
                 </Select>
               </div>
@@ -2474,7 +2467,7 @@ export default function DashboardPage() {
                   ADD BUYER WALLETS
                 </CardTitle>
                 <div className="text-[10px] text-slate-500">
-                  {buyerWallets.length}/{Math.max(0, MAX_LAUNCH_WALLETS - 1)} buyers
+                  {buyerWallets.length} buyers
                 </div>
               </div>
             </CardHeader>
