@@ -27,11 +27,7 @@ import * as path from "path"
 const PUBLIC_DEVNET_RPCS = Array.from(
   new Set(
     [
-      process.env.NEXT_PUBLIC_SOLANA_RPC_URL,
-      ...(process.env.NEXT_PUBLIC_SOLANA_RPC_URLS?.split(",").map((s) => s.trim()) || []),
-      process.env.DEVNET_RPC_URL,
-      "https://api.devnet.solana.com",
-      "https://rpc.ankr.com/solana_devnet",
+      process.env.RPC,
     ].filter(Boolean),
   ),
 )

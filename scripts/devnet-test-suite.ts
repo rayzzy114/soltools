@@ -48,7 +48,7 @@ interface TestConfig {
 function loadConfig(): TestConfig {
   return {
     network: (process.env.NEXT_PUBLIC_SOLANA_NETWORK as "devnet" | "mainnet-beta") || "devnet",
-    rpcEndpoint: process.env.NEXT_PUBLIC_SOLANA_RPC_URL || "https://api.devnet.solana.com",
+    rpcEndpoint: process.env.RPC || "",
     walletCount: parseInt(process.env.TEST_WALLET_COUNT || "5"),
     solPerWallet: parseFloat(process.env.TEST_SOL_PER_WALLET || "0.5"),
     initialBuySol: parseFloat(process.env.TEST_INITIAL_BUY_SOL || "0.1"),

@@ -29,7 +29,7 @@ nano ./.env
 Минимум нужно заполнить:
 - `POSTGRES_PASSWORD`
 - `DATABASE_URL` (если используешь встроенный `db`, оставь `@db:5432`)
-- `NEXT_PUBLIC_SOLANA_RPC_URL`
+- `RPC`
 
 ### 4) Первый запуск
 ```bash

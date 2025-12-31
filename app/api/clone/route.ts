@@ -7,9 +7,8 @@ import { getBondingCurveAddress, getMetadataAddress } from "@/lib/solana/pumpfun
 
 const METADATA_PROGRAM_ID = new PublicKey("metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s")
 
-const MAINNET_RPC = process.env.MAINNET_RPC_URL || "https://api.mainnet-beta.solana.com"
-const DEVNET_RPC =
-  process.env.DEVNET_RPC_URL || process.env.NEXT_PUBLIC_SOLANA_RPC_URL || "https://api.devnet.solana.com"
+const MAINNET_RPC = process.env.RPC || ""
+const DEVNET_RPC = process.env.RPC || ""
 const TOKEN_LIST_URL =
   process.env.TOKEN_LIST_URL ||
   "https://raw.githubusercontent.com/solana-labs/token-list/main/src/tokens/solana.tokenlist.json"
@@ -531,6 +530,13 @@ export async function GET(request: Request) {
 
   const attempts: Array<{ mint: string; rpc: string; error?: string }> = []
 
+  if (!MAINNET_RPC && !DEVNET_RPC) {
+    return NextResponse.json(
+      { error: "rpc endpoint missing (set RPC in .env)" },
+      { status: 500 }
+    )
+  }
+
   // #region agent log
   emitDebugLog({
     hypothesisId: "H2",
@@ -540,10 +546,10 @@ export async function GET(request: Request) {
   })
   // #endregion
   const candidates = [
-    ...(isValidPublicKey(primary) ? [{ mint: primary, rpc: MAINNET_RPC }] : []),
-    ...(alt && alt !== primary && isValidPublicKey(alt) ? [{ mint: alt, rpc: MAINNET_RPC }] : []),
-    ...(isValidPublicKey(primary) ? [{ mint: primary, rpc: DEVNET_RPC }] : []),
-    ...(alt && alt !== primary && isValidPublicKey(alt) ? [{ mint: alt, rpc: DEVNET_RPC }] : []),
+    ...(MAINNET_RPC && isValidPublicKey(primary) ? [{ mint: primary, rpc: MAINNET_RPC }] : []),
+    ...(MAINNET_RPC && alt && alt !== primary && isValidPublicKey(alt) ? [{ mint: alt, rpc: MAINNET_RPC }] : []),
+    ...(DEVNET_RPC && isValidPublicKey(primary) ? [{ mint: primary, rpc: DEVNET_RPC }] : []),
+    ...(DEVNET_RPC && alt && alt !== primary && isValidPublicKey(alt) ? [{ mint: alt, rpc: DEVNET_RPC }] : []),
   ]
   // #region agent log
   emitDebugLog({
@@ -1564,4 +1570,3 @@ export async function GET(request: Request) {
     { status: 500 },
   )
 }
-

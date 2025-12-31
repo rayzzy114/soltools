@@ -1,3 +1,5 @@
+import "dotenv/config"
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   typescript: {
@@ -8,6 +10,10 @@ const nextConfig = {
   },
   experimental: {
     turbopack: true,
+  },
+  env: {
+    NEXT_PUBLIC_SOLANA_NETWORK: process.env.NEXT_PUBLIC_SOLANA_NETWORK,
+    RPC: process.env.RPC,
   },
   // SaaS hardening: don't ship browser source maps in prod
   productionBrowserSourceMaps: false,

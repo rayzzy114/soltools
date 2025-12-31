@@ -50,7 +50,7 @@
 ШАГ 2: Создай .env файл
    Скопируй .env.example в .env
    Заполни:
-   - NEXT_PUBLIC_SOLANA_RPC_URL (твой RPC API key)
+   - RPC (твой RPC API key)
    - DATABASE_URL (строка подключения к PostgreSQL)
 
 ШАГ 3: Настрой базу данных

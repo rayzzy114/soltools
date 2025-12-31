@@ -21,7 +21,7 @@ services:
     environment:
       DATABASE_URL: postgresql://panel:change_me@db:5432/pumpfun_panel
       NEXT_PUBLIC_SOLANA_NETWORK: mainnet-beta
-      NEXT_PUBLIC_SOLANA_RPC_URL: https://your-rpc-url
+      RPC: https://your-rpc-url
       # добавь остальные переменные из .env
 
   watchtower:

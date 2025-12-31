@@ -4,7 +4,7 @@ import bs58 from "bs58"
 // test configuration
 export const TEST_CONFIG = {
   // use devnet for testing (override with env vars)
-  rpcEndpoint: process.env.NEXT_PUBLIC_SOLANA_RPC_URL || "https://api.devnet.solana.com",
+  rpcEndpoint: process.env.RPC || "",
   network: (process.env.NEXT_PUBLIC_SOLANA_NETWORK || "devnet") as "devnet" | "mainnet-beta",
   // timeout for transactions
   txTimeout: 60000,

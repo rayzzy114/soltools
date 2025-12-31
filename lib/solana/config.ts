@@ -1,28 +1,16 @@
-import { Connection, clusterApiUrl } from "@solana/web3.js"
+import { Connection } from "@solana/web3.js"
 import { ENV } from "../env"
 
 export const SOLANA_NETWORK: string = ENV.network
 
-const envRpcPrimary =
-  process.env.SOLANA_RPC_URL ||
-  process.env.RPC_ENDPOINT ||
-  ENV.rpcPrimary ||
-  ""
+const envRpcPrimary = process.env.RPC || ENV.rpcPrimary || ""
 
-const envRpcList = [
-  envRpcPrimary,
-  ...ENV.rpcList,
-  ...(process.env.SOLANA_RPC_URLS?.split(",").map((s) => s.trim()) || []),
-  ...(process.env.RPC_ENDPOINTS?.split(",").map((s) => s.trim()) || []),
-].filter(Boolean)
+const envRpcList = envRpcPrimary ? [envRpcPrimary] : []
 
-const fallbackRpc =
-  SOLANA_NETWORK === "devnet" ? clusterApiUrl("devnet") : clusterApiUrl("mainnet-beta")
+// build RPC endpoints list (no public fallback)
+export const RPC_ENDPOINTS = envRpcList.length ? [...envRpcList] : []
 
-// build RPC endpoints list with fallbacks, prefer provided
-export const RPC_ENDPOINTS = envRpcList.length ? [...envRpcList, fallbackRpc] : [fallbackRpc]
-
-export const RPC_ENDPOINT = RPC_ENDPOINTS[0]
+export const RPC_ENDPOINT = RPC_ENDPOINTS[0] || ""
 const toWs = (url: string) => (url?.startsWith("http") ? url.replace(/^http/, "ws") : url)
 let selectedWebsocketEndpoint = toWs(RPC_ENDPOINT)
 export let RPC_WEBSOCKET_ENDPOINT = selectedWebsocketEndpoint
@@ -129,6 +117,9 @@ async function probeEndpoint(endpoint: string, timeoutMs = 1500): Promise<boolea
 }
 
 export async function selectHealthyRpcEndpoint(): Promise<string> {
+  if (!RPC_ENDPOINTS.length) {
+    throw new Error("RPC is not configured")
+  }
   const attempts = Math.min(RPC_ENDPOINTS.length * 2, 6)
   for (let i = 0; i < attempts; i++) {
     const endpoint = RPC_ENDPOINTS[i % RPC_ENDPOINTS.length]
@@ -146,6 +137,9 @@ export async function selectHealthyRpcEndpoint(): Promise<string> {
 }
 
 export const getConnection = () => {
+  if (!RPC_ENDPOINTS.length) {
+    throw new Error("RPC is not configured")
+  }
   if (!cachedConnection) {
     cachedConnection = new Connection(selectedRpcEndpoint, {
       commitment: "confirmed",
@@ -156,6 +150,9 @@ export const getConnection = () => {
 }
 
 export async function getResilientConnection(): Promise<Connection> {
+  if (!RPC_ENDPOINTS.length) {
+    throw new Error("RPC is not configured")
+  }
   const endpoint = await selectHealthyRpcEndpoint()
   if (!cachedConnection || endpoint !== selectedRpcEndpoint) {
     selectedRpcEndpoint = endpoint
@@ -178,9 +175,13 @@ export const connection = getConnection()
 // Log network info and warnings
 if (typeof window === "undefined") {
   console.log(`Solana Network: ${SOLANA_NETWORK}`)
-  console.log(`RPC Endpoint: ${RPC_ENDPOINT}`)
-  if (RPC_ENDPOINTS.length > 1) {
-    console.log(`RPC fallbacks: ${RPC_ENDPOINTS.slice(1).join(", ")}`)
+  if (RPC_ENDPOINT) {
+    console.log(`RPC Endpoint: ${RPC_ENDPOINT}`)
+    if (RPC_ENDPOINTS.length > 1) {
+      console.log(`RPC fallbacks: ${RPC_ENDPOINTS.slice(1).join(", ")}`)
+    }
+  } else {
+    console.error("RPC Endpoint missing: set RPC in .env")
   }
 
   // production warnings
@@ -190,6 +191,6 @@ if (typeof window === "undefined") {
 
   if (isPublicRpc && SOLANA_NETWORK === "mainnet-beta") {
     console.warn("WARNING: Using PUBLIC RPC on mainnet! This will be slow and rate-limited.")
-    console.warn("Set NEXT_PUBLIC_SOLANA_RPC_URL to your RPC provider (Helius, QuickNode, ERPC)")
+    console.warn("Set RPC to your provider (Helius, QuickNode, ERPC)")
   }
 }

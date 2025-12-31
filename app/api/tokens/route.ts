@@ -50,7 +50,10 @@ export async function GET(request: NextRequest) {
     const now = Date.now()
     if (candidates.length && now - lastHydrateAt > HYDRATE_COOLDOWN_MS) {
       lastHydrateAt = now
-      const mainnetRpc = RPC_ENDPOINT || "https://api.mainnet-beta.solana.com"
+      const mainnetRpc = RPC_ENDPOINT
+      if (!mainnetRpc) {
+        return NextResponse.json(tokens)
+      }
       const devnetRpc = "https://api.devnet.solana.com"
       const umiMainnet = createUmi(mainnetRpc)
       const umiDevnet = createUmi(devnetRpc)

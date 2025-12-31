@@ -55,10 +55,7 @@ vi.mock("@/lib/solana/pumpfun-sdk", async (importOriginal) => {
 
 vi.mock("@/lib/solana/config", async () => {
   const { Connection } = await vi.importActual<any>("@solana/web3.js")
-  const rpc =
-    process.env.SOLANA_RPC_URL ||
-    process.env.RPC_ENDPOINT ||
-    "https://api.mainnet-beta.solana.com"
+  const rpc = process.env.RPC || ""
   return {
     getResilientConnection: async () => new Connection(rpc, "confirmed"),
     SOLANA_NETWORK: "mainnet-beta",

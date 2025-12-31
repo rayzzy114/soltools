@@ -1,4 +1,3 @@
 NEXT_PUBLIC_SOLANA_NETWORK=devnet
-NEXT_PUBLIC_SOLANA_RPC_URL=https://api.devnet.solana.com
-NEXT_PUBLIC_SOLANA_RPC_URLS=https://api.devnet.solana.com,https://rpc.ankr.com/solana_devnet
+RPC=https://api.devnet.solana.com
 CREATOR_SECRET_KEY=2bo29pzBW6iBKZpMzPNKuGf9nHQ6mUQ3Cu4GdhWArbbyRfKNprCKnCyWz7FAWJfeZq7qKBdfbA7UrVAx1USnuRNm

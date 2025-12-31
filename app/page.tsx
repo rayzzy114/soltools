@@ -1,7 +1,7 @@
 "use client"
 import dynamic from "next/dynamic"
 import { useState, useEffect } from "react"
-import { ChevronRight, LayoutDashboard, Bot, Package, Rocket, Bell, RefreshCw, Wallet, PlayCircle, BarChart3, TestTube } from "lucide-react"
+import { ChevronRight, LayoutDashboard, Bot, Package, Rocket, Bell, RefreshCw, Wallet, PlayCircle, BarChart3, TestTube, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { useWallet } from "@solana/wallet-adapter-react"
 import DashboardPage from "./dashboard/page"
@@ -20,8 +20,21 @@ const WalletMultiButton = dynamic(
 export default function CryptoDashboard() {
   const [activeSection, setActiveSection] = useState("dashboard")
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
-  const { publicKey, connected } = useWallet()
+  const { publicKey, connected, disconnect, wallet } = useWallet()
   const [balance, setBalance] = useState<number>(0)
+  const handleDisconnect = async () => {
+    try {
+      await disconnect()
+    } catch {
+      try {
+        await wallet?.adapter.disconnect()
+      } catch {
+        // ignore
+      }
+    } finally {
+      setBalance(0)
+    }
+  }
 
   useEffect(() => {
     if (!connected || !publicKey) {
@@ -94,9 +107,20 @@ export default function CryptoDashboard() {
             <div className="mt-8 space-y-2">
               {connected && publicKey ? (
                 <div className="p-4 bg-neutral-800 border border-cyan-500/30 rounded">
-              <div className="flex items-center gap-2 mb-2">
-                <Wallet className="w-4 h-4 text-cyan-400" />
-                <span className="text-xs text-cyan-400">WALLET CONNECTED</span>
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-2">
+                  <Wallet className="w-4 h-4 text-cyan-400" />
+                  <span className="text-xs text-cyan-400">WALLET CONNECTED</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void handleDisconnect()}
+                  className="text-neutral-400 hover:text-cyan-300"
+                  aria-label="Disconnect wallet"
+                  title="Disconnect"
+                >
+                  <X className="w-3 h-3" />
+                </button>
               </div>
               <div className="text-xs text-neutral-500 font-mono">
                     <div>SOL: {balance.toFixed(3)}</div>

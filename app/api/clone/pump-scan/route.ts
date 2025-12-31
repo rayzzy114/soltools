@@ -59,7 +59,7 @@ const buildProxyUrls = (url: string) => [
   `https://cors.isomorphic-git.org/${url}`,
 ]
 
-const MAINNET_RPC = process.env.MAINNET_RPC_URL || "https://api.mainnet-beta.solana.com"
+const MAINNET_RPC = process.env.RPC || ""
 const PUMPFUN_PROGRAM_ID = new PublicKey("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P")
 
 async function fetchJsonWithFallback(name: string, url: string) {
@@ -190,6 +190,12 @@ export async function GET(request: NextRequest) {
   const limit = Math.max(1, Math.min(50, Number(searchParams.get("limit")) || 10))
   const maxMetaFetch = Math.max(1, Math.min(80, Number(searchParams.get("metaLimit")) || 40))
   const useOnChain = searchParams.get("onchain") === "true"
+  if (useOnChain && !MAINNET_RPC) {
+    return NextResponse.json(
+      { error: "rpc endpoint missing (set RPC in .env)" },
+      { status: 500 }
+    )
+  }
 
   const attempts: Array<{ source: string; status?: number; error?: string }> = []
   const items: Array<any> = []

@@ -20,7 +20,7 @@ vi.mock("@/lib/solana/jito", () => ({
 describe("Jito flow integration", () => {
   it("simulates a buy transaction before bundle send", async () => {
     const { VolumeBotPairEngine } = await import("@/lib/solana/volume-bot-engine")
-    const rpcUrl = process.env.SOLANA_RPC_URL || process.env.RPC_ENDPOINT || "https://api.mainnet-beta.solana.com"
+    const rpcUrl = process.env.RPC || ""
     console.log("RPC URL:", rpcUrl.split("?")[0])
     const connection = new Connection(rpcUrl, "confirmed")
     const simulateSpy = vi.spyOn(connection, "simulateTransaction")

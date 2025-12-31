@@ -57,15 +57,15 @@ async function main() {
   // проверяем что переменные загружены
   console.log(`\n🔍 Проверка переменных:`)
   console.log(`   NEXT_PUBLIC_SOLANA_NETWORK: ${process.env.NEXT_PUBLIC_SOLANA_NETWORK || "не установлен"}`)
-  console.log(`   NEXT_PUBLIC_SOLANA_RPC_URL: ${process.env.NEXT_PUBLIC_SOLANA_RPC_URL ? process.env.NEXT_PUBLIC_SOLANA_RPC_URL.substring(0, 50) + "..." : "не установлен"}`)
+  console.log(`   RPC: ${process.env.RPC ? process.env.RPC.substring(0, 50) + "..." : "не установлен"}`)
   console.log(`   CREATOR_SECRET_KEY: ${process.env.CREATOR_SECRET_KEY ? process.env.CREATOR_SECRET_KEY.substring(0, 20) + "..." : "не установлен"}`)
   console.log()
 
   // создаем connection с правильным RPC (ОБЯЗАТЕЛЬНО ERPC!)
-  let rpcUrl = process.env.NEXT_PUBLIC_SOLANA_RPC_URL
+  let rpcUrl = process.env.RPC
   
   if (!rpcUrl) {
-    console.error("❌ ОШИБКА: NEXT_PUBLIC_SOLANA_RPC_URL не установлен!")
+    console.error("❌ ОШИБКА: RPC не установлен!")
     console.error("   Проверь test-env.txt или установи переменную окружения")
     process.exit(1)
   }

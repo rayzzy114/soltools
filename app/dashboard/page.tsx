@@ -346,10 +346,29 @@ export default function DashboardPage() {
         return
       }
 
-      if (data.wallets && Array.isArray(data.wallets)) {
-        setBundlerWallets(data.wallets)
-        // no toast: avoid noisy "loaded X saved wallets" popup
-      }
+        if (data.wallets && Array.isArray(data.wallets)) {
+          let nextWallets = data.wallets
+          if (nextWallets.length) {
+            try {
+              const refreshRes = await fetch("/api/bundler/wallets", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  action: "refresh",
+                  wallets: nextWallets,
+                }),
+              })
+              const refreshData = await refreshRes.json()
+              if (Array.isArray(refreshData.wallets)) {
+                nextWallets = refreshData.wallets
+              }
+            } catch {
+              // ignore refresh errors
+            }
+          }
+          setBundlerWallets(nextWallets)
+          // no toast: avoid noisy "loaded X saved wallets" popup
+        }
     } catch (error: any) {
       console.error("failed to load saved wallets:", error)
       toast.error(`failed to load wallets: ${error.message || "unknown error"}`)
