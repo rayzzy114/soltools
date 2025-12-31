@@ -57,6 +57,7 @@ export default function CryptoDashboard() {
               size="icon"
               onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
               className="text-neutral-400 hover:text-cyan-400"
+              aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
             >
               <ChevronRight
                 className={`w-4 h-4 sm:w-5 sm:h-5 transition-transform ${sidebarCollapsed ? "" : "rotate-180"}`}
@@ -78,6 +79,7 @@ export default function CryptoDashboard() {
               <button
                 key={item.id}
                 onClick={() => setActiveSection(item.id)}
+                aria-label={item.label}
                 className={`w-full flex items-center gap-3 p-3 rounded transition-colors ${
                   activeSection === item.id
                     ? "bg-cyan-500 text-black font-semibold"
@@ -135,10 +137,10 @@ export default function CryptoDashboard() {
               <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
               <span className="text-xs text-green-500">MAINNET</span>
             </div>
-            <Button variant="ghost" size="icon" className="text-neutral-400 hover:text-cyan-400">
+            <Button variant="ghost" size="icon" className="text-neutral-400 hover:text-cyan-400" aria-label="Notifications">
               <Bell className="w-4 h-4" />
             </Button>
-            <Button variant="ghost" size="icon" className="text-neutral-400 hover:text-cyan-400">
+            <Button variant="ghost" size="icon" className="text-neutral-400 hover:text-cyan-400" aria-label="Refresh data">
               <RefreshCw className="w-4 h-4" />
             </Button>
           </div>
