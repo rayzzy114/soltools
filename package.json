@@ -45,6 +45,7 @@
   },
   "dependencies": {
     "@coral-xyz/anchor": "^0.32.1",
+    "@fontsource/geist-mono": "^5.2.7",
     "@hookform/resolvers": "^3.10.0",
     "@jup-ag/api": "^6.0.47",
     "@metaplex-foundation/mpl-token-metadata": "3.3.0",
