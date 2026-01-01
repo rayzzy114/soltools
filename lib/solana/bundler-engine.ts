@@ -291,6 +291,7 @@ export interface BundlerWallet {
   tokenBalance: number
   isActive: boolean
   label?: string
+  role?: string
   ataExists?: boolean
 }
 

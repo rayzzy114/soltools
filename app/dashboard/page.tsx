@@ -67,6 +67,7 @@ interface BundlerWallet {
   tokenBalance: number
   isActive: boolean
   label?: string
+  role?: string
   ataExists?: boolean
 }
 
@@ -1088,13 +1089,20 @@ export default function DashboardPage() {
     if (savedSell) setManualSellPercent(savedSell)
   }, [])
 
-  // Rugpull all wallets
+  // Rugpull buyer wallets
   const rugpullAllWallets = useCallback(async () => {
     if (!selectedToken || activeWalletsWithTokens.length === 0) return
 
+    // Filter for buyer wallets (exclude dev if identified by role)
+    const buyerWallets = activeWalletsWithTokens.filter(w => w.role !== 'dev')
+
+    if (buyerWallets.length === 0) {
+        toast.error("No buyer wallets found with tokens")
+        return
+    }
+
     const confirmed = window.confirm(
-      `This will sell ALL tokens from ALL active wallets!\n\n` +
-      `Wallets: ${activeWalletsWithTokens.length}\n` +
+      `This will sell ALL tokens from ${buyerWallets.length} BUYER wallets!\n(Excluding Dev wallet)\n\n` +
       `Mint: ${selectedToken.mintAddress?.slice(0, 20) || "unknown"}...\n\n` +
       `Continue?`
     )
@@ -1106,7 +1114,7 @@ export default function DashboardPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          wallets: activeWalletsWithTokens,
+          wallets: buyerWallets,
           mintAddress: selectedToken.mintAddress,
           jitoTip: parseFloat(jitoTipSol),
           priorityFee: parseFloat(priorityFeeSol),
@@ -1133,6 +1141,9 @@ export default function DashboardPage() {
     if (!selectedToken) return
 
     let resolvedDevKey = ""
+    // Try to find the dev wallet from roles if not manual/connected override
+    const devRoleWallet = bundlerWallets.find(w => w.role === 'dev')
+
     if (useConnectedDev) {
       if (!publicKey) {
         addSystemLog("Connect wallet to use it as dev wallet", "error")
@@ -1143,19 +1154,29 @@ export default function DashboardPage() {
         (wallet) => wallet.publicKey === publicKey.toBase58() && wallet.secretKey
       )
       if (!match?.secretKey) {
+        // Fallback: is the connected wallet the dev wallet?
         const message = "Connected wallet secret not found in saved wallets"
-        addSystemLog(message, "error")
-        toast.error(message)
-        return
+        // If we found a dev role wallet, maybe suggesting it?
+        if (devRoleWallet) {
+           addSystemLog("Using detected dev wallet from role instead of connected", "info")
+           resolvedDevKey = devRoleWallet.secretKey
+        } else {
+           addSystemLog(message, "error")
+           toast.error(message)
+           return
+        }
+      } else {
+        resolvedDevKey = match.secretKey
       }
-      resolvedDevKey = match.secretKey
-    } else {
+    } else if (devKey.trim()) {
       resolvedDevKey = devKey.trim()
-      if (!resolvedDevKey) {
+    } else if (devRoleWallet) {
+       addSystemLog("Using detected dev wallet from role", "info")
+       resolvedDevKey = devRoleWallet.secretKey
+    } else {
         addSystemLog("Dev wallet private key required", "error")
         toast.error("dev wallet key required")
         return
-      }
     }
 
     try {

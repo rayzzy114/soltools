@@ -206,6 +206,21 @@ export async function POST(request: NextRequest) {
       await prisma.transaction.createMany({ data: buyRows, skipDuplicates: true })
     }
 
+    // Update wallet roles
+    const devWalletPubkey = activeWallets[0].publicKey
+    const buyerPubkeys = activeWallets.slice(1).map(w => w.publicKey)
+
+    await Promise.all([
+      prisma.wallet.update({
+        where: { publicKey: devWalletPubkey },
+        data: { role: "dev" }
+      }),
+      prisma.wallet.updateMany({
+        where: { publicKey: { in: buyerPubkeys } },
+        data: { role: "buyer" }
+      })
+    ])
+
     return NextResponse.json({
       success: true,
       bundleId: result.bundleId,

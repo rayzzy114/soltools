@@ -9,7 +9,7 @@ import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
-import { Wallet, Zap, Package, Plus, Trash2 } from "lucide-react"
+import { Wallet, Zap, Package, Plus, Trash2, Key, User, RefreshCw, Briefcase } from "lucide-react"
 import { toast } from "sonner"
 import { useWallet } from "@solana/wallet-adapter-react"
 import { LAMPORTS_PER_SOL, PublicKey, SystemProgram, Transaction, Keypair } from "@solana/web3.js"
@@ -33,6 +33,7 @@ interface BundlerWallet {
   tokenBalance: number
   isActive: boolean
   label?: string
+  role?: string
   ataExists?: boolean
 }
 
@@ -707,6 +708,45 @@ export default function WalletToolsPage() {
                 <Button
                   size="sm"
                   variant="outline"
+                  onClick={async () => {
+                     try {
+                        const keypair = Keypair.generate()
+                        const pubkey = keypair.publicKey.toBase58()
+                        setFunderWalletInput(pubkey)
+                        // Auto-save logic
+                        setFunderSaving(true)
+                        const res = await fetch("/api/funder", {
+                          method: "POST",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({ publicKey: pubkey }),
+                        })
+                        const data = await res.json()
+                        if (!res.ok || data?.error) {
+                          toast.error(data?.error || "failed to save funder wallet")
+                          setFunderSaving(false)
+                          return
+                        }
+                        setFunderWalletRecord(data.funderWallet)
+                        setFunderSaving(false)
+                        toast.success("Generated & saved new funder wallet")
+                        // Also show secret key once
+                        toast(
+                            <div className="text-[10px] font-mono break-all">
+                                Private Key: {bs58.encode(keypair.secretKey)}
+                            </div>,
+                            { duration: 10000 }
+                        )
+                     } catch (e: any) {
+                         toast.error("Failed to generate: " + e.message)
+                     }
+                  }}
+                  className="h-7 px-2 text-[10px] border-neutral-700"
+                >
+                  Generate
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
                   onClick={deleteFunderWallet}
                   disabled={funderSaving || !funderWalletRecord}
                   className="h-7 px-2 text-[10px] border-neutral-700"
@@ -939,8 +979,23 @@ export default function WalletToolsPage() {
                       disabled={!wallet.isActive}
                     />
                     <div className="min-w-0">
-                      <div className="text-neutral-400 font-mono truncate">
-                        {wallet.publicKey.slice(0, 8)}...{wallet.publicKey.slice(-4)}
+                      <div className="flex items-center gap-2">
+                          <div className="text-neutral-400 font-mono truncate">
+                            {wallet.publicKey.slice(0, 8)}...{wallet.publicKey.slice(-4)}
+                          </div>
+                          {/* Role Icon */}
+                          {wallet.role === 'dev' && (
+                              <Key className="w-3 h-3 text-purple-400" aria-label="Dev Wallet" title="Dev Wallet" />
+                          )}
+                          {wallet.role === 'buyer' && (
+                              <User className="w-3 h-3 text-blue-400" aria-label="Buyer Wallet" title="Buyer Wallet" />
+                          )}
+                          {wallet.role === 'funding' && (
+                              <Wallet className="w-3 h-3 text-green-400" aria-label="Funding Wallet" title="Funding Wallet" />
+                          )}
+                          {wallet.role === 'volume_bot' && (
+                              <RefreshCw className="w-3 h-3 text-orange-400" aria-label="Volume Bot" title="Volume Bot" />
+                          )}
                       </div>
                       <div className="flex gap-2 text-[10px] text-slate-500">
                         <span className="text-emerald-300/70">SOL: {wallet.solBalance.toFixed(3)}</span>

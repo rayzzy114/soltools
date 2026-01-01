@@ -34,6 +34,7 @@ async function saveWalletToDB(wallet: BundlerWallet): Promise<void> {
     update: {
       secretKey: wallet.secretKey,
       label: wallet.label || null,
+      role: wallet.role || undefined,
       solBalance: wallet.solBalance.toString(),
       tokenBalance: wallet.tokenBalance.toString(),
       isActive: wallet.isActive,
@@ -42,6 +43,7 @@ async function saveWalletToDB(wallet: BundlerWallet): Promise<void> {
       publicKey: wallet.publicKey,
       secretKey: wallet.secretKey,
       label: wallet.label || null,
+      role: wallet.role || "project",
       solBalance: wallet.solBalance.toString(),
       tokenBalance: wallet.tokenBalance.toString(),
       isActive: wallet.isActive,
@@ -63,6 +65,7 @@ async function loadWalletsFromDB(): Promise<BundlerWallet[]> {
       tokenBalance: parseFloat(w.tokenBalance),
       isActive: w.isActive,
       label: w.label || undefined,
+      role: w.role || "project",
     }))
   } catch (error) {
     console.error("failed to load wallets from DB:", error)
@@ -201,9 +204,9 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // update wallet (label, isActive)
+    // update wallet (label, isActive, role)
     if (action === "update") {
-      const { publicKey, label, isActive } = body
+      const { publicKey, label, isActive, role } = body
       if (!publicKey) {
         return NextResponse.json({ error: "publicKey required" }, { status: 400 })
       }
@@ -214,6 +217,7 @@ export async function POST(request: NextRequest) {
           data: {
             ...(label !== undefined && { label }),
             ...(isActive !== undefined && { isActive }),
+            ...(role !== undefined && { role }),
           },
         })
 
@@ -225,6 +229,7 @@ export async function POST(request: NextRequest) {
             tokenBalance: parseFloat(wallet.tokenBalance),
             isActive: wallet.isActive,
             label: wallet.label || undefined,
+            role: wallet.role || "project",
           },
         })
       } catch (error: any) {
