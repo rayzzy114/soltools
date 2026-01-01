@@ -185,6 +185,23 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // delete multiple wallets (batch)
+    if (action === "delete-batch") {
+      const { publicKeys } = body
+      if (!publicKeys || !Array.isArray(publicKeys) || publicKeys.length === 0) {
+        return NextResponse.json({ error: "publicKeys array required" }, { status: 400 })
+      }
+
+      try {
+        const result = await prisma.wallet.deleteMany({
+          where: { publicKey: { in: publicKeys } },
+        })
+        return NextResponse.json({ success: true, count: result.count })
+      } catch (error: any) {
+        return NextResponse.json({ error: error.message }, { status: 400 })
+      }
+    }
+
     // collect SOL back
     if (action === "collect") {
       const { wallets, recipientAddress } = body
