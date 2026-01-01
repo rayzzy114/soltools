@@ -13,6 +13,7 @@ import {
   getAssociatedTokenAddress,
   createAssociatedTokenAccountIdempotentInstruction,
   TOKEN_PROGRAM_ID,
+  AccountLayout,
 } from "@solana/spl-token"
 import { connection, SOLANA_NETWORK } from "./config"
 import {
@@ -393,48 +394,102 @@ export function getKeypair(wallet: BundlerWallet): Keypair {
 }
 
 /**
- * refresh wallet balances
+ * refresh wallet balances (optimized with getMultipleAccounts)
  */
 export async function refreshWalletBalances(
   wallets: BundlerWallet[],
   mintAddress?: string
 ): Promise<BundlerWallet[]> {
+  const chunks = chunkArray(wallets, 100) // RPC limit is 100 accounts per call
+  const updatedWallets: BundlerWallet[] = []
   const mint = mintAddress ? new PublicKey(mintAddress) : null
 
-  const updated = await mapWithLimit(wallets, RPC_REFRESH_CONCURRENCY, async (wallet) => {
+  for (const chunk of chunks) {
     try {
-      const pubkey = new PublicKey(wallet.publicKey)
+      const pubkeys = chunk.map(w => new PublicKey(w.publicKey))
 
-      // get SOL balance
-      const solBalance = await rpcWithRetry(() => connection.getBalance(pubkey))
+      // 1. Fetch SOL balances
+      const solAccounts = await rpcWithRetry(() => connection.getMultipleAccountsInfo(pubkeys))
 
-      // get token balance
-      let tokenBalance = 0
-      let ataExists: boolean | undefined = undefined
+      // 2. Fetch Token balances (if mint provided)
+      let tokenAccounts: (any | null)[] = []
+      let ataAddresses: PublicKey[] = []
+
       if (mint) {
-        try {
-          const ata = await getAssociatedTokenAddress(mint, pubkey, false)
-          const tokenAccount = await rpcWithRetry(() => connection.getTokenAccountBalance(ata))
-          tokenBalance = tokenAccount.value.uiAmount || 0
-          ataExists = true
-        } catch {
-          ataExists = false
-        }
+        ataAddresses = await Promise.all(
+          pubkeys.map(owner => getAssociatedTokenAddress(mint, owner, false))
+        )
+        tokenAccounts = await rpcWithRetry(() => connection.getMultipleAccountsInfo(ataAddresses))
       }
 
-      return {
-        ...wallet,
-        solBalance: solBalance / LAMPORTS_PER_SOL,
-        tokenBalance,
-        ...(mint ? { ataExists } : {}),
+      // 3. Map results
+      for (let i = 0; i < chunk.length; i++) {
+        const wallet = chunk[i]
+        const solAccount = solAccounts[i]
+
+        // SOL Balance
+        const solBalance = solAccount ? solAccount.lamports / LAMPORTS_PER_SOL : 0
+
+        // Token Balance
+        let tokenBalance = 0
+        let ataExists = false
+
+        if (mint) {
+          const tokenAccount = tokenAccounts[i]
+          if (tokenAccount) {
+            ataExists = true
+            try {
+              // Parse SPL Token account data
+              const rawAccount = AccountLayout.decode(tokenAccount.data)
+              const amount = BigInt(rawAccount.amount) // amount is bigint or u64 buffer
+              tokenBalance = Number(amount) / (10 ** TOKEN_DECIMALS) // Assuming 6 decimals for pump.fun tokens
+            } catch (e) {
+              console.error(`Failed to parse token account for ${wallet.publicKey}:`, e)
+            }
+          }
+        }
+
+        updatedWallets.push({
+          ...wallet,
+          solBalance,
+          tokenBalance: mint ? tokenBalance : wallet.tokenBalance, // preserve old token balance if no mint
+          ...(mint ? { ataExists } : {})
+        })
       }
     } catch (error) {
-      console.error(`error refreshing wallet ${wallet.publicKey}:`, error)
-      return wallet
+      console.error("Batch refresh failed, falling back to individual:", error)
+      // Fallback to original individual refresh for this chunk if batch fails
+      const fallbackChunk = await mapWithLimit(chunk, RPC_REFRESH_CONCURRENCY, async (wallet) => {
+         try {
+           const pubkey = new PublicKey(wallet.publicKey)
+           const solBalance = await rpcWithRetry(() => connection.getBalance(pubkey))
+           let tokenBalance = 0
+           let ataExists: boolean | undefined = undefined
+           if (mint) {
+             try {
+               const ata = await getAssociatedTokenAddress(mint, pubkey, false)
+               const tokenAccount = await rpcWithRetry(() => connection.getTokenAccountBalance(ata))
+               tokenBalance = tokenAccount.value.uiAmount || 0
+               ataExists = true
+             } catch {
+               ataExists = false
+             }
+           }
+           return {
+             ...wallet,
+             solBalance: solBalance / LAMPORTS_PER_SOL,
+             tokenBalance,
+             ...(mint ? { ataExists } : {})
+           }
+         } catch {
+           return wallet
+         }
+      })
+      updatedWallets.push(...fallbackChunk)
     }
-  })
+  }
 
-  return updated
+  return updatedWallets
 }
 
 /**
