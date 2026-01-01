@@ -2072,7 +2072,7 @@ export default function DashboardPage() {
                   </div>
                 </div>
 
-                <div className="">
+                <div className="resize-y overflow-auto min-h-[120px] p-1 border border-transparent hover:border-neutral-800 transition-colors">
                   <div className="grid grid-cols-6 sm:grid-cols-8 lg:grid-cols-12 gap-1 auto-rows-min">
                     {activeWallets.length === 0 ? (
                       <div className="col-span-full text-xs text-neutral-500">No active wallets</div>
@@ -2086,11 +2086,11 @@ export default function DashboardPage() {
                       >
                         <div className="flex items-center justify-between gap-1">
                           <div className="text-[9px] truncate" style={{ color: "#000", fontWeight: 700 }}>
-                            {wallet.label || `Wallet ${index + 1}`}
+                            {index + 1}. {wallet.label || 'Wallet'}
                           </div>
                           {wallet.role && wallet.role !== 'project' && (
-                             <span className="text-[8px] bg-orange-100 text-orange-800 px-0.5 rounded uppercase">
-                               {wallet.role.slice(0, 1)}
+                             <span className="text-[8px] bg-orange-100 text-orange-800 px-1 rounded uppercase min-w-[20px] text-center truncate max-w-[40px]">
+                               {wallet.role}
                              </span>
                           )}
                         </div>
