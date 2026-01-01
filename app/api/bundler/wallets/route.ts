@@ -29,29 +29,24 @@ const sanitizeWallet = (wallet: BundlerWallet): BundlerWallet => {
 
 // helper: save wallet to DB
 async function saveWalletToDB(wallet: BundlerWallet): Promise<void> {
-  try {
-    await prisma.wallet.upsert({
-      where: { publicKey: wallet.publicKey },
-      update: {
-        secretKey: wallet.secretKey,
-        label: wallet.label || null,
-        solBalance: wallet.solBalance.toString(),
-        tokenBalance: wallet.tokenBalance.toString(),
-        isActive: wallet.isActive,
-      },
-      create: {
-        publicKey: wallet.publicKey,
-        secretKey: wallet.secretKey,
-        label: wallet.label || null,
-        solBalance: wallet.solBalance.toString(),
-        tokenBalance: wallet.tokenBalance.toString(),
-        isActive: wallet.isActive,
-      },
-    })
-  } catch (error) {
-    console.error("failed to save wallet to DB:", error)
-    // не бросаем ошибку, чтобы не ломать основной flow
-  }
+  await prisma.wallet.upsert({
+    where: { publicKey: wallet.publicKey },
+    update: {
+      secretKey: wallet.secretKey,
+      label: wallet.label || null,
+      solBalance: wallet.solBalance.toString(),
+      tokenBalance: wallet.tokenBalance.toString(),
+      isActive: wallet.isActive,
+    },
+    create: {
+      publicKey: wallet.publicKey,
+      secretKey: wallet.secretKey,
+      label: wallet.label || null,
+      solBalance: wallet.solBalance.toString(),
+      tokenBalance: wallet.tokenBalance.toString(),
+      isActive: wallet.isActive,
+    },
+  })
 }
 
 // helper: load wallets from DB
@@ -95,10 +90,22 @@ export async function GET(request: NextRequest) {
     // generate multiple wallets
     if (action === "generate-multiple") {
       const count = parseInt(searchParams.get("count") || "5")
-      const wallets = generateWallets(Math.min(count, 20))
-      // автосохранение всех кошельков в БД
-      await Promise.all(wallets.map(w => saveWalletToDB(w)))
-      return NextResponse.json({ wallets: wallets.map(sanitizeWallet) })
+      // Increase limit to 100 as requested
+      const safeCount = Math.min(Math.max(count, 1), 100)
+
+      // Get current wallet count for correct labeling
+      const currentCount = await prisma.wallet.count()
+
+      const wallets = generateWallets(safeCount, currentCount)
+
+      // Save all wallets to DB, abort if any fail
+      try {
+        await Promise.all(wallets.map(w => saveWalletToDB(w)))
+        return NextResponse.json({ wallets: wallets.map(sanitizeWallet) })
+      } catch (dbError: any) {
+        logger.error({ correlationId, error: dbError?.message }, "failed to save generated wallets to DB")
+        return NextResponse.json({ error: "Failed to persist wallets to database" }, { status: 500 })
+      }
     }
 
     // load all wallets from DB

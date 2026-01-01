@@ -320,6 +320,43 @@ export default function WalletToolsPage() {
     }
   }, [publicKey, funderWalletRecord, funderTopupAmount, sendTransaction])
 
+  const topUpGasFunder = useCallback(async () => {
+    if (!funderKey) {
+      toast.error("enter funder key first")
+      return
+    }
+    if (!connected || !publicKey) {
+      toast.error("connect wallet first")
+      return
+    }
+
+    try {
+      const { Keypair } = await import("@solana/web3.js")
+      const bs58 = (await import("bs58")).default
+      const funderPubkey = Keypair.fromSecretKey(bs58.decode(funderKey)).publicKey
+
+      const amountStr = prompt("Enter amount to top up (SOL):", "1")
+      if (!amountStr) return
+      const amount = parseFloat(amountStr)
+      if (!amount || amount <= 0) return
+
+      const connection = await getResilientConnection()
+      const tx = new Transaction().add(
+        SystemProgram.transfer({
+          fromPubkey: publicKey,
+          toPubkey: funderPubkey,
+          lamports: amount * LAMPORTS_PER_SOL
+        })
+      )
+
+      const sig = await sendTransaction(tx, connection)
+      await connection.confirmTransaction(sig, "confirmed")
+      toast.success(`top up sent: ${sig.slice(0, 8)}...`)
+    } catch (error: any) {
+      toast.error(`top up failed: ${error.message}`)
+    }
+  }, [funderKey, connected, publicKey, sendTransaction])
+
   const generateWallets = useCallback(async () => {
     try {
       const count = parseInt(walletCount) || 5
@@ -759,14 +796,46 @@ export default function WalletToolsPage() {
                   <Switch checked={useConnectedFunder} onCheckedChange={setUseConnectedFunder} />
                 </div>
               </div>
-              <Input
-                type="password"
-                placeholder="funder wallet private key"
-                value={funderKey}
-                onChange={(e) => setFunderKey(e.target.value)}
-                disabled={useConnectedFunder}
-                className="h-7 bg-background border-border text-xs"
-              />
+              <div className="flex gap-2">
+                <Input
+                  type="password"
+                  placeholder="funder wallet private key"
+                  value={funderKey}
+                  onChange={(e) => setFunderKey(e.target.value)}
+                  disabled={useConnectedFunder}
+                  className="h-7 bg-background border-border text-xs"
+                />
+                {!useConnectedFunder && (
+                  <>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-7 px-2 border-neutral-700 text-[10px]"
+                      onClick={async () => {
+                        try {
+                          const { Keypair } = await import("@solana/web3.js")
+                          const bs58 = (await import("bs58")).default
+                          const keypair = Keypair.generate()
+                          setFunderKey(bs58.encode(keypair.secretKey))
+                          toast.success("Generated new funder wallet")
+                        } catch {
+                          toast.error("Failed to generate funder wallet")
+                        }
+                      }}
+                    >
+                      Gen
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-7 px-2 border-neutral-700 text-[10px] bg-green-900/20 text-green-400"
+                      onClick={topUpGasFunder}
+                    >
+                      TopUp
+                    </Button>
+                  </>
+                )}
+              </div>
             </div>
             <div className="text-[9px] text-slate-500">
               Gas funder: {useConnectedFunder
