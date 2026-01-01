@@ -1,10 +1,8 @@
-# syntax=docker/dockerfile:1.7
-
 ##
 ## Multi-stage build for Next.js (App Router) + pnpm + Prisma
 ##
 
-FROM node:23-alpine AS base
+FROM node:24-alpine AS base
 WORKDIR /app
 ENV NODE_ENV=production
 
@@ -12,17 +10,25 @@ ENV NODE_ENV=production
 RUN apk add --no-cache libc6-compat openssl
 
 FROM base AS deps
+RUN apk add --no-cache python3 make g++ linux-headers libusb-dev eudev-dev
 ENV PNPM_HOME=/pnpm
 ENV PATH=$PNPM_HOME:$PATH
+ENV HUSKY=0
 RUN corepack enable
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml* ./
-RUN pnpm install --frozen-lockfile
+RUN pnpm install --frozen-lockfile --ignore-scripts
 
 FROM base AS builder
 ENV PNPM_HOME=/pnpm
 ENV PATH=$PNPM_HOME:$PATH
 RUN corepack enable
+ARG DATABASE_URL
+ARG RPC
+ARG NEXT_PUBLIC_SOLANA_NETWORK
+ENV DATABASE_URL=$DATABASE_URL
+ENV RPC=$RPC
+ENV NEXT_PUBLIC_SOLANA_NETWORK=$NEXT_PUBLIC_SOLANA_NETWORK
 
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
