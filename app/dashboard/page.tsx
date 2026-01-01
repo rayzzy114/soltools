@@ -2072,19 +2072,28 @@ export default function DashboardPage() {
                   </div>
                 </div>
 
-                <div className="max-h-20 overflow-y-auto">
+                <div className="">
                   <div className="grid grid-cols-6 sm:grid-cols-8 lg:grid-cols-12 gap-1 auto-rows-min">
                     {activeWallets.length === 0 ? (
                       <div className="col-span-full text-xs text-neutral-500">No active wallets</div>
                     ) : (
-                      activeWallets.map((wallet) => (
+                      activeWallets.map((wallet, index) => (
                       <button
                         key={wallet.publicKey}
                         type="button"
                         onClick={() => setQuickTradeWallet(wallet)}
                         className="h-10 rounded border border-orange-500 bg-white p-1 text-left text-[9px] leading-tight hover:border-orange-400 transition"
                       >
-                        <div className="text-[9px]" style={{ color: "#000", fontWeight: 700 }}>Wallet</div>
+                        <div className="flex items-center justify-between gap-1">
+                          <div className="text-[9px] truncate" style={{ color: "#000", fontWeight: 700 }}>
+                            {wallet.label || `Wallet ${index + 1}`}
+                          </div>
+                          {wallet.role && wallet.role !== 'project' && (
+                             <span className="text-[8px] bg-orange-100 text-orange-800 px-0.5 rounded uppercase">
+                               {wallet.role.slice(0, 1)}
+                             </span>
+                          )}
+                        </div>
                         <div className="font-mono text-[9px] text-neutral-900 truncate">
                           {wallet.publicKey.slice(0, 6)}...{wallet.publicKey.slice(-4)}
                         </div>
