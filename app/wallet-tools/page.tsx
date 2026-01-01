@@ -51,7 +51,6 @@ export default function WalletToolsPage() {
   const [tokens, setTokens] = useState<Token[]>([])
   const [selectedToken, setSelectedToken] = useState<Token | null>(null)
   const [bundlerWallets, setBundlerWallets] = useState<BundlerWallet[]>([])
-  const [selectedWallets, setSelectedWallets] = useState<Set<string>>(new Set())
   const [walletCount, setWalletCount] = useState("5")
   const [manualBuyAmount, setManualBuyAmount] = useState("0.01")
   const [manualSellPercent, setManualSellPercent] = useState("100")
@@ -71,11 +70,6 @@ export default function WalletToolsPage() {
   const [volumeBotConfig] = useState({ pairId: "", mintAddress: "" })
 
   const activeWallets = useMemo(() => bundlerWallets.filter(w => w.isActive), [bundlerWallets])
-  const selectedActiveWallets = useMemo(
-    () => activeWallets.filter(w => selectedWallets.has(w.publicKey)),
-    [activeWallets, selectedWallets]
-  )
-  const selectedWalletCount = selectedActiveWallets.length
   const selectedTokenValue = selectedToken?.mintAddress || ""
 
   const normalizeTokenList = useCallback((data: any[]): Token[] => {
@@ -381,26 +375,6 @@ export default function WalletToolsPage() {
     }
   }, [bundlerWallets, loadSavedWallets])
 
-  const toggleWalletSelection = useCallback((publicKey: string) => {
-    setSelectedWallets(prev => {
-      const newSet = new Set(prev)
-      if (newSet.has(publicKey)) {
-        newSet.delete(publicKey)
-      } else {
-        newSet.add(publicKey)
-      }
-      return newSet
-    })
-  }, [])
-
-  const selectAllWallets = useCallback(() => {
-    setSelectedWallets(new Set(activeWallets.map(w => w.publicKey)))
-  }, [activeWallets])
-
-  const clearSelectedWallets = useCallback(() => {
-    setSelectedWallets(new Set())
-  }, [])
-
   const saveManualTradeSettings = useCallback(() => {
     if (typeof window === "undefined") return
     window.localStorage.setItem("dashboardManualBuyAmount", manualBuyAmount)
@@ -622,40 +596,11 @@ export default function WalletToolsPage() {
 
   useEffect(() => {
     if (typeof window === "undefined") return
-    const stored = window.localStorage.getItem(WALLET_SELECTION_STORAGE_KEY)
-    if (!stored) return
-    try {
-      const parsed = JSON.parse(stored)
-      if (Array.isArray(parsed)) {
-        setSelectedWallets(new Set(parsed))
-      }
-    } catch {
-      // ignore
-    }
-  }, [])
-
-  useEffect(() => {
-    if (typeof window === "undefined") return
     const savedBuy = window.localStorage.getItem("dashboardManualBuyAmount")
     const savedSell = window.localStorage.getItem("dashboardManualSellPercent")
     if (savedBuy) setManualBuyAmount(savedBuy)
     if (savedSell) setManualSellPercent(savedSell)
   }, [])
-
-  useEffect(() => {
-    if (typeof window === "undefined") return
-    window.localStorage.setItem(WALLET_SELECTION_STORAGE_KEY, JSON.stringify([...selectedWallets]))
-  }, [selectedWallets])
-
-  useEffect(() => {
-    if (bundlerWallets.length === 0) return
-    setSelectedWallets(prev => {
-      if (prev.size === 0) return prev
-      const existing = new Set(bundlerWallets.map(wallet => wallet.publicKey))
-      const next = new Set([...prev].filter((key) => existing.has(key)))
-      return next.size === prev.size ? prev : next
-    })
-  }, [bundlerWallets])
 
   return (
     <div className="p-2 space-y-2">
@@ -900,7 +845,7 @@ export default function WalletToolsPage() {
               </TooltipProvider>
             </div>
           </div>
-          <div className="text-[10px] text-slate-400">Selected: {selectedWalletCount}/{activeWallets.length} active</div>
+          <div className="text-[10px] text-slate-400">Active: {activeWallets.length}</div>
         </CardHeader>
         <CardContent className="px-2 pb-2">
           <div className="grid grid-cols-2 gap-2 mb-2">
@@ -944,20 +889,8 @@ export default function WalletToolsPage() {
               Save
             </Button>
           </div>
-          <div className="flex items-center gap-2 mb-2 pb-1 border-b border-slate-800">
-            <input
-              type="checkbox"
-              className="h-3 w-3 accent-cyan-500"
-              checked={selectedWalletCount === activeWallets.length && activeWallets.length > 0}
-              onChange={(e) => {
-                if (e.target.checked) {
-                  selectAllWallets()
-                } else {
-                  clearSelectedWallets()
-                }
-              }}
-            />
-            <span className="text-[10px] text-slate-400">Select All ({selectedWalletCount}/{activeWallets.length})</span>
+          <div className="flex items-center justify-between mb-2 pb-1 border-b border-slate-800">
+             <div className="text-[10px] text-slate-400">Total Wallets: {bundlerWallets.length}</div>
           </div>
           <div className="space-y-1 max-h-64 overflow-y-auto">
             {bundlerWallets.length === 0 ? (
@@ -971,37 +904,30 @@ export default function WalletToolsPage() {
                   }`}
                 >
                   <div className="flex items-center gap-2 min-w-0">
-                        <div className="text-[10px] text-slate-500 w-4 text-center">{index + 1}</div>
-                    <input
-                      type="checkbox"
-                      className="h-3 w-3 accent-cyan-500 disabled:opacity-50"
-                      checked={selectedWallets.has(wallet.publicKey)}
-                      onChange={() => toggleWalletSelection(wallet.publicKey)}
-                      disabled={!wallet.isActive}
-                    />
+                        <div className="text-[10px] text-neutral-700 w-5 text-center font-bold">#{index + 1}</div>
                     <div className="min-w-0">
                       <div className="flex items-center gap-2">
-                          <div className="text-neutral-400 font-mono truncate">
+                          <div className="text-neutral-900 font-mono truncate font-bold">
                             {wallet.publicKey.slice(0, 8)}...{wallet.publicKey.slice(-4)}
                           </div>
                               {/* Role Badges */}
                           {wallet.role === 'dev' && (
-                                  <Badge variant="outline" className="h-4 px-1 text-[9px] border-purple-500/50 text-purple-400 bg-purple-500/10">DEV</Badge>
+                                  <Badge variant="outline" className="h-4 px-1 text-[9px] border-purple-500 text-purple-400 bg-purple-500/10">DEV</Badge>
                           )}
                           {wallet.role === 'buyer' && (
-                                  <Badge variant="outline" className="h-4 px-1 text-[9px] border-blue-500/50 text-blue-400 bg-blue-500/10">BUYER</Badge>
+                                  <Badge variant="outline" className="h-4 px-1 text-[9px] border-cyan-500 text-cyan-400 bg-cyan-500/10">BUYER</Badge>
                           )}
-                          {wallet.role === 'funding' && (
-                                  <Badge variant="outline" className="h-4 px-1 text-[9px] border-green-500/50 text-green-400 bg-green-500/10">FUNDER</Badge>
+                          {wallet.role === 'funder' && (
+                                  <Badge variant="outline" className="h-4 px-1 text-[9px] border-green-500 text-green-400 bg-green-500/10">FUNDER</Badge>
                           )}
                           {wallet.role === 'volume_bot' && (
-                                  <Badge variant="outline" className="h-4 px-1 text-[9px] border-orange-500/50 text-orange-400 bg-orange-500/10">BOT</Badge>
+                                  <Badge variant="outline" className="h-4 px-1 text-[9px] border-orange-500 text-orange-400 bg-orange-500/10">BOT</Badge>
                           )}
                       </div>
-                      <div className="flex gap-2 text-[10px] text-slate-500">
-                        <span className="text-emerald-300/70">SOL: {wallet.solBalance.toFixed(3)}</span>
-                        <span className="text-cyan-300/70">Tokens: {wallet.tokenBalance.toFixed(2)}</span>
-                        <span className={wallet.ataExists ? "text-green-300/70" : "text-red-300/70"}>
+                      <div className="flex gap-2 text-[10px] text-neutral-600 font-medium">
+                        <span className="text-emerald-700">SOL: {wallet.solBalance.toFixed(3)}</span>
+                        <span className="text-cyan-700">Tokens: {wallet.tokenBalance.toFixed(2)}</span>
+                        <span className={wallet.ataExists ? "text-green-700" : "text-red-600"}>
                           ATA: {wallet.ataExists ? "yes" : "no"}
                         </span>
                       </div>

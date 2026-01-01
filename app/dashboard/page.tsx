@@ -2077,28 +2077,52 @@ export default function DashboardPage() {
                     {activeWallets.length === 0 ? (
                       <div className="col-span-full text-xs text-neutral-500">No active wallets</div>
                     ) : (
-                      activeWallets.map((wallet, index) => (
-                      <button
-                        key={wallet.publicKey}
-                        type="button"
-                        onClick={() => setQuickTradeWallet(wallet)}
-                        className="h-10 rounded border border-orange-500 bg-white p-1 text-left text-[9px] leading-tight hover:border-orange-400 transition"
-                      >
-                        <div className="flex items-center justify-between gap-1">
-                          <div className="text-[9px] truncate" style={{ color: "#000", fontWeight: 700 }}>
-                            {index + 1}. {wallet.label || 'Wallet'}
-                          </div>
-                          {wallet.role && wallet.role !== 'project' && (
-                             <span className="text-[8px] bg-orange-100 text-orange-800 px-1 rounded uppercase min-w-[20px] text-center truncate max-w-[40px]">
-                               {wallet.role}
-                             </span>
-                          )}
-                        </div>
-                        <div className="font-mono text-[9px] text-neutral-900 truncate">
-                          {wallet.publicKey.slice(0, 6)}...{wallet.publicKey.slice(-4)}
-                        </div>
-                      </button>
-                    ))
+                      activeWallets.map((wallet, index) => {
+                        let borderColor = "border-slate-500"
+                        let badgeBg = "bg-slate-100"
+                        let badgeText = "text-slate-800"
+
+                        if (wallet.role === 'dev') {
+                          borderColor = "border-purple-500 hover:border-purple-400"
+                          badgeBg = "bg-purple-100"
+                          badgeText = "text-purple-800"
+                        } else if (wallet.role === 'buyer') {
+                          borderColor = "border-cyan-500 hover:border-cyan-400"
+                          badgeBg = "bg-cyan-100"
+                          badgeText = "text-cyan-800"
+                        } else if (wallet.role === 'funder') {
+                          borderColor = "border-green-500 hover:border-green-400"
+                          badgeBg = "bg-green-100"
+                          badgeText = "text-green-800"
+                        } else if (wallet.role === 'volume_bot' || wallet.role === 'bot') {
+                          borderColor = "border-orange-500 hover:border-orange-400"
+                          badgeBg = "bg-orange-100"
+                          badgeText = "text-orange-800"
+                        }
+
+                        return (
+                          <button
+                            key={wallet.publicKey}
+                            type="button"
+                            onClick={() => setQuickTradeWallet(wallet)}
+                            className={`h-10 rounded border ${borderColor} bg-white p-1 text-left text-[9px] leading-tight transition`}
+                          >
+                            <div className="flex items-center justify-between gap-1">
+                              <div className="text-[9px] truncate" style={{ color: "#000", fontWeight: 700 }}>
+                                {index + 1}. {wallet.label || 'Wallet'}
+                              </div>
+                              {wallet.role && wallet.role !== 'project' && (
+                                <span className={`text-[8px] ${badgeBg} ${badgeText} px-1 rounded uppercase min-w-[20px] text-center truncate max-w-[40px]`}>
+                                  {wallet.role}
+                                </span>
+                              )}
+                            </div>
+                            <div className="font-mono text-[9px] text-neutral-900 truncate">
+                              {wallet.publicKey.slice(0, 6)}...{wallet.publicKey.slice(-4)}
+                            </div>
+                          </button>
+                        )
+                      })
                   )}
                   </div>
                 </div>
@@ -2532,13 +2556,31 @@ export default function DashboardPage() {
                     <SelectValue placeholder="Pick dev wallet" />
                   </SelectTrigger>
                   <SelectContent>
-                    {devWalletOptions.map((wallet) => {
+                    {devWalletOptions.map((wallet, index) => {
                       const isConnectedWallet = connectedWalletKey.length > 0 && wallet.publicKey === connectedWalletKey
                       const labelPrefix = isConnectedWallet ? "Connected" : "Balance"
-                      const roleSuffix = wallet.role && wallet.role !== 'project' ? ` [${wallet.role.toUpperCase()}]` : ""
+
+                      let roleColor = "text-slate-400"
+                      let roleLabel = ""
+                      if (wallet.role === 'dev') { roleColor = "text-purple-400"; roleLabel = "DEV" }
+                      else if (wallet.role === 'buyer') { roleColor = "text-cyan-400"; roleLabel = "BUYER" }
+                      else if (wallet.role === 'funder') { roleColor = "text-green-400"; roleLabel = "FUNDER" }
+                      else if (wallet.role === 'volume_bot') { roleColor = "text-orange-400"; roleLabel = "BOT" }
+                      else if (wallet.role && wallet.role !== 'project') { roleLabel = wallet.role.toUpperCase() }
+
                       return (
                         <SelectItem key={wallet.publicKey} value={wallet.publicKey}>
-                          {labelPrefix}: {wallet.solBalance.toFixed(4)} SOL - {wallet.publicKey.slice(0, 6)}...{wallet.publicKey.slice(-4)}{roleSuffix}
+                          <div className="flex items-center gap-2">
+                            <span className="text-neutral-600 font-bold font-mono text-[10px]">#{index + 1}</span>
+                            <span className="text-neutral-800 font-medium">{labelPrefix}: {wallet.solBalance.toFixed(4)} SOL</span>
+                            <span className="text-neutral-400">-</span>
+                            <span className="font-mono text-neutral-900 font-semibold">{wallet.publicKey.slice(0, 6)}...{wallet.publicKey.slice(-4)}</span>
+                            {roleLabel && (
+                              <span className={`text-[9px] font-bold ${roleColor} border border-current px-1 rounded`}>
+                                {roleLabel}
+                              </span>
+                            )}
+                          </div>
                         </SelectItem>
                       )
                     })}
