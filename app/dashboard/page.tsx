@@ -201,6 +201,9 @@ export default function DashboardPage() {
   const getPairStorageKey = useCallback((mint: string) => `volume_bot_pair_${mint}`, [])
   const getLastTokenKey = useCallback(() => "dashboardLastTokenMint", [])
 
+  // Ref for auto-selection to break dependency cycles
+  const hasAutoSelectedRef = useRef(false)
+
   const activeWallets = useMemo(() => bundlerWallets.filter(w => w.isActive), [bundlerWallets])
   const connectedWalletKey = publicKey?.toBase58() || ""
   const connectedDevWallet = useMemo(() => {
@@ -1696,53 +1699,63 @@ export default function DashboardPage() {
       if (tradesData && Array.isArray(tradesData)) {
         setTrades(tradesData)
       }
-      // Auto-select first token if available
-        let resolvedToken = selectedToken
-        if (tokensData && tokensData.length > 0 && !selectedToken) {
-          let preferredMint: string | null = null
-          if (typeof window !== "undefined") {
-            preferredMint = window.localStorage.getItem(getLastTokenKey())
-          }
-          const preferredToken = preferredMint
-            ? tokensData.find((t: any) => t.mintAddress === preferredMint)
-            : null
-          resolvedToken = preferredToken || tokensData[0]
-          setSelectedToken(resolvedToken)
-        }
 
       setLoading(false)
     } catch (error) {
       console.error("Error fetching dashboard data:", error)
       setLoading(false)
     }
-  }, [selectedToken, getLastTokenKey, normalizeTokenList])
+  }, [normalizeTokenList])
 
+  // Auto-select token logic moved here to avoid cycles
   useEffect(() => {
-    if (!selectedToken?.mintAddress || tokens.length === 0) return
-    const updated = tokens.find((token) => token.mintAddress === selectedToken.mintAddress)
-    if (!updated) return
-    setSelectedToken((prev) => {
-      if (!prev || prev.mintAddress !== updated.mintAddress) return prev
-      const merged: Token = {
-        ...updated,
-        status: updated.status || prev.status,
-        price: updated.price || prev.price,
-        change: updated.change || prev.change,
-      }
-      if (
-        prev.name === merged.name &&
-        prev.symbol === merged.symbol &&
-        prev.description === merged.description &&
-        prev.imageUrl === merged.imageUrl &&
-        prev.status === merged.status &&
-        prev.price === merged.price &&
-        prev.change === merged.change
-      ) {
-        return prev
-      }
-      return merged
-    })
-  }, [tokens, selectedToken?.mintAddress])
+    if (tokens.length === 0) return
+
+    // Case 1: No token selected, try auto-select
+    if (!selectedToken && !hasAutoSelectedRef.current) {
+        let preferredMint: string | null = null
+        if (typeof window !== "undefined") {
+          preferredMint = window.localStorage.getItem(getLastTokenKey())
+        }
+        const preferredToken = preferredMint
+          ? tokens.find((t) => t.mintAddress === preferredMint)
+          : null
+        const target = preferredToken || tokens[0]
+        if (target) {
+            setSelectedToken(target)
+            hasAutoSelectedRef.current = true
+        }
+        return
+    }
+
+    // Case 2: Update existing selected token with new data
+    if (selectedToken?.mintAddress) {
+        const updated = tokens.find((token) => token.mintAddress === selectedToken.mintAddress)
+        if (!updated) return
+
+        setSelectedToken((prev) => {
+          if (!prev || prev.mintAddress !== updated.mintAddress) return prev
+          const merged: Token = {
+            ...updated,
+            status: updated.status || prev.status,
+            price: updated.price || prev.price,
+            change: updated.change || prev.change,
+          }
+          if (
+            prev.name === merged.name &&
+            prev.symbol === merged.symbol &&
+            prev.description === merged.description &&
+            prev.imageUrl === merged.imageUrl &&
+            prev.status === merged.status &&
+            prev.price === merged.price &&
+            prev.change === merged.change
+          ) {
+            return prev
+          }
+          return merged
+        })
+    }
+  }, [tokens, selectedToken?.mintAddress, selectedToken, getLastTokenKey])
 
   useEffect(() => {
     if (!selectedToken?.mintAddress) return
