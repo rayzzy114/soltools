@@ -170,6 +170,7 @@ model Wallet {
   publicKey    String              @unique
   secretKey    String
   label        String?
+  role         String              @default("project")
   solBalance   String              @default("0")
   tokenBalance String              @default("0")
   isActive     Boolean             @default(true)
