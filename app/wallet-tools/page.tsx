@@ -963,7 +963,7 @@ export default function WalletToolsPage() {
             {bundlerWallets.length === 0 ? (
               <div className="text-slate-400 text-xs p-2 text-center">No wallets loaded</div>
             ) : (
-              bundlerWallets.map((wallet) => (
+                  bundlerWallets.map((wallet, index) => (
                 <div
                   key={wallet.publicKey}
                   className={`p-2 rounded border text-[11px] flex items-center justify-between ${
@@ -971,6 +971,7 @@ export default function WalletToolsPage() {
                   }`}
                 >
                   <div className="flex items-center gap-2 min-w-0">
+                        <div className="text-[10px] text-slate-500 w-4 text-center">{index + 1}</div>
                     <input
                       type="checkbox"
                       className="h-3 w-3 accent-cyan-500 disabled:opacity-50"
@@ -983,21 +984,18 @@ export default function WalletToolsPage() {
                           <div className="text-neutral-400 font-mono truncate">
                             {wallet.publicKey.slice(0, 8)}...{wallet.publicKey.slice(-4)}
                           </div>
-                          {/* Role Icon */}
+                              {/* Role Badges */}
                           {wallet.role === 'dev' && (
-                              <Key className="w-3 h-3 text-purple-400" aria-label="Dev Wallet" title="Dev Wallet" />
+                                  <Badge variant="outline" className="h-4 px-1 text-[9px] border-purple-500/50 text-purple-400 bg-purple-500/10">DEV</Badge>
                           )}
                           {wallet.role === 'buyer' && (
-                              <User className="w-3 h-3 text-blue-400" aria-label="Buyer Wallet" title="Buyer Wallet" />
+                                  <Badge variant="outline" className="h-4 px-1 text-[9px] border-blue-500/50 text-blue-400 bg-blue-500/10">BUYER</Badge>
                           )}
                           {wallet.role === 'funding' && (
-                              <Wallet className="w-3 h-3 text-green-400" aria-label="Funding Wallet" title="Funding Wallet" />
+                                  <Badge variant="outline" className="h-4 px-1 text-[9px] border-green-500/50 text-green-400 bg-green-500/10">FUNDER</Badge>
                           )}
                           {wallet.role === 'volume_bot' && (
-                              <RefreshCw className="w-3 h-3 text-orange-400" aria-label="Volume Bot" title="Volume Bot" />
-                          )}
-                          {(!wallet.role || wallet.role === 'project') && (
-                              <Briefcase className="w-3 h-3 text-slate-500" aria-label="Project Wallet" title="Project Wallet" />
+                                  <Badge variant="outline" className="h-4 px-1 text-[9px] border-orange-500/50 text-orange-400 bg-orange-500/10">BOT</Badge>
                           )}
                       </div>
                       <div className="flex gap-2 text-[10px] text-slate-500">

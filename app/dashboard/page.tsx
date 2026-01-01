@@ -2106,7 +2106,7 @@ export default function DashboardPage() {
                 </CardTitle>
               </CardHeader>
               <CardContent className="px-2 pb-2">
-                <div className="space-y-1 max-h-24 overflow-y-auto">
+                <div className="space-y-1">
                   {holdersLoading ? (
                     <div className="text-slate-400 text-xs p-2 text-center">Loading holders...</div>
                   ) : holderRows.length === 0 ? (
@@ -2154,7 +2154,7 @@ export default function DashboardPage() {
                 </CardHeader>
                 <CardContent className="px-2 pb-2">
                   <TabsContent value="trades" className="mt-0">
-                    <div className="space-y-1 max-h-24 overflow-y-auto">
+                    <div className="space-y-1">
                       {trades.length === 0 ? (
                         <div className="text-slate-400 text-xs p-2 text-center">No trades yet</div>
                       ) : (
@@ -2498,8 +2498,8 @@ export default function DashboardPage() {
                     <Label className="text-[10px] text-black">Dev address</Label>
                     <Button
                         size="sm"
-                        variant="ghost"
-                        className="h-5 px-2 text-[9px] text-blue-500 hover:text-blue-600"
+                        variant="outline"
+                        className="h-5 px-2 text-[9px] border-blue-500/50 text-blue-400 hover:bg-blue-500/10"
                         onClick={() => {
                             if (connectedWalletKey) {
                                 setLaunchDevWallet(connectedWalletKey)
