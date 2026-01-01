@@ -368,26 +368,22 @@ export default function WalletToolsPage() {
     }
     setClearingWallets(true)
     try {
-      const results = await Promise.all(
-        bundlerWallets.map(async (wallet) => {
-          const res = await fetch("/api/bundler/wallets", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ action: "delete", publicKey: wallet.publicKey }),
-          })
-          const data = await res.json().catch(() => ({}))
-          return res.ok && !data?.error
-        })
-      )
-      const failed = results.filter((ok) => !ok).length
-      if (failed > 0) {
-        toast.error(`failed to delete ${failed} wallets`)
-        await loadSavedWallets()
-        return
+      const publicKeys = bundlerWallets.map(w => w.publicKey)
+      const res = await fetch("/api/bundler/wallets", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "delete-batch", publicKeys }),
+      })
+      const data = await res.json()
+
+      if (!res.ok || data?.error) {
+        throw new Error(data?.error || "failed to batch delete wallets")
       }
+
       setBundlerWallets([])
-      toast.success("cleared all wallets")
+      toast.success(`cleared ${data.count || publicKeys.length} wallets`)
     } catch (error: any) {
+      console.error("clear wallets error:", error)
       toast.error(error?.message || "failed to clear wallets")
       await loadSavedWallets()
     } finally {

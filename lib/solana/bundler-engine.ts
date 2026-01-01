@@ -400,7 +400,7 @@ export async function refreshWalletBalances(
   wallets: BundlerWallet[],
   mintAddress?: string
 ): Promise<BundlerWallet[]> {
-  const chunks = chunkArray(wallets, 100) // RPC limit is 100 accounts per call
+  const chunks = chunkArray(wallets, 5) // RPC limit is 5 accounts per call on low tiers
   const updatedWallets: BundlerWallet[] = []
   const mint = mintAddress ? new PublicKey(mintAddress) : null
 

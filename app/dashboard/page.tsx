@@ -12,7 +12,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Alert, AlertDescription } from "@/components/ui/alert"
-import { TrendingUp, TrendingDown, Coins, Activity, Users, Play, Pause, Settings, RefreshCw, Flame, Rocket, AlertTriangle, BarChart3, Trash2, Upload } from "lucide-react"
+import { TrendingUp, TrendingDown, Coins, Activity, Users, Play, Pause, Settings, RefreshCw, Flame, Rocket, AlertTriangle, BarChart3, Trash2, Upload, Wallet, Download } from "lucide-react"
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, LineChart, Line } from "recharts"
 import { PnLSummaryCard, MiniPnLCard } from "@/components/pnl/PnLCard"
 import { TokenRanking } from "@/components/analytics/TokenRanking"
@@ -200,6 +200,9 @@ export default function DashboardPage() {
   const hydratedMintsRef = useRef<Set<string>>(new Set())
   const getPairStorageKey = useCallback((mint: string) => `volume_bot_pair_${mint}`, [])
   const getLastTokenKey = useCallback(() => "dashboardLastTokenMint", [])
+
+  // Ref for auto-selection to break dependency cycles
+  const hasAutoSelectedRef = useRef(false)
 
   const activeWallets = useMemo(() => bundlerWallets.filter(w => w.isActive), [bundlerWallets])
   const connectedWalletKey = publicKey?.toBase58() || ""
@@ -1279,6 +1282,129 @@ export default function DashboardPage() {
     rugpullSlippage,
   ])
 
+  // Collect all SOL from buyers/volume to Dev
+  const collectAllToDev = useCallback(async () => {
+    let targetDevWallet = launchDevWallet
+
+    // If no specific launch dev wallet, try to find one by role
+    if (!targetDevWallet) {
+       const devRoleWallet = bundlerWallets.find(w => w.role === 'dev')
+       if (devRoleWallet) targetDevWallet = devRoleWallet.publicKey
+    }
+
+    if (!targetDevWallet) {
+      toast.error("No dev wallet selected")
+      return
+    }
+
+    // Filter source wallets: active wallets that are NOT the dev wallet and have some SOL
+    const sourceWallets = activeWallets.filter(w => w.publicKey !== targetDevWallet && w.solBalance > 0.002) // minimal threshold
+
+    if (sourceWallets.length === 0) {
+      toast.error("No wallets with SOL to collect")
+      return
+    }
+
+    if (!confirm(`Collect SOL from ${sourceWallets.length} wallets to Dev Wallet (${targetDevWallet.slice(0,6)}...)?`)) {
+        return
+    }
+
+    try {
+      const res = await fetch("/api/bundler/wallets", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "collect",
+          wallets: sourceWallets,
+          recipientAddress: targetDevWallet
+        })
+      })
+
+      const data = await res.json()
+      if (data.error) {
+        toast.error(data.error)
+      } else {
+        toast.success(`Collected SOL from ${data.signatures?.length || 0} wallets`)
+        addSystemLog(`Collected SOL to dev: ${data.signatures?.length} txs`, "success")
+        await loadSavedWallets()
+      }
+    } catch (error: any) {
+        console.error("collect error:", error)
+        toast.error("Failed to collect SOL")
+    }
+  }, [launchDevWallet, bundlerWallets, activeWallets, loadSavedWallets, addSystemLog])
+
+  // Withdraw Dev to Connected
+  const withdrawDevToConnected = useCallback(async () => {
+    if (!connected || !publicKey) {
+      toast.error("Connect wallet to receive funds")
+      return
+    }
+
+    let devWalletObj: BundlerWallet | undefined = bundlerWallets.find(w => w.publicKey === launchDevWallet)
+
+    // fallback to searching by role
+    if (!devWalletObj) {
+        devWalletObj = bundlerWallets.find(w => w.role === 'dev')
+    }
+
+    if (!devWalletObj && devKey.trim()) {
+         try {
+            const bs58 = (await import("bs58")).default
+            const kp = Keypair.fromSecretKey(bs58.decode(devKey.trim()))
+            devWalletObj = {
+                publicKey: kp.publicKey.toBase58(),
+                secretKey: devKey.trim(),
+                solBalance: 0,
+                tokenBalance: 0,
+                isActive: true
+            }
+         } catch {
+             toast.error("Invalid dev private key")
+             return
+         }
+    }
+
+    if (!devWalletObj) {
+        toast.error("Dev wallet not found or selected")
+        return
+    }
+
+    if (devWalletObj.publicKey === publicKey.toBase58()) {
+        toast.error("Dev wallet is already the connected wallet")
+        return
+    }
+
+    if (!confirm(`Withdraw SOL from Dev Wallet (${devWalletObj.publicKey.slice(0,6)}...) to Connected Wallet (${publicKey.toBase58().slice(0,6)}...)?`)) {
+        return
+    }
+
+    try {
+       const res = await fetch("/api/bundler/wallets", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "collect",
+          wallets: [devWalletObj],
+          recipientAddress: publicKey.toBase58()
+        })
+      })
+
+      const data = await res.json()
+      if (data.error) {
+        toast.error(data.error)
+      } else {
+        toast.success("Withdrawn SOL from Dev wallet")
+        addSystemLog("Withdrawn dev wallet funds", "success")
+        await loadSavedWallets()
+      }
+    } catch (error: any) {
+         console.error("withdraw error:", error)
+         toast.error("Failed to withdraw")
+    }
+
+  }, [connected, publicKey, launchDevWallet, bundlerWallets, devKey, loadSavedWallets, addSystemLog])
+
   // Execute wallet trade (buy/sell individual)
   const executeWalletTrade = useCallback(async (
     wallet: BundlerWallet,
@@ -1573,53 +1699,63 @@ export default function DashboardPage() {
       if (tradesData && Array.isArray(tradesData)) {
         setTrades(tradesData)
       }
-      // Auto-select first token if available
-        let resolvedToken = selectedToken
-        if (tokensData && tokensData.length > 0 && !selectedToken) {
-          let preferredMint: string | null = null
-          if (typeof window !== "undefined") {
-            preferredMint = window.localStorage.getItem(getLastTokenKey())
-          }
-          const preferredToken = preferredMint
-            ? tokensData.find((t: any) => t.mintAddress === preferredMint)
-            : null
-          resolvedToken = preferredToken || tokensData[0]
-          setSelectedToken(resolvedToken)
-        }
 
       setLoading(false)
     } catch (error) {
       console.error("Error fetching dashboard data:", error)
       setLoading(false)
     }
-  }, [selectedToken, getLastTokenKey, normalizeTokenList])
+  }, [normalizeTokenList])
 
+  // Auto-select token logic moved here to avoid cycles
   useEffect(() => {
-    if (!selectedToken?.mintAddress || tokens.length === 0) return
-    const updated = tokens.find((token) => token.mintAddress === selectedToken.mintAddress)
-    if (!updated) return
-    setSelectedToken((prev) => {
-      if (!prev || prev.mintAddress !== updated.mintAddress) return prev
-      const merged: Token = {
-        ...updated,
-        status: updated.status || prev.status,
-        price: updated.price || prev.price,
-        change: updated.change || prev.change,
-      }
-      if (
-        prev.name === merged.name &&
-        prev.symbol === merged.symbol &&
-        prev.description === merged.description &&
-        prev.imageUrl === merged.imageUrl &&
-        prev.status === merged.status &&
-        prev.price === merged.price &&
-        prev.change === merged.change
-      ) {
-        return prev
-      }
-      return merged
-    })
-  }, [tokens, selectedToken?.mintAddress])
+    if (tokens.length === 0) return
+
+    // Case 1: No token selected, try auto-select
+    if (!selectedToken && !hasAutoSelectedRef.current) {
+        let preferredMint: string | null = null
+        if (typeof window !== "undefined") {
+          preferredMint = window.localStorage.getItem(getLastTokenKey())
+        }
+        const preferredToken = preferredMint
+          ? tokens.find((t) => t.mintAddress === preferredMint)
+          : null
+        const target = preferredToken || tokens[0]
+        if (target) {
+            setSelectedToken(target)
+            hasAutoSelectedRef.current = true
+        }
+        return
+    }
+
+    // Case 2: Update existing selected token with new data
+    if (selectedToken?.mintAddress) {
+        const updated = tokens.find((token) => token.mintAddress === selectedToken.mintAddress)
+        if (!updated) return
+
+        setSelectedToken((prev) => {
+          if (!prev || prev.mintAddress !== updated.mintAddress) return prev
+          const merged: Token = {
+            ...updated,
+            status: updated.status || prev.status,
+            price: updated.price || prev.price,
+            change: updated.change || prev.change,
+          }
+          if (
+            prev.name === merged.name &&
+            prev.symbol === merged.symbol &&
+            prev.description === merged.description &&
+            prev.imageUrl === merged.imageUrl &&
+            prev.status === merged.status &&
+            prev.price === merged.price &&
+            prev.change === merged.change
+          ) {
+            return prev
+          }
+          return merged
+        })
+    }
+  }, [tokens, selectedToken?.mintAddress, selectedToken, getLastTokenKey])
 
   useEffect(() => {
     if (!selectedToken?.mintAddress) return
@@ -2065,6 +2201,27 @@ export default function DashboardPage() {
                     <Flame className="w-3 h-3 mr-1" />
                     Dump from dev
                   </Button>
+                </div>
+
+                <div className="pt-2 border-t border-red-500/20 mt-2">
+                    <Label className="text-[10px] text-slate-400 mb-1 block">AFTER DUMP</Label>
+                    <div className="grid grid-cols-2 gap-1">
+                        <Button
+                            onClick={collectAllToDev}
+                            className="h-6 bg-blue-600 hover:bg-blue-700 text-[10px]"
+                        >
+                            <Wallet className="w-3 h-3 mr-1" />
+                            Collect all → dev
+                        </Button>
+                        <Button
+                            onClick={withdrawDevToConnected}
+                            disabled={!connected}
+                            className="h-6 bg-green-600 hover:bg-green-700 text-[10px]"
+                        >
+                            <Download className="w-3 h-3 mr-1" />
+                            Withdraw dev → connected
+                        </Button>
+                    </div>
                 </div>
               </CardContent>
             </Card>
