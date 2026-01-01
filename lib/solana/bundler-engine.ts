@@ -361,10 +361,10 @@ export function generateWallet(label?: string): BundlerWallet {
 /**
  * generate multiple wallets
  */
-export function generateWallets(count: number): BundlerWallet[] {
+export function generateWallets(count: number, startIndex: number = 0): BundlerWallet[] {
   const wallets: BundlerWallet[] = []
   for (let i = 0; i < count; i++) {
-    wallets.push(generateWallet(`Wallet ${i + 1}`))
+    wallets.push(generateWallet(`Wallet ${startIndex + i + 1}`))
   }
   return wallets
 }

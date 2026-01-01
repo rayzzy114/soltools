@@ -33,7 +33,9 @@ import {
   Flame,
 } from "lucide-react"
 import { useQuery } from "@tanstack/react-query"
-import { getResilientConnection, RPC_ENDPOINT } from "@/lib/solana/config"
+import { useWallet } from "@solana/wallet-adapter-react"
+import { SystemProgram, Transaction, PublicKey } from "@solana/web3.js"
+import { getResilientConnection, RPC_ENDPOINT, connection } from "@/lib/solana/config"
 
 interface BundlerWallet {
   publicKey: string
@@ -80,6 +82,7 @@ interface FsmStep {
 }
 
 export default function BundlerPage() {
+  const { publicKey: connectedPublicKey, sendTransaction } = useWallet()
   // state
   const [network, setNetwork] = useState<string>("unknown")
   const [rpcEndpoint, setRpcEndpoint] = useState<string>(RPC_ENDPOINT)
@@ -283,6 +286,25 @@ export default function BundlerPage() {
     }
   }
 
+  const useConnectedDevWallet = async () => {
+    if (!connectedPublicKey) {
+      toast.error("connect wallet first")
+      return
+    }
+    // check if we have the secret key in saved wallets
+    const match = wallets.find(w => w.publicKey === connectedPublicKey.toBase58())
+    if (match && match.secretKey) {
+      setDevWallet({
+        publicKey: match.publicKey,
+        secretKey: match.secretKey,
+        solBalance: match.solBalance,
+      })
+      toast.success("connected wallet set as dev wallet")
+    } else {
+      toast.error("connected wallet secret key not found in database. please import it first.")
+    }
+  }
+
   // setup funder wallet
   const setupFunderWallet = async () => {
     if (!allowPrivateKeys) {
@@ -308,6 +330,48 @@ export default function BundlerPage() {
       refreshDevFunderBalances()
     } catch (error) {
       toast.error("invalid private key")
+    }
+  }
+
+  const topUpFunderWallet = async () => {
+    if (!funderWallet) {
+      toast.error("funder wallet not configured")
+      return
+    }
+    if (!connectedPublicKey) {
+      toast.error("connect wallet first")
+      return
+    }
+
+    const amountStr = prompt("Enter amount to top up (SOL):", "1")
+    if (!amountStr) return
+    const amount = parseFloat(amountStr)
+    if (!amount || amount <= 0) {
+      toast.error("invalid amount")
+      return
+    }
+
+    try {
+      const transaction = new Transaction().add(
+        SystemProgram.transfer({
+          fromPubkey: connectedPublicKey,
+          toPubkey: new PublicKey(funderWallet.publicKey),
+          lamports: amount * 1_000_000_000,
+        })
+      )
+
+      const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash()
+      transaction.recentBlockhash = blockhash
+      transaction.lastValidBlockHeight = lastValidBlockHeight
+
+      const signature = await sendTransaction(transaction, connection)
+      toast.success(`top up sent: ${signature.slice(0, 8)}...`)
+      await connection.confirmTransaction(signature, "confirmed")
+      toast.success("top up confirmed")
+      refreshDevFunderBalances()
+    } catch (error: any) {
+      console.error("top up failed:", error)
+      toast.error(`top up failed: ${error.message}`)
     }
   }
 
@@ -1524,6 +1588,9 @@ export default function BundlerPage() {
                       }} variant="outline" className="border-neutral-700">
                         Generate
                       </Button>
+                      <Button onClick={useConnectedDevWallet} variant="outline" className="border-neutral-700">
+                        Use Connected
+                      </Button>
                     </div>
                   </div>
                 )}
@@ -1564,6 +1631,10 @@ export default function BundlerPage() {
                       <Button onClick={refreshDevFunderBalances} size="sm" variant="outline" className="flex-1 border-neutral-700">
                         <RefreshCw className="w-3 h-3 mr-1" />
                         Refresh
+                      </Button>
+                      <Button onClick={topUpFunderWallet} size="sm" variant="outline" className="flex-1 border-neutral-700 bg-green-900/20 text-green-400 hover:bg-green-900/40">
+                        <Plus className="w-3 h-3 mr-1" />
+                        Top Up
                       </Button>
                       <Button onClick={() => setFunderWallet(null)} size="sm" variant="ghost" className="text-red-400">
                         <Trash2 className="w-3 h-3" />

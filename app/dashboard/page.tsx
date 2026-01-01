@@ -1648,6 +1648,54 @@ export default function DashboardPage() {
     return "now"
   }
 
+  const generateFunderWallet = async () => {
+    try {
+      const { Keypair } = await import("@solana/web3.js")
+      const bs58 = (await import("bs58")).default
+      const keypair = Keypair.generate()
+      setFunderKey(bs58.encode(keypair.secretKey))
+      toast.success("generated new funder wallet")
+    } catch (error: any) {
+      toast.error("failed to generate funder")
+    }
+  }
+
+  const topUpFunder = async () => {
+    if (!funderKey) {
+      toast.error("enter funder key first")
+      return
+    }
+    if (!connected || !publicKey) {
+      toast.error("connect wallet first")
+      return
+    }
+
+    try {
+      const { Keypair } = await import("@solana/web3.js")
+      const bs58 = (await import("bs58")).default
+      const funderPubkey = Keypair.fromSecretKey(bs58.decode(funderKey)).publicKey
+
+      const amountStr = prompt("Enter amount to top up (SOL):", "1")
+      if (!amountStr) return
+      const amount = parseFloat(amountStr)
+      if (!amount || amount <= 0) return
+
+      const tx = new Transaction().add(
+        SystemProgram.transfer({
+          fromPubkey: publicKey,
+          toPubkey: funderPubkey,
+          lamports: amount * LAMPORTS_PER_SOL
+        })
+      )
+
+      const sig = await sendTransaction(tx, connection)
+      await connection.confirmTransaction(sig, "confirmed")
+      toast.success(`top up sent: ${sig.slice(0, 8)}...`)
+    } catch (error: any) {
+      toast.error(`top up failed: ${error.message}`)
+    }
+  }
+
   return (
     <div className="p-1 space-y-1">
       <div className="flex flex-wrap items-center justify-between gap-2 rounded border border-neutral-800 bg-neutral-900/70 px-2 py-1">
@@ -2628,14 +2676,26 @@ export default function DashboardPage() {
                 </div>
                 <div className="space-y-1 md:col-span-2">
                   <Label className="text-[10px] text-black">Funder private key</Label>
-                  <Input
-                    type="password"
-                    placeholder="funder wallet private key"
-                    value={funderKey}
-                    onChange={(e) => setFunderKey(e.target.value)}
-                    className="h-8 bg-background border-border text-xs"
-                    disabled={!autoFundEnabled || useConnectedFunder}
-                  />
+                  <div className="flex gap-2">
+                    <Input
+                      type="password"
+                      placeholder="funder wallet private key"
+                      value={funderKey}
+                      onChange={(e) => setFunderKey(e.target.value)}
+                      className="h-8 bg-background border-border text-xs"
+                      disabled={!autoFundEnabled || useConnectedFunder}
+                    />
+                    {!useConnectedFunder && (
+                      <>
+                        <Button onClick={generateFunderWallet} size="sm" variant="outline" className="h-8 px-2 text-[10px] border-neutral-700">
+                          Gen
+                        </Button>
+                        <Button onClick={topUpFunder} size="sm" variant="outline" className="h-8 px-2 text-[10px] border-neutral-700 bg-green-900/20 text-green-400">
+                          TopUp
+                        </Button>
+                      </>
+                    )}
+                  </div>
                 </div>
               </div>
               <div className="text-[10px] text-slate-500">
