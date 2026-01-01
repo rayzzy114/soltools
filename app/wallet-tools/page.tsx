@@ -996,6 +996,9 @@ export default function WalletToolsPage() {
                           {wallet.role === 'volume_bot' && (
                               <RefreshCw className="w-3 h-3 text-orange-400" aria-label="Volume Bot" title="Volume Bot" />
                           )}
+                          {(!wallet.role || wallet.role === 'project') && (
+                              <Briefcase className="w-3 h-3 text-slate-500" aria-label="Project Wallet" title="Project Wallet" />
+                          )}
                       </div>
                       <div className="flex gap-2 text-[10px] text-slate-500">
                         <span className="text-emerald-300/70">SOL: {wallet.solBalance.toFixed(3)}</span>

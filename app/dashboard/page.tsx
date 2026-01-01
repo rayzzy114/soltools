@@ -2494,7 +2494,24 @@ export default function DashboardPage() {
             </CardHeader>
             <CardContent className="space-y-2 px-2 pb-2">
               <div className="space-y-1">
-                <Label className="text-[10px] text-black">Dev address</Label>
+                <div className="flex justify-between items-center">
+                    <Label className="text-[10px] text-black">Dev address</Label>
+                    <Button
+                        size="sm"
+                        variant="ghost"
+                        className="h-5 px-2 text-[9px] text-blue-500 hover:text-blue-600"
+                        onClick={() => {
+                            if (connectedWalletKey) {
+                                setLaunchDevWallet(connectedWalletKey)
+                                setBuyerWallets((prev) => prev.filter((wallet) => wallet.publicKey !== connectedWalletKey))
+                            } else {
+                                toast.error("Connect wallet first")
+                            }
+                        }}
+                    >
+                        Use Connected
+                    </Button>
+                </div>
                 <Select
                   value={launchDevWallet}
                   onValueChange={(value) => {
@@ -2508,10 +2525,11 @@ export default function DashboardPage() {
                   <SelectContent>
                     {devWalletOptions.map((wallet) => {
                       const isConnectedWallet = connectedWalletKey.length > 0 && wallet.publicKey === connectedWalletKey
-                      const labelPrefix = isConnectedWallet ? "Connected wallet" : "Balance"
+                      const labelPrefix = isConnectedWallet ? "Connected" : "Balance"
+                      const roleSuffix = wallet.role && wallet.role !== 'project' ? ` [${wallet.role.toUpperCase()}]` : ""
                       return (
                         <SelectItem key={wallet.publicKey} value={wallet.publicKey}>
-                          {labelPrefix}: {wallet.solBalance.toFixed(4)} SOL - {wallet.publicKey.slice(0, 6)}...{wallet.publicKey.slice(-4)}
+                          {labelPrefix}: {wallet.solBalance.toFixed(4)} SOL - {wallet.publicKey.slice(0, 6)}...{wallet.publicKey.slice(-4)}{roleSuffix}
                         </SelectItem>
                       )
                     })}
@@ -2616,12 +2634,15 @@ export default function DashboardPage() {
                               <SelectValue placeholder="Select wallet" />
                             </SelectTrigger>
                             <SelectContent>
-                              {options.map((option) => (
-                                <SelectItem key={option.publicKey} value={option.publicKey}>
-                                  {option.label ? `${option.label} - ` : ""}
-                                  {option.publicKey.slice(0, 6)}...{option.publicKey.slice(-4)} ({option.solBalance.toFixed(3)} SOL)
-                                </SelectItem>
-                              ))}
+                              {options.map((option) => {
+                                const roleSuffix = option.role && option.role !== 'project' ? ` [${option.role.toUpperCase()}]` : ""
+                                return (
+                                  <SelectItem key={option.publicKey} value={option.publicKey}>
+                                    {option.label ? `${option.label} - ` : ""}
+                                    {option.publicKey.slice(0, 6)}...{option.publicKey.slice(-4)} ({option.solBalance.toFixed(3)} SOL){roleSuffix}
+                                  </SelectItem>
+                                )
+                              })}
                             </SelectContent>
                           </Select>
                         </div>
