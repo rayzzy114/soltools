@@ -57,6 +57,7 @@ export default function WalletToolsPage() {
   const [manualTradeDirty, setManualTradeDirty] = useState(false)
   const [funderKey, setFunderKey] = useState("")
   const [useConnectedFunder, setUseConnectedFunder] = useState(true)
+  const [gasAmount, setGasAmount] = useState("0.003")
   const [gasLoading, setGasLoading] = useState(false)
   const [ataLoading, setAtaLoading] = useState(false)
   const [clearingWallets, setClearingWallets] = useState(false)
@@ -159,7 +160,27 @@ export default function WalletToolsPage() {
         return
       }
       if (data.wallets && Array.isArray(data.wallets)) {
+        // Optimistic update
         setBundlerWallets(data.wallets)
+
+        // Refresh in background
+        if (data.wallets.length > 0) {
+          fetch("/api/bundler/wallets", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              action: "refresh",
+              wallets: data.wallets,
+            }),
+          })
+          .then(res => res.json())
+          .then(refreshData => {
+            if (refreshData.wallets && Array.isArray(refreshData.wallets)) {
+              setBundlerWallets(refreshData.wallets)
+            }
+          })
+          .catch(err => console.error("background wallet refresh failed", err))
+        }
       }
     } catch (error: any) {
       console.error("failed to load saved wallets:", error)
@@ -365,7 +386,6 @@ export default function WalletToolsPage() {
         return
       }
       setBundlerWallets([])
-      setSelectedWallets(new Set())
       toast.success("cleared all wallets")
     } catch (error: any) {
       toast.error(error?.message || "failed to clear wallets")
@@ -402,7 +422,7 @@ export default function WalletToolsPage() {
     addSystemLog(`Starting gas distribution to ${active.length} wallets`, "info")
 
     try {
-      const amountPerWallet = 0.003
+      const amountPerWallet = parseFloat(gasAmount) || 0.003
       const totalSolNeeded = (amountPerWallet * active.length) + 0.01
       const connection = await getResilientConnection()
       if (useConnectedFunder) {
@@ -753,6 +773,17 @@ export default function WalletToolsPage() {
                 className="h-7 bg-background border-border text-xs"
               />
             </div>
+            <div className="space-y-1">
+              <Label className="text-[10px] text-slate-600">Amount (SOL)</Label>
+              <Input
+                type="number"
+                step="0.0001"
+                placeholder="0.003"
+                value={gasAmount}
+                onChange={(e) => setGasAmount(e.target.value)}
+                className="h-7 bg-background border-border text-xs"
+              />
+            </div>
             <div className="text-[9px] text-slate-500">
               Gas funder: {useConnectedFunder
                 ? connected
@@ -812,9 +843,9 @@ export default function WalletToolsPage() {
                   <TooltipContent>
                     {useConnectedFunder
                       ? connected
-                        ? `Distribute 0.003 SOL to ${activeWallets.length} wallets from connected wallet`
+                        ? `Distribute ${gasAmount} SOL to ${activeWallets.length} wallets from connected wallet`
                         : "Connect wallet to distribute gas"
-                      : `Distribute 0.003 SOL to ${activeWallets.length} wallets from manual funder`
+                      : `Distribute ${gasAmount} SOL to ${activeWallets.length} wallets from manual funder`
                     }
                   </TooltipContent>
                 </Tooltip>

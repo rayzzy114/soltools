@@ -344,6 +344,25 @@ export default function DashboardPage() {
 
   const selectedTokenValue = selectedToken?.mintAddress || ""
 
+  // Update wallet role helper
+  const updateWalletRole = useCallback(async (publicKey: string, role: string) => {
+    try {
+      await fetch("/api/bundler/wallets", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "update",
+          publicKey,
+          role,
+        }),
+      })
+      // Optimistically update local state
+      setBundlerWallets(prev => prev.map(w => w.publicKey === publicKey ? { ...w, role } : w))
+    } catch (error) {
+      console.error("Failed to update wallet role:", error)
+    }
+  }, [])
+
   // Load saved wallets from database with batched balance updates
   const loadSavedWallets = useCallback(async () => {
     try {
@@ -359,26 +378,46 @@ export default function DashboardPage() {
       }
 
         if (data.wallets && Array.isArray(data.wallets)) {
-          let nextWallets = data.wallets
-          if (nextWallets.length) {
-            try {
-              const refreshRes = await fetch("/api/bundler/wallets", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  action: "refresh",
-                  wallets: nextWallets,
-                }),
-              })
-              const refreshData = await refreshRes.json()
-              if (Array.isArray(refreshData.wallets)) {
-                nextWallets = refreshData.wallets
+          // Optimistic update: show cached wallets immediately
+          setBundlerWallets(data.wallets)
+
+          // Refresh in background
+          if (data.wallets.length > 0) {
+            fetch("/api/bundler/wallets", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                action: "refresh",
+                wallets: data.wallets,
+              }),
+            })
+            .then(res => res.json())
+            .then(refreshData => {
+              if (refreshData.wallets && Array.isArray(refreshData.wallets)) {
+                setBundlerWallets(refreshData.wallets)
               }
-            } catch {
-              // ignore refresh errors
-            }
+            })
+            .catch(err => console.error("background wallet refresh failed", err))
           }
-          setBundlerWallets(nextWallets)
+
+          const nextWallets = data.wallets
+          // Restore selections from roles
+          const dev = nextWallets.find((w: any) => w.role === 'dev')
+          if (dev) {
+            setLaunchDevWallet(dev.publicKey)
+          }
+
+          const buyers = nextWallets.filter((w: any) => w.role === 'buyer')
+          if (buyers.length > 0) {
+            setBuyerWallets(prev => {
+              const existingKeys = new Set(prev.map(b => b.publicKey))
+              const newBuyers = buyers
+                .filter((b: any) => !existingKeys.has(b.publicKey))
+                .map((b: any) => ({ publicKey: b.publicKey, amount: buyAmountPerWallet || "0.01" }))
+
+              return [...prev, ...newBuyers]
+            })
+          }
           // no toast: avoid noisy "loaded X saved wallets" popup
         }
     } catch (error: any) {
@@ -586,6 +625,7 @@ export default function DashboardPage() {
       return
     }
     const next = available[0]
+    updateWalletRole(next.publicKey, 'buyer')
     setBuyerWallets((prev) => [
       ...prev,
       {
@@ -598,8 +638,22 @@ export default function DashboardPage() {
   const handleRemoveBuyerWallet = (index?: number) => {
     setBuyerWallets((prev) => {
       if (prev.length === 0) return prev
-      if (index === undefined) return prev.slice(0, -1)
-      return prev.filter((_, idx) => idx !== index)
+
+      let walletToRemove: BuyerWalletSelection | undefined
+      let nextState: BuyerWalletSelection[] = []
+
+      if (index === undefined) {
+        walletToRemove = prev[prev.length - 1]
+        nextState = prev.slice(0, -1)
+      } else {
+        walletToRemove = prev[index]
+        nextState = prev.filter((_, idx) => idx !== index)
+      }
+
+      if (walletToRemove) {
+        updateWalletRole(walletToRemove.publicKey, 'project')
+      }
+      return nextState
     })
   }
 
@@ -2535,6 +2589,8 @@ export default function DashboardPage() {
                         className="h-5 px-2 text-[9px] border-blue-500/50 text-blue-400 hover:bg-blue-500/10"
                         onClick={() => {
                             if (connectedWalletKey) {
+                                if (launchDevWallet) updateWalletRole(launchDevWallet, 'project')
+                                updateWalletRole(connectedWalletKey, 'dev')
                                 setLaunchDevWallet(connectedWalletKey)
                                 setBuyerWallets((prev) => prev.filter((wallet) => wallet.publicKey !== connectedWalletKey))
                             } else {
@@ -2548,6 +2604,10 @@ export default function DashboardPage() {
                 <Select
                   value={launchDevWallet}
                   onValueChange={(value) => {
+                    if (launchDevWallet) {
+                      updateWalletRole(launchDevWallet, 'project')
+                    }
+                    updateWalletRole(value, 'dev')
                     setLaunchDevWallet(value)
                     setBuyerWallets((prev) => prev.filter((wallet) => wallet.publicKey !== value))
                   }}
@@ -2674,6 +2734,8 @@ export default function DashboardPage() {
                           <Select
                             value={wallet.publicKey}
                             onValueChange={(value) => {
+                              updateWalletRole(wallet.publicKey, 'project')
+                              updateWalletRole(value, 'buyer')
                               setBuyerWallets((prev) =>
                                 prev.map((entry, idx) =>
                                   idx === index ? { ...entry, publicKey: value } : entry
