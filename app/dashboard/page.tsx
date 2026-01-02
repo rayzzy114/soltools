@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useCallback, useMemo, useRef } from "react"
+import { useState, useEffect, useCallback, useMemo, useRef, memo } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -13,10 +13,7 @@ import { Switch } from "@/components/ui/switch"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { TrendingUp, TrendingDown, Coins, Activity, Users, Play, Pause, Settings, RefreshCw, Flame, Rocket, AlertTriangle, BarChart3, Trash2, Upload, Wallet, Download } from "lucide-react"
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, LineChart, Line } from "recharts"
 import { PnLSummaryCard, MiniPnLCard } from "@/components/pnl/PnLCard"
-import { TokenRanking } from "@/components/analytics/TokenRanking"
-import { ActivityHeatmap } from "@/components/analytics/ActivityHeatmap"
 import type { PnLSummary, TokenPnL, Trade } from "@/lib/pnl/types"
 import { toast } from "sonner"
 import { useWallet } from "@solana/wallet-adapter-react"
@@ -91,6 +88,54 @@ interface RugpullEstimate {
 const PRIORITY_FEE_COMPUTE_UNITS = 400000
 const PRICE_SERIES_MAX_POINTS = 60
 
+// Optimized Wallet Row Component
+const WalletRow = memo(({ wallet, index, onSelect }: { wallet: BundlerWallet, index: number, onSelect: (w: BundlerWallet) => void }) => {
+  let borderColor = "border-slate-500"
+  let badgeBg = "bg-slate-100"
+  let badgeText = "text-slate-800"
+
+  if (wallet.role === 'dev') {
+    borderColor = "border-purple-500 hover:border-purple-400"
+    badgeBg = "bg-purple-100"
+    badgeText = "text-purple-800"
+  } else if (wallet.role === 'buyer') {
+    borderColor = "border-cyan-500 hover:border-cyan-400"
+    badgeBg = "bg-cyan-100"
+    badgeText = "text-cyan-800"
+  } else if (wallet.role === 'funder') {
+    borderColor = "border-green-500 hover:border-green-400"
+    badgeBg = "bg-green-100"
+    badgeText = "text-green-800"
+  } else if (wallet.role === 'volume_bot' || wallet.role === 'bot') {
+    borderColor = "border-orange-500 hover:border-orange-400"
+    badgeBg = "bg-orange-100"
+    badgeText = "text-orange-800"
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={() => onSelect(wallet)}
+      className={`h-10 rounded border ${borderColor} bg-white p-1 text-left text-[9px] leading-tight transition`}
+    >
+      <div className="flex items-center justify-between gap-1">
+        <div className="text-[9px] truncate text-black font-bold">
+          {index + 1}. {wallet.label || 'Wallet'}
+        </div>
+        {wallet.role && wallet.role !== 'project' && (
+          <span className={`text-[8px] ${badgeBg} ${badgeText} px-1 rounded uppercase min-w-[20px] text-center truncate max-w-[40px]`}>
+            {wallet.role}
+          </span>
+        )}
+      </div>
+      <div className="font-mono text-[9px] text-neutral-900 truncate">
+        {wallet.publicKey.slice(0, 6)}...{wallet.publicKey.slice(-4)}
+      </div>
+    </button>
+  )
+})
+WalletRow.displayName = "WalletRow"
+
 export default function DashboardPage() {
   const [stats, setStats] = useState<DashboardStats>({
     activeTokens: 0,
@@ -100,7 +145,6 @@ export default function DashboardPage() {
   })
   const [tokens, setTokens] = useState<Token[]>([])
   const [activity, setActivity] = useState<Activity[]>([])
-  const [chartData, setChartData] = useState<any[]>([])
   const [volumeBotStats, setVolumeBotStats] = useState({
     isRunning: false,
     activePairs: 0,
@@ -154,8 +198,6 @@ export default function DashboardPage() {
   const [cloneDialogOpen, setCloneDialogOpen] = useState(false)
   const [cloneTokenMint, setCloneTokenMint] = useState("")
   const [priceSeries, setPriceSeries] = useState<Array<{ time: string; price: number }>>([])
-  const [devKey, setDevKey] = useState("")
-  const [useConnectedDev, setUseConnectedDev] = useState(true)
   const [rugpullLoading, setRugpullLoading] = useState(false)
   const [systemLogs, setSystemLogs] = useState<string[]>([])
   const [rugpullSlippage, setRugpullSlippage] = useState("20")
@@ -263,15 +305,13 @@ export default function DashboardPage() {
   }, [rugpullEstimate])
   const volumeRunning = volumeBotConfig.isRunning || volumeBotStats.isRunning
   const devHolderPubkey = useMemo(() => {
-    if (useConnectedDev && publicKey) return publicKey
-    const trimmed = devKey.trim()
-    if (!trimmed) return null
+    if (!launchDevWallet) return null
     try {
-      return Keypair.fromSecretKey(bs58.decode(trimmed)).publicKey
+      return new PublicKey(launchDevWallet)
     } catch {
       return null
     }
-  }, [useConnectedDev, publicKey, devKey])
+  }, [launchDevWallet])
   const networkBlocked = pumpFunAvailable === false || rpcHealthy === false
   const isMainnet = network === "mainnet-beta"
   const isLaunchStage = dashboardStage === "launch"
@@ -1198,43 +1238,27 @@ export default function DashboardPage() {
     if (!selectedToken) return
 
     let resolvedDevKey = ""
-    // Try to find the dev wallet from roles if not manual/connected override
-    const devRoleWallet = bundlerWallets.find(w => w.role === 'dev')
-
-    if (useConnectedDev) {
-      if (!publicKey) {
-        addSystemLog("Connect wallet to use it as dev wallet", "error")
-        toast.error("connect wallet first")
-        return
-      }
-      const match = bundlerWallets.find(
-        (wallet) => wallet.publicKey === publicKey.toBase58() && wallet.secretKey
-      )
-      if (!match?.secretKey) {
-        // Fallback: is the connected wallet the dev wallet?
-        const message = "Connected wallet secret not found in saved wallets"
-        // If we found a dev role wallet, maybe suggesting it?
-        if (devRoleWallet) {
-           addSystemLog("Using detected dev wallet from role instead of connected", "info")
-           resolvedDevKey = devRoleWallet.secretKey
-        } else {
-           addSystemLog(message, "error")
-           toast.error(message)
-           return
-        }
-      } else {
-        resolvedDevKey = match.secretKey
-      }
-    } else if (devKey.trim()) {
-      resolvedDevKey = devKey.trim()
-    } else if (devRoleWallet) {
-       addSystemLog("Using detected dev wallet from role", "info")
-       resolvedDevKey = devRoleWallet.secretKey
-    } else {
-        addSystemLog("Dev wallet private key required", "error")
-        toast.error("dev wallet key required")
-        return
+    // Find dev wallet from active selection (launchDevWallet) or fallback to role='dev'
+    let devWalletObj = bundlerWallets.find(w => w.publicKey === launchDevWallet)
+    if (!devWalletObj) {
+      devWalletObj = bundlerWallets.find(w => w.role === 'dev')
     }
+
+    if (!devWalletObj) {
+      const msg = "No dev wallet selected (from launch or role='dev')"
+      addSystemLog(msg, "error")
+      toast.error(msg)
+      return
+    }
+
+    if (!devWalletObj.secretKey) {
+      const msg = "Selected dev wallet missing secret key"
+      addSystemLog(msg, "error")
+      toast.error(msg)
+      return
+    }
+
+    resolvedDevKey = devWalletObj.secretKey
 
     try {
       const bs58 = await import("bs58")
@@ -1271,9 +1295,7 @@ export default function DashboardPage() {
     }
   }, [
     selectedToken,
-    devKey,
-    useConnectedDev,
-    publicKey,
+    launchDevWallet,
     bundlerWallets,
     jitoTipSol,
     priorityFeeSol,
@@ -1348,23 +1370,6 @@ export default function DashboardPage() {
         devWalletObj = bundlerWallets.find(w => w.role === 'dev')
     }
 
-    if (!devWalletObj && devKey.trim()) {
-         try {
-            const bs58 = (await import("bs58")).default
-            const kp = Keypair.fromSecretKey(bs58.decode(devKey.trim()))
-            devWalletObj = {
-                publicKey: kp.publicKey.toBase58(),
-                secretKey: devKey.trim(),
-                solBalance: 0,
-                tokenBalance: 0,
-                isActive: true
-            }
-         } catch {
-             toast.error("Invalid dev private key")
-             return
-         }
-    }
-
     if (!devWalletObj) {
         toast.error("Dev wallet not found or selected")
         return
@@ -1403,7 +1408,7 @@ export default function DashboardPage() {
          toast.error("Failed to withdraw")
     }
 
-  }, [connected, publicKey, launchDevWallet, bundlerWallets, devKey, loadSavedWallets, addSystemLog])
+  }, [connected, publicKey, launchDevWallet, bundlerWallets, loadSavedWallets, addSystemLog])
 
   // Execute wallet trade (buy/sell individual)
   const executeWalletTrade = useCallback(async (
@@ -1665,11 +1670,10 @@ export default function DashboardPage() {
 
   const fetchDashboardData = useCallback(async () => {
     try {
-      const [statsRes, tokensRes, activityRes, chartRes, volumeBotRes, pnlRes, tokenPnlsRes, tradesRes] = await Promise.all([
+      const [statsRes, tokensRes, activityRes, volumeBotRes, pnlRes, tokenPnlsRes, tradesRes] = await Promise.all([
         fetch("/api/stats?type=dashboard"),
         fetch("/api/tokens"),
         fetch("/api/stats?type=activity&limit=5"),
-        fetch("/api/stats?type=chart&days=7"),
         fetch("/api/stats?type=volume-bot"),
         fetch("/api/pnl?type=summary"),
         fetch("/api/pnl?type=tokens"),
@@ -1680,7 +1684,6 @@ export default function DashboardPage() {
       const tokensRaw = await tokensRes.json()
       const tokensData = normalizeTokenList(tokensRaw)
       const activityData = await activityRes.json()
-      const chartDataRes = await chartRes.json()
       const volumeBotData = await volumeBotRes.json()
       const pnlData = await pnlRes.json()
       const tokenPnlsData = await tokenPnlsRes.json()
@@ -1688,7 +1691,6 @@ export default function DashboardPage() {
         setStats(statsData)
         setTokens(tokensData)
         setActivity(activityData)
-      setChartData(chartDataRes)
       setVolumeBotStats(volumeBotData)
       if (pnlData && !pnlData.error) {
         setPnlSummary(pnlData)
@@ -2137,21 +2139,13 @@ export default function DashboardPage() {
                     />
                   </div>
                   <div className="space-y-1">
-                    <div className="flex items-center justify-between">
-                      <Label className="text-[10px] text-slate-600">Dev Wallet</Label>
-                      <div className="flex items-center gap-1 text-[10px] text-slate-500">
-                        <span>Connected</span>
-                        <Switch checked={useConnectedDev} onCheckedChange={setUseConnectedDev} />
-                      </div>
+                    <Label className="text-[10px] text-slate-600">Dev Wallet</Label>
+                    <div className="h-7 px-3 flex items-center bg-neutral-950/40 rounded border border-neutral-800 text-xs text-slate-300 font-mono">
+                      {launchDevWallet
+                        ? `${launchDevWallet.slice(0, 8)}...${launchDevWallet.slice(-8)}`
+                        : "No dev wallet selected"
+                      }
                     </div>
-                    <Input
-                      type="password"
-                      placeholder="dev wallet private key"
-                      value={devKey ? "*".repeat(Math.min(devKey.length, 20)) + (devKey.length > 20 ? "..." : "") : ""}
-                      onChange={(e) => setDevKey(e.target.value)}
-                      disabled={useConnectedDev}
-                      className="h-7 bg-background border-border text-xs"
-                    />
                   </div>
                 </div>
                 <div className="grid grid-cols-2 gap-1 rounded border border-red-500/20 bg-red-950/30 p-2 text-[10px]">
@@ -2195,7 +2189,7 @@ export default function DashboardPage() {
                   </Button>
                   <Button
                     onClick={rugpullDevWallet}
-                    disabled={!selectedToken || (useConnectedDev ? !publicKey : !devKey.trim())}
+                    disabled={!selectedToken || !launchDevWallet}
                     className="h-6 bg-red-600 hover:bg-red-700 text-[10px]"
                   >
                     <Flame className="w-3 h-3 mr-1" />
@@ -2237,7 +2231,7 @@ export default function DashboardPage() {
                     <Badge className={volumeRunning ? "bg-green-500/20 text-green-400" : "bg-red-500/20 text-red-400"}>
                       {volumeRunning ? "RUNNING" : "STOPPED"}
                     </Badge>
-                    <div className="text-[9px] text-slate-400">
+                    <div className="text-[9px] text-slate-300 font-medium">
                       {volumeBotStatus ? (
                         <>
                           Trades: {volumeBotStatus.totalTrades || 0} |
@@ -2288,53 +2282,15 @@ export default function DashboardPage() {
                     {activeWallets.length === 0 ? (
                       <div className="col-span-full text-xs text-neutral-500">No active wallets</div>
                     ) : (
-                      activeWallets.map((wallet, index) => {
-                        let borderColor = "border-slate-500"
-                        let badgeBg = "bg-slate-100"
-                        let badgeText = "text-slate-800"
-
-                        if (wallet.role === 'dev') {
-                          borderColor = "border-purple-500 hover:border-purple-400"
-                          badgeBg = "bg-purple-100"
-                          badgeText = "text-purple-800"
-                        } else if (wallet.role === 'buyer') {
-                          borderColor = "border-cyan-500 hover:border-cyan-400"
-                          badgeBg = "bg-cyan-100"
-                          badgeText = "text-cyan-800"
-                        } else if (wallet.role === 'funder') {
-                          borderColor = "border-green-500 hover:border-green-400"
-                          badgeBg = "bg-green-100"
-                          badgeText = "text-green-800"
-                        } else if (wallet.role === 'volume_bot' || wallet.role === 'bot') {
-                          borderColor = "border-orange-500 hover:border-orange-400"
-                          badgeBg = "bg-orange-100"
-                          badgeText = "text-orange-800"
-                        }
-
-                        return (
-                          <button
-                            key={wallet.publicKey}
-                            type="button"
-                            onClick={() => setQuickTradeWallet(wallet)}
-                            className={`h-10 rounded border ${borderColor} bg-white p-1 text-left text-[9px] leading-tight transition`}
-                          >
-                            <div className="flex items-center justify-between gap-1">
-                              <div className="text-[9px] truncate" style={{ color: "#000", fontWeight: 700 }}>
-                                {index + 1}. {wallet.label || 'Wallet'}
-                              </div>
-                              {wallet.role && wallet.role !== 'project' && (
-                                <span className={`text-[8px] ${badgeBg} ${badgeText} px-1 rounded uppercase min-w-[20px] text-center truncate max-w-[40px]`}>
-                                  {wallet.role}
-                                </span>
-                              )}
-                            </div>
-                            <div className="font-mono text-[9px] text-neutral-900 truncate">
-                              {wallet.publicKey.slice(0, 6)}...{wallet.publicKey.slice(-4)}
-                            </div>
-                          </button>
-                        )
-                      })
-                  )}
+                      activeWallets.map((wallet, index) => (
+                        <WalletRow
+                          key={wallet.publicKey}
+                          wallet={wallet}
+                          index={index}
+                          onSelect={setQuickTradeWallet}
+                        />
+                      ))
+                    )}
                   </div>
                 </div>
               </CardContent>
@@ -3117,6 +3073,59 @@ export default function DashboardPage() {
             <DialogTitle className="text-sm text-black">Volume Bot Settings</DialogTitle>
           </DialogHeader>
           <div className="space-y-3">
+            <div className="space-y-1 bg-neutral-800/50 p-2 rounded">
+              <Label className="text-xs text-neutral-300 font-bold">Strategy Presets</Label>
+              <div className="flex gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-6 text-[10px] border-green-500/30 hover:bg-green-500/10 hover:text-green-400"
+                  onClick={() => setVolumeBotConfig(prev => ({
+                    ...prev,
+                    mode: "wash",
+                    amountMode: "random",
+                    minAmount: "0.005",
+                    maxAmount: "0.05",
+                    slippage: "15",
+                    priorityFee: "0.0001"
+                  }))}
+                >
+                  Organic Growth
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-6 text-[10px] border-purple-500/30 hover:bg-purple-500/10 hover:text-purple-400"
+                  onClick={() => setVolumeBotConfig(prev => ({
+                    ...prev,
+                    mode: "wash",
+                    amountMode: "random",
+                    minAmount: "0.1",
+                    maxAmount: "0.5",
+                    slippage: "25",
+                    priorityFee: "0.005"
+                  }))}
+                >
+                  Frenzy Mode
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-6 text-[10px] border-blue-500/30 hover:bg-blue-500/10 hover:text-blue-400"
+                  onClick={() => setVolumeBotConfig(prev => ({
+                    ...prev,
+                    mode: "buy",
+                    amountMode: "fixed",
+                    fixedAmount: "0.01",
+                    slippage: "10",
+                    priorityFee: "0.0001"
+                  }))}
+                >
+                  Slow Accumulate
+                </Button>
+              </div>
+            </div>
+
             <div className="grid grid-cols-2 gap-1">
               <div className="space-y-1">
                 <Label className="text-xs text-neutral-400">Mode</Label>
