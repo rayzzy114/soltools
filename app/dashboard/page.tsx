@@ -216,6 +216,8 @@ export default function DashboardPage() {
     priorityFee: "0.005",
     jitoTip: "0.0001",
     jitoRegion: "frankfurt",
+    minInterval: "30",
+    maxInterval: "120",
   })
   const [manualBuyAmount, setManualBuyAmount] = useState("0.01")
   const [manualSellPercent, setManualSellPercent] = useState("100")
@@ -1066,15 +1068,46 @@ export default function DashboardPage() {
       if (data.status) {
         setVolumeBotStatus(data)
         // Update local config to match server state
-        setVolumeBotConfig(prev => ({
-          ...prev,
-          isRunning: data.status === "running"
-        }))
+        setVolumeBotConfig(prev => {
+          // If settings are open, don't overwrite config fields, only status
+          if (settingsOpen) return { ...prev, isRunning: data.status === "running" }
+
+          const newConfig = {
+            ...prev,
+            isRunning: data.status === "running",
+          }
+
+          // Merge settings if they exist
+          if (data.settings) {
+            if (data.settings.mode) newConfig.mode = data.settings.mode
+            if (data.settings.amountMode) newConfig.amountMode = data.settings.amountMode
+            if (data.settings.fixedAmount) newConfig.fixedAmount = data.settings.fixedAmount
+            if (data.settings.minAmount) newConfig.minAmount = data.settings.minAmount
+            if (data.settings.maxAmount) newConfig.maxAmount = data.settings.maxAmount
+            if (data.settings.minPercentage) newConfig.minPercentage = data.settings.minPercentage
+            if (data.settings.maxPercentage) newConfig.maxPercentage = data.settings.maxPercentage
+            if (data.settings.slippage) newConfig.slippage = data.settings.slippage
+            if (data.settings.priorityFee) newConfig.priorityFee = data.settings.priorityFee
+            if (data.settings.jitoTip) newConfig.jitoTip = data.settings.jitoTip
+            if (data.settings.jitoRegion) newConfig.jitoRegion = data.settings.jitoRegion
+          }
+
+          // Interval is stored on the pair, not settings
+          if (data.minIntervalSeconds) newConfig.minInterval = String(data.minIntervalSeconds)
+          if (data.maxIntervalSeconds) newConfig.maxInterval = String(data.maxIntervalSeconds)
+          // Fallback if not set but intervalSeconds is (legacy)
+          if (!data.minIntervalSeconds && data.intervalSeconds) {
+             newConfig.minInterval = String(data.intervalSeconds)
+             newConfig.maxInterval = String(data.intervalSeconds)
+          }
+
+          return newConfig
+        })
       }
     } catch (error) {
       console.error("Failed to get bot status:", error)
     }
-  }, [volumeBotConfig.pairId])
+  }, [volumeBotConfig.pairId, settingsOpen])
 
   // Poll bot status every 60 seconds when running
   useEffect(() => {
@@ -1566,7 +1599,9 @@ export default function DashboardPage() {
           slippage: volumeBotConfig.slippage,
           priorityFee: volumeBotConfig.priorityFee,
           jitoTip: volumeBotConfig.jitoTip,
-          jitoRegion: volumeBotConfig.jitoRegion
+          jitoRegion: volumeBotConfig.jitoRegion,
+          minInterval: parseInt(volumeBotConfig.minInterval) || 30,
+          maxInterval: parseInt(volumeBotConfig.maxInterval) || 120
         })
       })
 
@@ -1613,16 +1648,16 @@ export default function DashboardPage() {
       const result = await response.json()
       if (result.success) {
         setVolumeBotConfig(prev => ({ ...prev, isRunning: false }))
-        addSystemLog("Volume bot stopped successfully", "success")
-        toast.success("Volume bot stopped")
+        addSystemLog("Volume bot paused", "success")
+        toast.success("Volume bot paused")
       } else {
-        addSystemLog(`Failed to stop volume bot: ${result.error}`, "error")
-        toast.error(result.error || "Failed to stop volume bot")
+        addSystemLog(`Failed to pause volume bot: ${result.error}`, "error")
+        toast.error(result.error || "Failed to pause volume bot")
       }
     } catch (error) {
       console.error("Stop volume bot error:", error)
       addSystemLog(`Stop volume bot error: ${error}`, "error")
-      toast.error("Failed to stop volume bot")
+      toast.error("Failed to pause volume bot")
     }
   }, [volumeBotConfig.pairId, addSystemLog])
 
@@ -2223,8 +2258,8 @@ export default function DashboardPage() {
                     VOLUME BOT
                   </CardTitle>
                   <div className="flex items-center gap-2">
-                    <Badge className={volumeRunning ? "bg-green-500/20 text-green-400" : "bg-red-500/20 text-red-400"}>
-                      {volumeRunning ? "RUNNING" : "STOPPED"}
+                    <Badge className={volumeRunning ? "bg-green-500/20 text-green-400" : "bg-orange-500/20 text-orange-400"}>
+                      {volumeRunning ? "RUNNING" : (volumeBotStatus?.totalTrades > 0 ? "PAUSED" : "READY")}
                     </Badge>
                     <div className="text-[9px] text-slate-300 font-medium">
                       {volumeBotStatus ? (
@@ -2255,14 +2290,14 @@ export default function DashboardPage() {
               <CardContent className="space-y-1 px-2 pb-2">
                 <div className="flex flex-wrap items-center gap-1">
                   {volumeRunning ? (
-                    <Button onClick={stopVolumeBot} className="h-8 bg-red-500 hover:bg-red-600">
+                    <Button onClick={stopVolumeBot} className="h-8 bg-orange-500 hover:bg-orange-600 text-black">
                       <Pause className="w-4 h-4 mr-2" />
-                      Stop
+                      Pause
                     </Button>
                   ) : (
                     <Button onClick={startVolumeBot} disabled={!selectedToken} className="h-8 bg-green-500 hover:bg-green-600">
                       <Play className="w-4 h-4 mr-2" />
-                      Start
+                      {volumeBotStatus?.totalTrades > 0 ? "Resume" : "Start"}
                     </Button>
                   )}
                   <div className="flex items-center gap-3 text-[11px] text-neutral-400">
@@ -3061,55 +3096,28 @@ export default function DashboardPage() {
           </DialogHeader>
           <div className="space-y-3">
             <div className="space-y-1 bg-neutral-800/50 p-2 rounded">
-              <Label className="text-xs text-neutral-300 font-bold">Strategy Presets</Label>
-              <div className="flex gap-2">
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="h-6 text-[10px] border-green-500/30 hover:bg-green-500/10 hover:text-green-400"
-                  onClick={() => setVolumeBotConfig(prev => ({
-                    ...prev,
-                    mode: "wash",
-                    amountMode: "random",
-                    minAmount: "0.005",
-                    maxAmount: "0.05",
-                    slippage: "15",
-                    priorityFee: "0.0001"
-                  }))}
-                >
-                  Organic Growth
-                </Button>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="h-6 text-[10px] border-purple-500/30 hover:bg-purple-500/10 hover:text-purple-400"
-                  onClick={() => setVolumeBotConfig(prev => ({
-                    ...prev,
-                    mode: "wash",
-                    amountMode: "random",
-                    minAmount: "0.1",
-                    maxAmount: "0.5",
-                    slippage: "25",
-                    priorityFee: "0.005"
-                  }))}
-                >
-                  Frenzy Mode
-                </Button>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="h-6 text-[10px] border-blue-500/30 hover:bg-blue-500/10 hover:text-blue-400"
-                  onClick={() => setVolumeBotConfig(prev => ({
-                    ...prev,
-                    mode: "buy",
-                    amountMode: "fixed",
-                    fixedAmount: "0.01",
-                    slippage: "10",
-                    priorityFee: "0.0001"
-                  }))}
-                >
-                  Slow Accumulate
-                </Button>
+              <Label className="text-xs text-neutral-300 font-bold">Speed Mode (Seconds)</Label>
+              <div className="grid grid-cols-2 gap-2">
+                <div className="space-y-1">
+                  <Label className="text-xs text-neutral-400">From (Min)</Label>
+                  <Input
+                    type="number"
+                    min="1"
+                    className="bg-background border-border text-xs"
+                    value={volumeBotConfig.minInterval}
+                    onChange={(e) => setVolumeBotConfig(prev => ({ ...prev, minInterval: e.target.value }))}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs text-neutral-400">To (Max)</Label>
+                  <Input
+                    type="number"
+                    min="1"
+                    className="bg-background border-border text-xs"
+                    value={volumeBotConfig.maxInterval}
+                    onChange={(e) => setVolumeBotConfig(prev => ({ ...prev, maxInterval: e.target.value }))}
+                  />
+                </div>
               </div>
             </div>
 
