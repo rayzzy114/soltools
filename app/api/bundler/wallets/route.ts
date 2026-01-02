@@ -132,7 +132,11 @@ export async function GET(request: NextRequest) {
   }
 }
 
-// POST - wallet actions
+/**
+ * Handle POST requests for bundler wallet operations such as import, refresh balances, fund, delete-batch, collect SOL, update, delete, and create-atas.
+ *
+ * @returns A NextResponse with a JSON body containing the action-specific result (e.g., wallet data, signatures, success/count) or an `error` message on failure.
+ */
 export async function POST(request: NextRequest) {
   const correlationId = getCorrelationId(request)
   try {
