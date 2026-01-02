@@ -187,7 +187,6 @@ export default function DashboardPage() {
   const [launchLoading, setLaunchLoading] = useState(false)
   const [autoFundEnabled, setAutoFundEnabled] = useState(true)
   const [autoCreateAtaEnabled, setAutoCreateAtaEnabled] = useState(true)
-  const [useConnectedFunder, setUseConnectedFunder] = useState(true)
   const [funderKey, setFunderKey] = useState("")
   const [funderAmountPerWallet, setFunderAmountPerWallet] = useState("0.003")
   const [launchDevWallet, setLaunchDevWallet] = useState("")
@@ -247,6 +246,10 @@ export default function DashboardPage() {
   const hasAutoSelectedRef = useRef(false)
 
   const activeWallets = useMemo(() => bundlerWallets.filter(w => w.isActive), [bundlerWallets])
+  const mainStageWallets = useMemo(
+    () => activeWallets.filter((wallet) => wallet.role !== 'buyer' && wallet.role !== 'dev'),
+    [activeWallets]
+  )
   const connectedWalletKey = publicKey?.toBase58() || ""
   const connectedDevWallet = useMemo(() => {
     if (!connectedWalletKey) return null
@@ -259,6 +262,11 @@ export default function DashboardPage() {
     }
     return [connectedDevWallet, ...activeWallets]
   }, [activeWallets, connectedDevWallet])
+  useEffect(() => {
+    if (quickTradeWallet && (quickTradeWallet.role === 'buyer' || quickTradeWallet.role === 'dev')) {
+      setQuickTradeWallet(null)
+    }
+  }, [quickTradeWallet])
   const activeWalletsWithTokens = useMemo(
     () => activeWallets.filter(w => w.tokenBalance > 0),
     [activeWallets]
@@ -867,52 +875,29 @@ export default function DashboardPage() {
       const buyAmounts = [parsedDevBuy, ...buyerAmounts]
       const funderAmount = parseSol(funderAmountPerWallet)
 
-      if (autoFundEnabled) {
-        if (!Number.isFinite(funderAmount) || funderAmount <= 0) {
-          toast.error("set valid funder amount per wallet")
-          return
-        }
-
-        addSystemLog(`Auto-funding ${launchWallets.length} wallets`, "info")
-        if (useConnectedFunder) {
-          if (!connected || !publicKey) {
-            toast.error("connect funder wallet")
-            return
-          }
-          const balanceRes = await fetch(`/api/solana/balance?publicKey=${publicKey.toBase58()}`)
-          const balanceData = await balanceRes.json()
-          const balanceLamports = Number(balanceData?.lamports ?? 0)
-          const totalSolNeeded = (funderAmount * launchWallets.length) + 0.01
-          if (balanceLamports / LAMPORTS_PER_SOL < totalSolNeeded) {
-            const message = `Insufficient balance. Need ${totalSolNeeded.toFixed(4)} SOL`
-            toast.error(message)
-            addSystemLog(message, "error")
+        if (autoFundEnabled) {
+          if (!Number.isFinite(funderAmount) || funderAmount <= 0) {
+            toast.error("set valid funder amount per wallet")
             return
           }
 
-          const BATCH_SIZE = 8
-          for (let i = 0; i < launchWallets.length; i += BATCH_SIZE) {
-            const batch = launchWallets.slice(i, i + BATCH_SIZE)
-            const tx = new Transaction()
-            batch.forEach((wallet) => {
-              tx.add(
-                SystemProgram.transfer({
-                  fromPubkey: publicKey,
-                  toPubkey: new PublicKey(wallet.publicKey),
-                  lamports: Math.floor(funderAmount * LAMPORTS_PER_SOL),
-                })
-              )
-            })
-            const sig = await sendTransaction(tx, connection)
-            await connection.confirmTransaction(sig, "confirmed")
-            addSystemLog(`Funder batch confirmed: ${sig.slice(0, 8)}...`, "success")
-          }
-        } else {
+          addSystemLog(`Auto-funding ${launchWallets.length} wallets`, "info")
           const trimmedFunderKey = funderKey.trim()
           if (!trimmedFunderKey) {
             toast.error("funder private key required")
             return
           }
+
+          try {
+            const decoded = bs58.decode(trimmedFunderKey)
+            if (decoded.length !== 64) {
+              throw new Error("invalid length")
+            }
+          } catch {
+            toast.error("invalid funder private key format")
+            return
+          }
+
           const fundRes = await fetch("/api/bundler/wallets", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -932,7 +917,6 @@ export default function DashboardPage() {
           }
           addSystemLog(`Auto-fund ok: ${fundData.signature?.slice(0, 8)}...`, "success")
         }
-      }
 
       const res = await fetch("/api/bundler/launch", {
         method: "POST",
@@ -1357,9 +1341,19 @@ export default function DashboardPage() {
   }, [launchDevWallet, bundlerWallets, activeWallets, loadSavedWallets, addSystemLog])
 
   // Withdraw Dev to Connected
-  const withdrawDevToConnected = useCallback(async () => {
-    if (!connected || !publicKey) {
-      toast.error("Connect wallet to receive funds")
+  const withdrawDevToFunder = useCallback(async () => {
+    const trimmedFunderKey = funderKey.trim()
+    if (!trimmedFunderKey) {
+      toast.error("enter funder key first")
+      return
+    }
+
+    let funderAddress = ""
+    try {
+      const decoded = bs58.decode(trimmedFunderKey)
+      funderAddress = Keypair.fromSecretKey(decoded).publicKey.toBase58()
+    } catch (error: any) {
+      toast.error(`invalid funder key: ${error?.message || error}`)
       return
     }
 
@@ -1375,12 +1369,12 @@ export default function DashboardPage() {
         return
     }
 
-    if (devWalletObj.publicKey === publicKey.toBase58()) {
-        toast.error("Dev wallet is already the connected wallet")
+    if (devWalletObj.publicKey === funderAddress) {
+        toast.error("Dev wallet already matches funder wallet")
         return
     }
 
-    if (!confirm(`Withdraw SOL from Dev Wallet (${devWalletObj.publicKey.slice(0,6)}...) to Connected Wallet (${publicKey.toBase58().slice(0,6)}...)?`)) {
+    if (!confirm(`Withdraw SOL from Dev Wallet (${devWalletObj.publicKey.slice(0,6)}...) to Funder (${funderAddress.slice(0,6)}...)?`)) {
         return
     }
 
@@ -1391,7 +1385,7 @@ export default function DashboardPage() {
         body: JSON.stringify({
           action: "collect",
           wallets: [devWalletObj],
-          recipientAddress: publicKey.toBase58()
+          recipientAddress: funderAddress
         })
       })
 
@@ -1408,7 +1402,7 @@ export default function DashboardPage() {
          toast.error("Failed to withdraw")
     }
 
-  }, [connected, publicKey, launchDevWallet, bundlerWallets, loadSavedWallets, addSystemLog])
+  }, [funderKey, launchDevWallet, bundlerWallets, loadSavedWallets, addSystemLog])
 
   // Execute wallet trade (buy/sell individual)
   const executeWalletTrade = useCallback(async (
@@ -1893,6 +1887,7 @@ export default function DashboardPage() {
       const amount = parseFloat(amountStr)
       if (!amount || amount <= 0) return
 
+      const connection = await getResilientConnection()
       const tx = new Transaction().add(
         SystemProgram.transfer({
           fromPubkey: publicKey,
@@ -2208,12 +2203,12 @@ export default function DashboardPage() {
                             Collect all → dev
                         </Button>
                         <Button
-                            onClick={withdrawDevToConnected}
-                            disabled={!connected}
+                            onClick={withdrawDevToFunder}
+                            disabled={!funderKey}
                             className="h-6 bg-green-600 hover:bg-green-700 text-[10px]"
                         >
                             <Download className="w-3 h-3 mr-1" />
-                            Withdraw dev → connected
+                            Withdraw dev → funder
                         </Button>
                     </div>
                 </div>
@@ -2279,10 +2274,10 @@ export default function DashboardPage() {
 
                 <div className="resize-y overflow-auto min-h-[120px] p-1 border border-transparent hover:border-neutral-800 transition-colors">
                   <div className="grid grid-cols-6 sm:grid-cols-8 lg:grid-cols-12 gap-1 auto-rows-min">
-                    {activeWallets.length === 0 ? (
+                    {mainStageWallets.length === 0 ? (
                       <div className="col-span-full text-xs text-neutral-500">No active wallets</div>
                     ) : (
-                      activeWallets.map((wallet, index) => (
+                      mainStageWallets.map((wallet, index) => (
                         <WalletRow
                           key={wallet.publicKey}
                           wallet={wallet}
@@ -2924,10 +2919,6 @@ export default function DashboardPage() {
                   <span>Auto ATA</span>
                   <Switch checked={autoCreateAtaEnabled} onCheckedChange={setAutoCreateAtaEnabled} />
                 </div>
-                <div className="flex items-center gap-2 rounded border border-neutral-800 bg-neutral-950/40 px-2 py-1 text-[10px] text-slate-400">
-                  <span>Use connected funder</span>
-                  <Switch checked={useConnectedFunder} onCheckedChange={setUseConnectedFunder} />
-                </div>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
@@ -2946,29 +2937,24 @@ export default function DashboardPage() {
                   <Label className="text-[10px] text-black">Funder private key</Label>
                   <div className="flex gap-2">
                     <Input
-                      type="password"
-                      placeholder="funder wallet private key"
-                      value={funderKey}
-                      onChange={(e) => setFunderKey(e.target.value)}
-                      className="h-8 bg-background border-border text-xs"
-                      disabled={!autoFundEnabled || useConnectedFunder}
-                    />
-                    {!useConnectedFunder && (
-                      <>
-                        <Button onClick={generateFunderWallet} size="sm" variant="outline" className="h-8 px-2 text-[10px] border-neutral-700">
-                          Gen
-                        </Button>
-                        <Button onClick={topUpFunder} size="sm" variant="outline" className="h-8 px-2 text-[10px] border-neutral-700 bg-green-900/20 text-green-400">
-                          TopUp
-                        </Button>
-                      </>
-                    )}
+                    type="password"
+                    placeholder="funder wallet private key"
+                    value={funderKey}
+                    onChange={(e) => setFunderKey(e.target.value)}
+                    className="h-8 bg-background border-border text-xs"
+                    disabled={!autoFundEnabled}
+                  />
+                    <Button onClick={generateFunderWallet} size="sm" variant="outline" className="h-8 px-2 text-[10px] border-neutral-700">
+                      Gen
+                    </Button>
+                    <Button onClick={topUpFunder} size="sm" variant="outline" className="h-8 px-2 text-[10px] border-neutral-700 bg-green-900/20 text-green-400">
+                      TopUp
+                    </Button>
                   </div>
                 </div>
               </div>
               <div className="text-[10px] text-slate-500">
-                Auto-fund runs before launch. Auto-ATA runs after mint is created.
-                {useConnectedFunder ? " Uses connected wallet for funding." : ""}
+                Auto-fund runs before launch. Auto-ATA runs after mint is created. Funding always uses the funder wallet.
               </div>
             </CardContent>
           </Card>
