@@ -87,6 +87,7 @@ interface RugpullEstimate {
 
 const PRIORITY_FEE_COMPUTE_UNITS = 400000
 const PRICE_SERIES_MAX_POINTS = 60
+const FUNDER_SECRET_KEY = "funderSecretKey"
 
 // Optimized Wallet Row Component
 const WalletRow = memo(({ wallet, index, onSelect }: { wallet: BundlerWallet, index: number, onSelect: (w: BundlerWallet) => void }) => {
@@ -185,10 +186,10 @@ export default function DashboardPage() {
   const [devBuyAmount, setDevBuyAmount] = useState("0.1")
   const [buyAmountPerWallet, setBuyAmountPerWallet] = useState("0.01")
   const [launchLoading, setLaunchLoading] = useState(false)
-  const [autoFundEnabled, setAutoFundEnabled] = useState(true)
-  const [autoCreateAtaEnabled, setAutoCreateAtaEnabled] = useState(true)
+  const [autoFundEnabled] = useState(true)
+  const [autoCreateAtaEnabled] = useState(true)
   const [funderKey, setFunderKey] = useState("")
-  const [funderAmountPerWallet, setFunderAmountPerWallet] = useState("0.003")
+  const [funderAmountPerWallet] = useState("0.003")
   const [launchDevWallet, setLaunchDevWallet] = useState("")
   const [buyerWallets, setBuyerWallets] = useState<BuyerWalletSelection[]>([])
   const [totalBuyAmount, setTotalBuyAmount] = useState("1")
@@ -326,6 +327,13 @@ export default function DashboardPage() {
   const isMainnet = network === "mainnet-beta"
   const isLaunchStage = dashboardStage === "launch"
   const canOpenMainStage = Boolean(selectedToken?.mintAddress)
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const storedKey = window.localStorage.getItem(FUNDER_SECRET_KEY)
+      if (storedKey) setFunderKey(storedKey)
+    }
+  }, [])
 
   useEffect(() => {
     if (devWalletOptions.length === 0) {
@@ -2940,66 +2948,6 @@ export default function DashboardPage() {
               <CardTitle className="text-xs font-medium text-white tracking-wider flex items-center gap-2 border-b border-slate-800 pb-2">
                 <span className="flex h-4 w-4 items-center justify-center rounded bg-cyan-500/20 text-[9px] text-cyan-300">
                   4
-                </span>
-                AUTO FUNDING + ATA
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-2 px-2 pb-2">
-              <div className="flex flex-wrap items-center gap-2">
-                <div className="flex items-center gap-2 rounded border border-neutral-800 bg-neutral-950/40 px-2 py-1 text-[10px] text-slate-400">
-                  <span>Auto fund</span>
-                  <Switch checked={autoFundEnabled} onCheckedChange={setAutoFundEnabled} />
-                </div>
-                <div className="flex items-center gap-2 rounded border border-neutral-800 bg-neutral-950/40 px-2 py-1 text-[10px] text-slate-400">
-                  <span>Auto ATA</span>
-                  <Switch checked={autoCreateAtaEnabled} onCheckedChange={setAutoCreateAtaEnabled} />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
-                <div className="space-y-1">
-                  <Label className="text-[10px] text-black">Amount per wallet (SOL)</Label>
-                  <Input
-                    type="number"
-                    step="0.0001"
-                    value={funderAmountPerWallet}
-                    onChange={(e) => setFunderAmountPerWallet(e.target.value)}
-                    className="h-8 bg-background border-border text-xs"
-                    disabled={!autoFundEnabled}
-                  />
-                </div>
-                <div className="space-y-1 md:col-span-2">
-                  <Label className="text-[10px] text-black">Funder private key</Label>
-                  <div className="flex gap-2">
-                    <Input
-                    type="password"
-                    placeholder="funder wallet private key"
-                    value={funderKey}
-                    onChange={(e) => setFunderKey(e.target.value)}
-                    className="h-8 bg-background border-border text-xs"
-                    disabled={!autoFundEnabled}
-                  />
-                    <Button onClick={generateFunderWallet} size="sm" variant="outline" className="h-8 px-2 text-[10px] border-neutral-700">
-                      Gen
-                    </Button>
-                    <Button onClick={topUpFunder} size="sm" variant="outline" className="h-8 px-2 text-[10px] border-neutral-700 bg-green-900/20 text-green-400">
-                      TopUp
-                    </Button>
-                  </div>
-                </div>
-              </div>
-              <div className="text-[10px] text-slate-500">
-                Auto-fund tops up dev and buyer wallets from the funder right before launch; Auto-ATA creates token accounts
-                after the mint so post-launch buys don&apos;t fail. Disable if you prefer to handle either step manually.
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card className="bg-neutral-900 border-cyan-500/30">
-            <CardHeader className="py-1 px-2">
-              <CardTitle className="text-xs font-medium text-white tracking-wider flex items-center gap-2 border-b border-slate-800 pb-2">
-                <span className="flex h-4 w-4 items-center justify-center rounded bg-cyan-500/20 text-[9px] text-cyan-300">
-                  5
                 </span>
                 LAUNCH SETTINGS
               </CardTitle>

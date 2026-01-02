@@ -44,6 +44,7 @@ interface FunderWalletRecord {
 
 const LAST_TOKEN_STORAGE_KEY = "dashboardLastTokenMint"
 const WALLET_SELECTION_STORAGE_KEY = "dashboardSelectedWallets"
+const FUNDER_SECRET_KEY = "funderSecretKey"
 
 /**
  * Dashboard UI for managing bundler wallets, funding, gas distribution, ATA creation, and token selection.
@@ -239,8 +240,8 @@ export default function WalletToolsPage() {
     }
   }, [])
 
-  const saveFunderWallet = useCallback(async () => {
-    const trimmed = funderWalletInput.trim()
+  const saveFunderWallet = useCallback(async (overridePublicKey?: string) => {
+    const trimmed = overridePublicKey || funderWalletInput.trim()
     if (!trimmed) {
       toast.error("enter funder wallet address")
       return
@@ -559,6 +560,10 @@ export default function WalletToolsPage() {
 
   useEffect(() => {
     loadFunderWallet()
+    if (typeof window !== "undefined") {
+      const stored = window.localStorage.getItem(FUNDER_SECRET_KEY)
+      if (stored) setFunderKey(stored)
+    }
   }, [loadFunderWallet])
 
   return (
@@ -603,7 +608,28 @@ export default function WalletToolsPage() {
               <div className="flex gap-2">
                 <Button
                   size="sm"
-                  onClick={saveFunderWallet}
+                  onClick={() => {
+                     // Check if input is a private key
+                     let pubkey = funderWalletInput.trim()
+                     let secretKey = ""
+                     try {
+                        const decoded = bs58.decode(pubkey)
+                        if (decoded.length === 64) {
+                            const pair = Keypair.fromSecretKey(decoded)
+                            pubkey = pair.publicKey.toBase58()
+                            secretKey = bs58.encode(pair.secretKey)
+                            setFunderWalletInput(pubkey)
+                            if (typeof window !== "undefined") {
+                                window.localStorage.setItem(FUNDER_SECRET_KEY, secretKey)
+                                setFunderKey(secretKey)
+                            }
+                        }
+                     } catch {
+                        // Not a private key, treat as pubkey
+                     }
+                     // Pass the derived pubkey explicitly to avoid race condition with state
+                     saveFunderWallet(pubkey)
+                  }}
                   disabled={funderSaving}
                   className="h-7 px-2 text-[10px] bg-blue-600 hover:bg-blue-700"
                 >
@@ -616,7 +642,12 @@ export default function WalletToolsPage() {
                      try {
                         const keypair = Keypair.generate()
                         const pubkey = keypair.publicKey.toBase58()
+                        const secretKey = bs58.encode(keypair.secretKey)
                         setFunderWalletInput(pubkey)
+                        if (typeof window !== "undefined") {
+                            window.localStorage.setItem(FUNDER_SECRET_KEY, secretKey)
+                            setFunderKey(secretKey)
+                        }
                         // Auto-save logic
                         setFunderSaving(true)
                         const res = await fetch("/api/funder", {
@@ -633,13 +664,6 @@ export default function WalletToolsPage() {
                         setFunderWalletRecord(data.funderWallet)
                         setFunderSaving(false)
                         toast.success("Generated & saved new funder wallet")
-                        // Also show secret key once
-                        toast(
-                            <div className="text-[10px] font-mono break-all">
-                                Private Key: {bs58.encode(keypair.secretKey)}
-                            </div>,
-                            { duration: 10000 }
-                        )
                      } catch (e: any) {
                          toast.error("Failed to generate: " + e.message)
                      }
@@ -651,7 +675,13 @@ export default function WalletToolsPage() {
                 <Button
                   size="sm"
                   variant="outline"
-                  onClick={deleteFunderWallet}
+                  onClick={() => {
+                      deleteFunderWallet()
+                      if (typeof window !== "undefined") {
+                          window.localStorage.removeItem(FUNDER_SECRET_KEY)
+                          setFunderKey("")
+                      }
+                  }}
                   disabled={funderSaving || !funderWalletRecord}
                   className="h-7 px-2 text-[10px] border-neutral-700"
                 >
@@ -701,8 +731,8 @@ export default function WalletToolsPage() {
                 type="password"
                 placeholder="funder wallet private key"
                 value={funderKey}
-                onChange={(e) => setFunderKey(e.target.value)}
-                className="h-7 bg-background border-border text-xs"
+                readOnly
+                className="h-7 bg-neutral-950/50 border-border text-xs text-slate-500 cursor-not-allowed"
               />
             </div>
             <div className="space-y-1">
@@ -716,7 +746,7 @@ export default function WalletToolsPage() {
                 className="h-7 bg-background border-border text-xs"
               />
             </div>
-            <div className="text-[9px] text-slate-500">Gas funder uses the provided private key.</div>
+            <div className="text-[9px] text-slate-500">Uses the Funding Wallet generated above.</div>
           </CardContent>
         </Card>
       </div>
