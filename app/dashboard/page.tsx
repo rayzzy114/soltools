@@ -265,7 +265,7 @@ export default function DashboardPage() {
     return [connectedDevWallet, ...activeWallets]
   }, [activeWallets, connectedDevWallet])
   useEffect(() => {
-    if (quickTradeWallet && (quickTradeWallet.role === 'buyer' || quickTradeWallet.role === 'dev')) {
+    if (quickTradeWallet && (quickTradeWallet.role === 'buyer')) {
       setQuickTradeWallet(null)
     }
   }, [quickTradeWallet])
