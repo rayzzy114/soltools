@@ -54,7 +54,7 @@ const WALLET_SELECTION_STORAGE_KEY = "dashboardSelectedWallets"
  * - configuring and saving a funder wallet (including top-ups),
  * - distributing SOL gas to active wallets from the configured funder wallet (topped up via connected wallet),
  * - creating associated token accounts (ATAs) for active wallets,
- * - persisting and displaying system logs and manual trade settings.
+ * - persisting and displaying system logs.
  *
  * @returns The rendered WalletToolsPage React component tree.
  */
@@ -64,9 +64,6 @@ export default function WalletToolsPage() {
   const [selectedToken, setSelectedToken] = useState<Token | null>(null)
   const [bundlerWallets, setBundlerWallets] = useState<BundlerWallet[]>([])
   const [walletCount, setWalletCount] = useState("5")
-  const [manualBuyAmount, setManualBuyAmount] = useState("0.01")
-  const [manualSellPercent, setManualSellPercent] = useState("100")
-  const [manualTradeDirty, setManualTradeDirty] = useState(false)
   const [funderKey, setFunderKey] = useState("")
   const [gasAmount, setGasAmount] = useState("0.003")
   const [gasLoading, setGasLoading] = useState(false)
@@ -403,15 +400,6 @@ export default function WalletToolsPage() {
     }
   }, [bundlerWallets, loadSavedWallets])
 
-  const saveManualTradeSettings = useCallback(() => {
-    if (typeof window === "undefined") return
-    window.localStorage.setItem("dashboardManualBuyAmount", manualBuyAmount)
-    window.localStorage.setItem("dashboardManualSellPercent", manualSellPercent)
-    setManualTradeDirty(false)
-    addSystemLog("Manual trade settings saved", "success")
-    toast.success("Manual trade settings saved")
-  }, [manualBuyAmount, manualSellPercent, addSystemLog])
-
   const distributeGas = useCallback(async () => {
     const active = bundlerWallets.filter(w => w.isActive)
     if (active.length === 0) {
@@ -572,14 +560,6 @@ export default function WalletToolsPage() {
   useEffect(() => {
     loadFunderWallet()
   }, [loadFunderWallet])
-
-  useEffect(() => {
-    if (typeof window === "undefined") return
-    const savedBuy = window.localStorage.getItem("dashboardManualBuyAmount")
-    const savedSell = window.localStorage.getItem("dashboardManualSellPercent")
-    if (savedBuy) setManualBuyAmount(savedBuy)
-    if (savedSell) setManualSellPercent(savedSell)
-  }, [])
 
   return (
     <div className="p-2 space-y-2">
@@ -818,47 +798,6 @@ export default function WalletToolsPage() {
           <div className="text-[10px] text-slate-400">Active: {activeWallets.length}</div>
         </CardHeader>
         <CardContent className="px-2 pb-2">
-          <div className="grid grid-cols-2 gap-2 mb-2">
-            <div className="space-y-1">
-              <Label className="text-[10px] text-slate-400">Manual Buy (SOL)</Label>
-              <Input
-                type="number"
-                step="0.0001"
-                value={manualBuyAmount}
-                onChange={(e) => {
-                  setManualBuyAmount(e.target.value)
-                  setManualTradeDirty(true)
-                }}
-                className="h-6 bg-background border-border text-xs"
-              />
-            </div>
-            <div className="space-y-1">
-              <Label className="text-[10px] text-slate-400">Manual Sell (%)</Label>
-              <Input
-                type="number"
-                min="1"
-                max="100"
-                step="1"
-                value={manualSellPercent}
-                onChange={(e) => {
-                  setManualSellPercent(e.target.value)
-                  setManualTradeDirty(true)
-                }}
-                className="h-6 bg-background border-border text-xs"
-              />
-            </div>
-          </div>
-          <div className="flex justify-end mb-2">
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={saveManualTradeSettings}
-              disabled={!manualTradeDirty}
-              className="h-6 px-2 border-neutral-700 text-[10px]"
-            >
-              Save
-            </Button>
-          </div>
           <div className="flex items-center justify-between mb-2 pb-1 border-b border-slate-800">
              <div className="text-[10px] text-slate-400">Total Wallets: {bundlerWallets.length}</div>
           </div>

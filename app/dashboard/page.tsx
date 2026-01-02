@@ -2954,7 +2954,8 @@ export default function DashboardPage() {
                 </div>
               </div>
               <div className="text-[10px] text-slate-500">
-                Auto-fund runs before launch. Auto-ATA runs after mint is created. Funding always uses the funder wallet.
+                Auto-fund tops up dev and buyer wallets from the funder right before launch; Auto-ATA creates token accounts
+                after the mint so post-launch buys don&apos;t fail. Disable if you prefer to handle either step manually.
               </div>
             </CardContent>
           </Card>
