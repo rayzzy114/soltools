@@ -129,7 +129,8 @@ export async function POST(request: NextRequest) {
         slippage,
         priorityFee,
         jitoTip,
-        jitoRegion
+        jitoRegion,
+        intervalSeconds
       } = body
 
       if (!mintAddress) {
@@ -156,11 +157,19 @@ export async function POST(request: NextRequest) {
               isActive: true,
               minAmount: minAmount || "0.005",
               maxAmount: maxAmount || "0.02",
-              intervalSeconds: 30,
+              intervalSeconds: intervalSeconds || 30,
               numberOfWallets: 5,
             }
           })
           resolvedPairId = pair.id
+        }
+
+        // Always update interval on the pair if provided
+        if (intervalSeconds) {
+          await prisma.volumeBotPair.update({
+            where: { id: resolvedPairId },
+            data: { intervalSeconds }
+          })
         }
 
         // Update bot settings in DB
