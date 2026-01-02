@@ -216,6 +216,8 @@ export default function DashboardPage() {
     priorityFee: "0.005",
     jitoTip: "0.0001",
     jitoRegion: "frankfurt",
+    minInterval: "30",
+    maxInterval: "120",
   })
   const [manualBuyAmount, setManualBuyAmount] = useState("0.01")
   const [manualSellPercent, setManualSellPercent] = useState("100")
@@ -1090,6 +1092,15 @@ export default function DashboardPage() {
             if (data.settings.jitoRegion) newConfig.jitoRegion = data.settings.jitoRegion
           }
 
+          // Interval is stored on the pair, not settings
+          if (data.minIntervalSeconds) newConfig.minInterval = String(data.minIntervalSeconds)
+          if (data.maxIntervalSeconds) newConfig.maxInterval = String(data.maxIntervalSeconds)
+          // Fallback if not set but intervalSeconds is (legacy)
+          if (!data.minIntervalSeconds && data.intervalSeconds) {
+             newConfig.minInterval = String(data.intervalSeconds)
+             newConfig.maxInterval = String(data.intervalSeconds)
+          }
+
           return newConfig
         })
       }
@@ -1588,7 +1599,9 @@ export default function DashboardPage() {
           slippage: volumeBotConfig.slippage,
           priorityFee: volumeBotConfig.priorityFee,
           jitoTip: volumeBotConfig.jitoTip,
-          jitoRegion: volumeBotConfig.jitoRegion
+          jitoRegion: volumeBotConfig.jitoRegion,
+          minInterval: parseInt(volumeBotConfig.minInterval) || 30,
+          maxInterval: parseInt(volumeBotConfig.maxInterval) || 120
         })
       })
 
@@ -3085,56 +3098,71 @@ export default function DashboardPage() {
             <div className="space-y-1 bg-neutral-800/50 p-2 rounded">
               <Label className="text-xs text-neutral-300 font-bold">Strategy Presets</Label>
               <div className="flex gap-2">
-                <Button
-                  size="sm"
-                  variant="outline"
-                  title={`Mode: Wash\nAmount: 0.005 - 0.05 SOL\nSlippage: 15%\nPriority: 0.0001 SOL`}
-                  className="h-6 text-[10px] border-green-500/30 hover:bg-green-500/10 hover:text-green-400"
-                  onClick={() => setVolumeBotConfig(prev => ({
-                    ...prev,
-                    mode: "wash",
-                    amountMode: "random",
-                    minAmount: "0.005",
-                    maxAmount: "0.05",
-                    slippage: "15",
-                    priorityFee: "0.0001"
-                  }))}
-                >
-                  Organic Growth
-                </Button>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  title={`Mode: Wash\nAmount: 0.1 - 0.5 SOL\nSlippage: 25%\nPriority: 0.005 SOL`}
-                  className="h-6 text-[10px] border-purple-500/30 hover:bg-purple-500/10 hover:text-purple-400"
-                  onClick={() => setVolumeBotConfig(prev => ({
-                    ...prev,
-                    mode: "wash",
-                    amountMode: "random",
-                    minAmount: "0.1",
-                    maxAmount: "0.5",
-                    slippage: "25",
-                    priorityFee: "0.005"
-                  }))}
-                >
-                  Frenzy Mode
-                </Button>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  title={`Mode: Buy Only\nAmount: Fixed 0.01 SOL\nSlippage: 10%\nPriority: 0.0001 SOL`}
-                  className="h-6 text-[10px] border-blue-500/30 hover:bg-blue-500/10 hover:text-blue-400"
-                  onClick={() => setVolumeBotConfig(prev => ({
-                    ...prev,
-                    mode: "buy",
-                    amountMode: "fixed",
-                    fixedAmount: "0.01",
-                    slippage: "10",
-                    priorityFee: "0.0001"
-                  }))}
-                >
-                  Slow Accumulate
-                </Button>
+                <div className="flex flex-col items-center">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    title={`Mode: Wash\nAmount: 0.005 - 0.05 SOL\nSlippage: 15%\nPriority: 0.0001 SOL\nInterval: 30s - 120s`}
+                    className="h-6 text-[10px] border-green-500/30 hover:bg-green-500/10 hover:text-green-400 w-full"
+                    onClick={() => setVolumeBotConfig(prev => ({
+                      ...prev,
+                      mode: "wash",
+                      amountMode: "random",
+                      minAmount: "0.005",
+                      maxAmount: "0.05",
+                      slippage: "15",
+                      priorityFee: "0.0001",
+                      minInterval: "30",
+                      maxInterval: "120"
+                    }))}
+                  >
+                    Organic Growth
+                  </Button>
+                  <span className="text-[9px] text-neutral-500">(30-120s)</span>
+                </div>
+                <div className="flex flex-col items-center">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    title={`Mode: Wash\nAmount: 0.1 - 0.5 SOL\nSlippage: 25%\nPriority: 0.005 SOL\nInterval: 5s - 25s`}
+                    className="h-6 text-[10px] border-purple-500/30 hover:bg-purple-500/10 hover:text-purple-400 w-full"
+                    onClick={() => setVolumeBotConfig(prev => ({
+                      ...prev,
+                      mode: "wash",
+                      amountMode: "random",
+                      minAmount: "0.1",
+                      maxAmount: "0.5",
+                      slippage: "25",
+                      priorityFee: "0.005",
+                      minInterval: "5",
+                      maxInterval: "25"
+                    }))}
+                  >
+                    Frenzy Mode
+                  </Button>
+                  <span className="text-[9px] text-neutral-500">(5-25s)</span>
+                </div>
+                <div className="flex flex-col items-center">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    title={`Mode: Buy Only\nAmount: Fixed 0.01 SOL\nSlippage: 10%\nPriority: 0.0001 SOL\nInterval: 120s - 600s`}
+                    className="h-6 text-[10px] border-blue-500/30 hover:bg-blue-500/10 hover:text-blue-400 w-full"
+                    onClick={() => setVolumeBotConfig(prev => ({
+                      ...prev,
+                      mode: "buy",
+                      amountMode: "fixed",
+                      fixedAmount: "0.01",
+                      slippage: "10",
+                      priorityFee: "0.0001",
+                      minInterval: "120",
+                      maxInterval: "600"
+                    }))}
+                  >
+                    Slow Accumulate
+                  </Button>
+                  <span className="text-[9px] text-neutral-500">(2-10m)</span>
+                </div>
               </div>
             </div>
 

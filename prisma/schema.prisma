@@ -64,7 +64,9 @@ model VolumeBotPair {
   isActive        Boolean            @default(false)
   minAmount       String
   maxAmount       String
-  intervalSeconds Int
+  intervalSeconds Int // Legacy or used as default/average
+  minIntervalSeconds Int           @default(30)
+  maxIntervalSeconds Int           @default(120)
   numberOfWallets Int                @default(1)
   randomDelays    Boolean            @default(true)
   antiDetection   Boolean            @default(true)
