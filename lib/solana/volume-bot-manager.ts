@@ -47,26 +47,64 @@ export class VolumeBotManager {
     this.engines.set(pairId, engine)
 
     // Start the bot loop
-    await this.log(pairId, `Bot loop scheduled every ${pair.intervalSeconds}s`, "info")
-    const interval = setInterval(async () => {
-      try {
-        await this.log(pairId, "Cycle tick", "info")
-        await engine.executeCycle()
-      } catch (error) {
-        console.error(`Bot ${pairId} cycle error:`, error)
-        await this.handleError(pairId, error as Error)
-      }
-    }, pair.intervalSeconds * 1000)
-
-    this.runningBots.set(pairId, interval)
+    // We use a dummy timer to indicate running state in runningBots map, but logic is recursive
+    this.runningBots.set(pairId, setTimeout(() => {}, 0))
+    this.scheduleNextCycle(pairId)
 
     await this.log(pairId, "Volume bot started", "info")
   }
 
+  private async scheduleNextCycle(pairId: string): Promise<void> {
+    if (!this.runningBots.has(pairId)) return
+
+    try {
+      // Reload pair config to get latest intervals
+      const pair = await prisma.volumeBotPair.findUnique({
+        where: { id: pairId },
+        select: { minIntervalSeconds: true, maxIntervalSeconds: true, intervalSeconds: true }
+      })
+
+      if (!pair) {
+        await this.stopBot(pairId)
+        return
+      }
+
+      // Calculate delay
+      const min = pair.minIntervalSeconds || pair.intervalSeconds || 30
+      const max = pair.maxIntervalSeconds || pair.intervalSeconds || 120
+      const delaySeconds = Math.floor(Math.random() * (max - min + 1)) + min
+
+      await this.log(pairId, `Next cycle in ${delaySeconds}s`, "info")
+
+      const timer = setTimeout(async () => {
+        if (!this.runningBots.has(pairId)) return
+        try {
+          const engine = this.engines.get(pairId)
+          if (engine) {
+            await this.log(pairId, "Cycle tick", "info")
+            await engine.executeCycle()
+          }
+        } catch (error) {
+          console.error(`Bot ${pairId} cycle error:`, error)
+          await this.handleError(pairId, error as Error)
+        } finally {
+          // Schedule next
+          this.scheduleNextCycle(pairId)
+        }
+      }, delaySeconds * 1000)
+
+      this.runningBots.set(pairId, timer)
+
+    } catch (error) {
+      console.error(`Scheduling error for ${pairId}:`, error)
+      await this.stopBot(pairId)
+    }
+  }
+
   async stopBot(pairId: string): Promise<void> {
-    const interval = this.runningBots.get(pairId)
-    if (interval) {
-      clearInterval(interval)
+    const timer = this.runningBots.get(pairId)
+    if (timer) {
+      clearTimeout(timer)
       this.runningBots.delete(pairId)
     }
 
