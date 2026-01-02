@@ -198,8 +198,6 @@ export default function DashboardPage() {
   const [cloneDialogOpen, setCloneDialogOpen] = useState(false)
   const [cloneTokenMint, setCloneTokenMint] = useState("")
   const [priceSeries, setPriceSeries] = useState<Array<{ time: string; price: number }>>([])
-  const [devKey, setDevKey] = useState("")
-  const [useConnectedDev, setUseConnectedDev] = useState(true)
   const [rugpullLoading, setRugpullLoading] = useState(false)
   const [systemLogs, setSystemLogs] = useState<string[]>([])
   const [rugpullSlippage, setRugpullSlippage] = useState("20")
@@ -307,15 +305,13 @@ export default function DashboardPage() {
   }, [rugpullEstimate])
   const volumeRunning = volumeBotConfig.isRunning || volumeBotStats.isRunning
   const devHolderPubkey = useMemo(() => {
-    if (useConnectedDev && publicKey) return publicKey
-    const trimmed = devKey.trim()
-    if (!trimmed) return null
+    if (!launchDevWallet) return null
     try {
-      return Keypair.fromSecretKey(bs58.decode(trimmed)).publicKey
+      return new PublicKey(launchDevWallet)
     } catch {
       return null
     }
-  }, [useConnectedDev, publicKey, devKey])
+  }, [launchDevWallet])
   const networkBlocked = pumpFunAvailable === false || rpcHealthy === false
   const isMainnet = network === "mainnet-beta"
   const isLaunchStage = dashboardStage === "launch"
@@ -1242,43 +1238,27 @@ export default function DashboardPage() {
     if (!selectedToken) return
 
     let resolvedDevKey = ""
-    // Try to find the dev wallet from roles if not manual/connected override
-    const devRoleWallet = bundlerWallets.find(w => w.role === 'dev')
-
-    if (useConnectedDev) {
-      if (!publicKey) {
-        addSystemLog("Connect wallet to use it as dev wallet", "error")
-        toast.error("connect wallet first")
-        return
-      }
-      const match = bundlerWallets.find(
-        (wallet) => wallet.publicKey === publicKey.toBase58() && wallet.secretKey
-      )
-      if (!match?.secretKey) {
-        // Fallback: is the connected wallet the dev wallet?
-        const message = "Connected wallet secret not found in saved wallets"
-        // If we found a dev role wallet, maybe suggesting it?
-        if (devRoleWallet) {
-           addSystemLog("Using detected dev wallet from role instead of connected", "info")
-           resolvedDevKey = devRoleWallet.secretKey
-        } else {
-           addSystemLog(message, "error")
-           toast.error(message)
-           return
-        }
-      } else {
-        resolvedDevKey = match.secretKey
-      }
-    } else if (devKey.trim()) {
-      resolvedDevKey = devKey.trim()
-    } else if (devRoleWallet) {
-       addSystemLog("Using detected dev wallet from role", "info")
-       resolvedDevKey = devRoleWallet.secretKey
-    } else {
-        addSystemLog("Dev wallet private key required", "error")
-        toast.error("dev wallet key required")
-        return
+    // Find dev wallet from active selection (launchDevWallet) or fallback to role='dev'
+    let devWalletObj = bundlerWallets.find(w => w.publicKey === launchDevWallet)
+    if (!devWalletObj) {
+      devWalletObj = bundlerWallets.find(w => w.role === 'dev')
     }
+
+    if (!devWalletObj) {
+      const msg = "No dev wallet selected (from launch or role='dev')"
+      addSystemLog(msg, "error")
+      toast.error(msg)
+      return
+    }
+
+    if (!devWalletObj.secretKey) {
+      const msg = "Selected dev wallet missing secret key"
+      addSystemLog(msg, "error")
+      toast.error(msg)
+      return
+    }
+
+    resolvedDevKey = devWalletObj.secretKey
 
     try {
       const bs58 = await import("bs58")
@@ -1315,9 +1295,7 @@ export default function DashboardPage() {
     }
   }, [
     selectedToken,
-    devKey,
-    useConnectedDev,
-    publicKey,
+    launchDevWallet,
     bundlerWallets,
     jitoTipSol,
     priorityFeeSol,
@@ -1392,23 +1370,6 @@ export default function DashboardPage() {
         devWalletObj = bundlerWallets.find(w => w.role === 'dev')
     }
 
-    if (!devWalletObj && devKey.trim()) {
-         try {
-            const bs58 = (await import("bs58")).default
-            const kp = Keypair.fromSecretKey(bs58.decode(devKey.trim()))
-            devWalletObj = {
-                publicKey: kp.publicKey.toBase58(),
-                secretKey: devKey.trim(),
-                solBalance: 0,
-                tokenBalance: 0,
-                isActive: true
-            }
-         } catch {
-             toast.error("Invalid dev private key")
-             return
-         }
-    }
-
     if (!devWalletObj) {
         toast.error("Dev wallet not found or selected")
         return
@@ -1447,7 +1408,7 @@ export default function DashboardPage() {
          toast.error("Failed to withdraw")
     }
 
-  }, [connected, publicKey, launchDevWallet, bundlerWallets, devKey, loadSavedWallets, addSystemLog])
+  }, [connected, publicKey, launchDevWallet, bundlerWallets, loadSavedWallets, addSystemLog])
 
   // Execute wallet trade (buy/sell individual)
   const executeWalletTrade = useCallback(async (
@@ -2178,21 +2139,13 @@ export default function DashboardPage() {
                     />
                   </div>
                   <div className="space-y-1">
-                    <div className="flex items-center justify-between">
-                      <Label className="text-[10px] text-slate-600">Dev Wallet</Label>
-                      <div className="flex items-center gap-1 text-[10px] text-slate-500">
-                        <span>Connected</span>
-                        <Switch checked={useConnectedDev} onCheckedChange={setUseConnectedDev} />
-                      </div>
+                    <Label className="text-[10px] text-slate-600">Dev Wallet</Label>
+                    <div className="h-7 px-3 flex items-center bg-neutral-950/40 rounded border border-neutral-800 text-xs text-slate-300 font-mono">
+                      {launchDevWallet
+                        ? `${launchDevWallet.slice(0, 8)}...${launchDevWallet.slice(-8)}`
+                        : "No dev wallet selected"
+                      }
                     </div>
-                    <Input
-                      type="password"
-                      placeholder="dev wallet private key"
-                      value={devKey ? "*".repeat(Math.min(devKey.length, 20)) + (devKey.length > 20 ? "..." : "") : ""}
-                      onChange={(e) => setDevKey(e.target.value)}
-                      disabled={useConnectedDev}
-                      className="h-7 bg-background border-border text-xs"
-                    />
                   </div>
                 </div>
                 <div className="grid grid-cols-2 gap-1 rounded border border-red-500/20 bg-red-950/30 p-2 text-[10px]">
@@ -2236,7 +2189,7 @@ export default function DashboardPage() {
                   </Button>
                   <Button
                     onClick={rugpullDevWallet}
-                    disabled={!selectedToken || (useConnectedDev ? !publicKey : !devKey.trim())}
+                    disabled={!selectedToken || !launchDevWallet}
                     className="h-6 bg-red-600 hover:bg-red-700 text-[10px]"
                   >
                     <Flame className="w-3 h-3 mr-1" />
