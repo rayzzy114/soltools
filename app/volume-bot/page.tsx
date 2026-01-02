@@ -29,6 +29,8 @@ interface VolumeWallet {
   solBalance: number
   tokenBalance: number
   isActive: boolean
+  label?: string
+  role?: string
 }
 
 interface BundlerWallet extends VolumeWallet {
@@ -88,6 +90,16 @@ export default function VolumeBotPage() {
     [bundlerWallets]
   )
   
+  type SpeedPreset = "custom" | "slow" | "organic" | "furious"
+
+  const SPEED_PRESETS: Record<Exclude<SpeedPreset, "custom">, { label: string; minInterval: string; maxInterval: string }> = {
+    furious: { label: "Бешеный", minInterval: "1", maxInterval: "4" },
+    organic: { label: "Organic", minInterval: "5", maxInterval: "15" },
+    slow: { label: "Медленный", minInterval: "20", maxInterval: "45" },
+  }
+
+  const DEFAULT_SPEED_PRESET: SpeedPreset = "organic"
+
   // config
   const defaultConfig = {
     mintAddress: "",
@@ -98,8 +110,8 @@ export default function VolumeBotPage() {
     maxAmount: "0.02",
     minPercentage: "5",
     maxPercentage: "20",
-    minInterval: "5",
-    maxInterval: "15",
+    minInterval: SPEED_PRESETS[DEFAULT_SPEED_PRESET].minInterval,
+    maxInterval: SPEED_PRESETS[DEFAULT_SPEED_PRESET].maxInterval,
     slippage: "10",
     priorityFee: "0.0005",
     maxExecutions: "0",
@@ -110,6 +122,7 @@ export default function VolumeBotPage() {
     autoBundler: true,
   }
   const [config, setConfig] = useState(defaultConfig)
+  const [speedPreset, setSpeedPreset] = useState<SpeedPreset>(DEFAULT_SPEED_PRESET)
   const {
     mintAddress,
     mode,
@@ -131,6 +144,44 @@ export default function VolumeBotPage() {
     autoBundler,
   } = config
 
+  const devBundlerWallet = useMemo(
+    () => bundlerWallets.find((wallet) => wallet.role === "dev"),
+    [bundlerWallets],
+  )
+
+  const displayWallets = useMemo(() => {
+    if (!devBundlerWallet) return wallets
+
+    const existsInVolumeList = wallets.some((wallet) => wallet.publicKey === devBundlerWallet.publicKey)
+    if (existsInVolumeList) {
+      return wallets.map((wallet) =>
+        wallet.publicKey === devBundlerWallet.publicKey
+          ? { ...wallet, ...devBundlerWallet }
+          : wallet,
+      )
+    }
+
+    return [...wallets, { ...devBundlerWallet }]
+  }, [devBundlerWallet, wallets])
+
+  const volumeWallets = useMemo(() => wallets.filter((wallet) => wallet.role !== "dev"), [wallets])
+  const activeBundlerWalletsMemo = useMemo(
+    () => bundlerWallets.filter((wallet) => wallet.isActive && wallet.role !== "dev"),
+    [bundlerWallets],
+  )
+  const presetIntervalHint = useMemo(() => {
+    if (speedPreset !== "custom") {
+      const preset = SPEED_PRESETS[speedPreset as Exclude<SpeedPreset, "custom">]
+      if (preset) return `${preset.minInterval}-${preset.maxInterval}s`
+    }
+
+    if (minInterval && maxInterval) {
+      return `${minInterval}-${maxInterval}s`
+    }
+
+    return undefined
+  }, [maxInterval, minInterval, speedPreset])
+
   const setMintAddress = (value: string) => setConfig((prev) => ({ ...prev, mintAddress: value }))
   const setMode = (value: "buy" | "sell" | "wash") => setConfig((prev) => ({ ...prev, mode: value }))
   const setAmountMode = (value: "fixed" | "random" | "percentage") =>
@@ -149,6 +200,22 @@ export default function VolumeBotPage() {
   const setAutoFees = (value: boolean) => setConfig((prev) => ({ ...prev, autoFees: value }))
   const setAutoBundler = (value: boolean) => setConfig((prev) => ({ ...prev, autoBundler: value }))
   const setMaxExecutions = (value: string) => setConfig((prev) => ({ ...prev, maxExecutions: value }))
+  const handleSpeedPresetChange = (value: SpeedPreset) => {
+    if (value === "custom") {
+      setSpeedPreset("custom")
+      return
+    }
+
+    const preset = SPEED_PRESETS[value]
+    if (!preset) return
+
+    setSpeedPreset(value)
+    setConfig((prev) => ({
+      ...prev,
+      minInterval: preset.minInterval,
+      maxInterval: preset.maxInterval,
+    }))
+  }
   const setMultiThreaded = (value: boolean) => {
     setConfig((prev) => {
       const next = { ...prev, multiThreaded: value }
@@ -223,6 +290,14 @@ export default function VolumeBotPage() {
       }
     }
   }, [])
+
+  useEffect(() => {
+    const match = Object.entries(SPEED_PRESETS).find(
+      ([, preset]) => preset.minInterval === minInterval && preset.maxInterval === maxInterval,
+    )
+    const nextPreset = (match?.[0] as SpeedPreset | undefined) ?? "custom"
+    setSpeedPreset((prev) => (prev === nextPreset ? prev : nextPreset))
+  }, [maxInterval, minInterval])
 
   const fetchNetwork = async () => {
     try {
@@ -339,9 +414,9 @@ export default function VolumeBotPage() {
       const fee = parseSafe(config.priorityFee)
       if (Number.isFinite(tip)) params.set("jitoTip", String(Math.max(0, tip)))
       if (Number.isFinite(fee)) params.set("priorityFee", String(Math.max(0, fee)))
-      const activeBundlerWallets = bundlerWallets.filter((w) => w.isActive).map((w) => w.publicKey)
-      if (activeBundlerWallets.length > 0) {
-        params.set("walletAddresses", activeBundlerWallets.join(","))
+      const activeBundlerWalletPublicKeys = activeBundlerWalletsMemo.map((w) => w.publicKey)
+      if (activeBundlerWalletPublicKeys.length > 0) {
+        params.set("walletAddresses", activeBundlerWalletPublicKeys.join(","))
       }
       const res = await fetch(`/api/bundler/rugpull/estimate?${params.toString()}`)
       const data = await res.json()
@@ -368,12 +443,12 @@ export default function VolumeBotPage() {
   }, [config.mintAddress, bundlerWallets, config.priorityFee, config.jitoTip])
 
   const refreshWalletBalances = async () => {
-    if (wallets.length === 0 || !config.mintAddress) {
+    if (volumeWallets.length === 0 || !config.mintAddress) {
       emitLog(
         "H1",
         "app/volume-bot/page.tsx:refreshWalletBalances",
         "skip refresh (missing wallets or mint)",
-        { walletCount: wallets.length, mintAddress: config.mintAddress },
+        { walletCount: volumeWallets.length, mintAddress: config.mintAddress },
       )
       return
     }
@@ -384,7 +459,7 @@ export default function VolumeBotPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           action: "refresh-balances",
-          wallets,
+          wallets: volumeWallets,
           mintAddress: config.mintAddress,
         }),
       })
@@ -526,7 +601,7 @@ export default function VolumeBotPage() {
   const runBundledCycle = async () => {
     const mint = (config.mintAddress || "").trim()
     if (!mint) return
-    const activeWallets = bundlerWallets.filter((w) => w.isActive)
+    const activeWallets = activeBundlerWalletsMemo
     if (!activeWallets.length) return
 
     const action = resolveBundledAction(activeWallets)
@@ -581,8 +656,8 @@ export default function VolumeBotPage() {
   }
 
   const runBotCycle = useCallback(async () => {
-    const activeVolumeWallets = wallets.filter((w) => w.isActive && w.solBalance > 0.01)
-    const activeBundlerWallets = bundlerWallets.filter((w) => w.isActive)
+    const activeVolumeWallets = volumeWallets.filter((w) => w.isActive && w.solBalance > 0.01)
+    const activeBundlerWalletsForRun = activeBundlerWalletsMemo
     emitLog(
       "H1",
       "app/volume-bot/page.tsx:runBotCycle",
@@ -592,7 +667,7 @@ export default function VolumeBotPage() {
         mode,
         amountMode,
         activeWallets: activeVolumeWallets.length,
-        activeBundlerWallets: activeBundlerWallets.length,
+        activeBundlerWallets: activeBundlerWalletsForRun.length,
         executionCount: executionCountRef.current,
         maxExecutions: config.maxExecutions,
         multiThreaded: config.multiThreaded,
@@ -613,7 +688,7 @@ export default function VolumeBotPage() {
     }
 
     if (autoBundler) {
-      if (activeBundlerWallets.length === 0) return
+      if (activeBundlerWalletsForRun.length === 0) return
       await runBundledCycle()
       setStats((prev) => ({
         executionCount: prev.executionCount + 1,
@@ -709,7 +784,7 @@ export default function VolumeBotPage() {
     
     // refresh balances after trades
     await refreshWalletBalances()
-  }, [wallets, mintAddress, mode, amountMode, fixedAmount, minAmount, maxAmount, minPercentage, maxPercentage, slippage, priorityFee, maxExecutions, multiThreaded, autoBundler, bundlerWallets, jitoTip, jitoRegion, autoFees])
+  }, [volumeWallets, mintAddress, mode, amountMode, fixedAmount, minAmount, maxAmount, minPercentage, maxPercentage, slippage, priorityFee, maxExecutions, multiThreaded, autoBundler, bundlerWallets, jitoTip, jitoRegion, autoFees])
 
   const startBot = () => {
     emitLog(
@@ -718,8 +793,8 @@ export default function VolumeBotPage() {
       "start requested",
       {
         mintAddress,
-        walletCount: wallets.length,
-        activeWallets: wallets.filter(w => w.isActive).length,
+        walletCount: volumeWallets.length,
+        activeWallets: volumeWallets.filter(w => w.isActive).length,
         isRunning,
         mode,
         amountMode,
@@ -734,8 +809,8 @@ export default function VolumeBotPage() {
       return
     }
     
-    const activeWallets = wallets.filter(w => w.isActive)
-    const activeBundlerWallets = bundlerWallets.filter((w) => w.isActive)
+    const activeWallets = volumeWallets.filter(w => w.isActive)
+    const activeBundlerWallets = activeBundlerWalletsMemo
     if (autoBundler) {
       if (activeBundlerWallets.length === 0) {
         toast.error("no active bundler wallets")
@@ -777,10 +852,10 @@ export default function VolumeBotPage() {
   }
 
   const isMainnet = network === "mainnet-beta"
-  const totalSolBalance = wallets.reduce((sum, w) => sum + w.solBalance, 0)
-  const totalTokenBalance = wallets.reduce((sum, w) => sum + w.tokenBalance, 0)
-  const activeVolumeWalletCount = wallets.filter((w) => w.isActive).length
-  const activeBundlerWalletCount = bundlerWallets.filter((w) => w.isActive).length
+  const totalSolBalance = displayWallets.reduce((sum, w) => sum + w.solBalance, 0)
+  const totalTokenBalance = displayWallets.reduce((sum, w) => sum + w.tokenBalance, 0)
+  const activeVolumeWalletCount = volumeWallets.filter((w) => w.isActive).length
+  const activeBundlerWalletCount = activeBundlerWalletsMemo.length
   const canStart = Boolean(mintAddress) && isMainnet && (autoBundler ? activeBundlerWalletCount > 0 : activeVolumeWalletCount > 0)
   const selectedTokenId = launchedTokens.find((t) => t.mintAddress === mintAddress)?.id
 
@@ -824,7 +899,7 @@ export default function VolumeBotPage() {
       toast.error("enter token address first")
       return
     }
-    const activeWallets = bundlerWallets.filter((w) => w.isActive && (w.tokenBalance ?? 0) > 0)
+    const activeWallets = activeBundlerWalletsMemo.filter((w) => (w.tokenBalance ?? 0) > 0)
     if (!activeWallets.length) {
       toast.error("no active wallets with tokens")
       return
@@ -983,7 +1058,7 @@ export default function VolumeBotPage() {
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-[11px] text-muted-foreground">
                     <div className="flex items-center justify-between">
                       <span>Wallets</span>
-                      <span className="font-mono text-foreground">{wallets.length}</span>
+                      <span className="font-mono text-foreground">{displayWallets.length}</span>
                     </div>
                     <div className="flex items-center justify-between">
                       <span>Total SOL</span>
@@ -1000,26 +1075,39 @@ export default function VolumeBotPage() {
                   </div>
 
                   <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-6 gap-2 max-h-[240px] overflow-y-auto pr-1">
-                    {wallets.length === 0 ? (
+                    {displayWallets.length === 0 ? (
                       <div className="text-[11px] text-muted-foreground">no wallets yet</div>
                     ) : (
-                      wallets.map((wallet) => (
-                        <div
-                          key={wallet.publicKey}
-                          className={`rounded border p-2 text-[11px] space-y-1 ${
-                            wallet.isActive ? "bg-muted border-border" : "bg-background border-border/60 opacity-70"
-                          }`}
-                        >
-                          <div className="flex items-center justify-between">
-                            <span className="font-mono text-[10px]">{wallet.publicKey.slice(0, 6)}...</span>
-                            <Badge
-                              className={`cursor-pointer text-[9px] ${
-                                wallet.isActive ? "bg-green-500/20 text-green-400" : "bg-muted text-muted-foreground"
-                              }`}
-                              onClick={() => toggleWallet(wallet.publicKey)}
-                            >
-                              {wallet.isActive ? "ON" : "OFF"}
-                            </Badge>
+                      displayWallets.map((wallet) => {
+                        const isDevWallet = wallet.role === "dev"
+                        const canManualTrade = Boolean(mintAddress) && !loading && (isDevWallet || wallet.isActive)
+
+                        return (
+                          <div
+                            key={wallet.publicKey}
+                            className={`rounded border p-2 text-[11px] space-y-1 ${
+                              wallet.isActive && !isDevWallet
+                                ? "bg-muted border-border"
+                                : "bg-background border-border/60 opacity-70"
+                            }`}
+                          >
+                            <div className="flex items-center justify-between">
+                              <span className="font-mono text-[10px]">{wallet.publicKey.slice(0, 6)}...</span>
+                              <div className="flex items-center gap-1">
+                                {isDevWallet && <Badge className="bg-amber-500/20 text-amber-400 text-[9px]">DEV</Badge>}
+                                <Badge
+                                  className={`text-[9px] ${
+                                    isDevWallet
+                                      ? "bg-muted text-muted-foreground cursor-not-allowed opacity-70"
+                                      : wallet.isActive
+                                        ? "bg-green-500/20 text-green-400 cursor-pointer"
+                                        : "bg-muted text-muted-foreground cursor-pointer"
+                                  }`}
+                                  onClick={!isDevWallet ? () => toggleWallet(wallet.publicKey) : undefined}
+                                >
+                                  {isDevWallet ? "MANUAL" : wallet.isActive ? "ON" : "OFF"}
+                                </Badge>
+                              </div>
                           </div>
                           <div className="flex items-center justify-between text-muted-foreground">
                             <span>SOL</span>
@@ -1035,7 +1123,7 @@ export default function VolumeBotPage() {
                               variant="outline"
                               className="h-7 px-2 text-[11px]"
                               onClick={() => handleWalletTrade(wallet, "buy")}
-                              disabled={!wallet.isActive || loading || !mintAddress}
+                              disabled={!canManualTrade}
                             >
                               Buy
                             </Button>
@@ -1044,13 +1132,13 @@ export default function VolumeBotPage() {
                               variant="outline"
                               className="h-7 px-2 text-[11px]"
                               onClick={() => handleWalletTrade(wallet, "sell")}
-                              disabled={!wallet.isActive || loading || !mintAddress}
+                              disabled={!canManualTrade}
                             >
                               Sell
                             </Button>
                           </div>
-                        </div>
-                      ))
+                        )
+                      })
                     )}
                   </div>
                 </CardContent>
@@ -1376,6 +1464,34 @@ export default function VolumeBotPage() {
               </div>
 
               <div className="space-y-3">
+                <div className="space-y-2">
+                  <Label className="text-xs text-muted-foreground">Speed preset</Label>
+                  <Select value={speedPreset} onValueChange={(value) => handleSpeedPresetChange(value as SpeedPreset)}>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <SelectTrigger className="h-8 bg-background border-border text-xs">
+                          <SelectValue placeholder="pick speed" />
+                        </SelectTrigger>
+                      </TooltipTrigger>
+                      {presetIntervalHint && (
+                        <TooltipContent className="text-[11px]">Интервал: {presetIntervalHint}</TooltipContent>
+                      )}
+                    </Tooltip>
+                    <SelectContent className="bg-popover border-border text-xs">
+                      <SelectItem value="furious" title="1-4s">
+                        {SPEED_PRESETS.furious.label} (1-4s)
+                      </SelectItem>
+                      <SelectItem value="organic" title="5-15s">
+                        {SPEED_PRESETS.organic.label} (5-15s)
+                      </SelectItem>
+                      <SelectItem value="slow" title="20-45s">
+                        {SPEED_PRESETS.slow.label} (20-45s)
+                      </SelectItem>
+                      <SelectItem value="custom">Свои интервалы</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
                 <div className="grid grid-cols-2 gap-2">
                   <div className="space-y-2">
                     <Label className="text-xs text-muted-foreground">Min Interval (s)</Label>

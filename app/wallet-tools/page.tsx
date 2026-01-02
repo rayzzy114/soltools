@@ -7,7 +7,6 @@ import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Switch } from "@/components/ui/switch"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import { Wallet, Zap, Package, Plus, Trash2, Key, User, RefreshCw, Briefcase } from "lucide-react"
 import { toast } from "sonner"
@@ -53,9 +52,9 @@ const WALLET_SELECTION_STORAGE_KEY = "dashboardSelectedWallets"
  * - loading and selecting tokens,
  * - generating, clearing and listing bundler wallets,
  * - configuring and saving a funder wallet (including top-ups),
- * - distributing SOL gas to active wallets from either a connected wallet or a manual key,
+ * - distributing SOL gas to active wallets from the configured funder wallet (topped up via connected wallet),
  * - creating associated token accounts (ATAs) for active wallets,
- * - persisting and displaying system logs and manual trade settings.
+ * - persisting and displaying system logs.
  *
  * @returns The rendered WalletToolsPage React component tree.
  */
@@ -65,11 +64,7 @@ export default function WalletToolsPage() {
   const [selectedToken, setSelectedToken] = useState<Token | null>(null)
   const [bundlerWallets, setBundlerWallets] = useState<BundlerWallet[]>([])
   const [walletCount, setWalletCount] = useState("5")
-  const [manualBuyAmount, setManualBuyAmount] = useState("0.01")
-  const [manualSellPercent, setManualSellPercent] = useState("100")
-  const [manualTradeDirty, setManualTradeDirty] = useState(false)
   const [funderKey, setFunderKey] = useState("")
-  const [useConnectedFunder, setUseConnectedFunder] = useState(true)
   const [gasAmount, setGasAmount] = useState("0.003")
   const [gasLoading, setGasLoading] = useState(false)
   const [ataLoading, setAtaLoading] = useState(false)
@@ -405,26 +400,11 @@ export default function WalletToolsPage() {
     }
   }, [bundlerWallets, loadSavedWallets])
 
-  const saveManualTradeSettings = useCallback(() => {
-    if (typeof window === "undefined") return
-    window.localStorage.setItem("dashboardManualBuyAmount", manualBuyAmount)
-    window.localStorage.setItem("dashboardManualSellPercent", manualSellPercent)
-    setManualTradeDirty(false)
-    addSystemLog("Manual trade settings saved", "success")
-    toast.success("Manual trade settings saved")
-  }, [manualBuyAmount, manualSellPercent, addSystemLog])
-
   const distributeGas = useCallback(async () => {
     const active = bundlerWallets.filter(w => w.isActive)
     if (active.length === 0) {
       addSystemLog("No active wallets found", "error")
       toast.error("no active wallets")
-      return
-    }
-
-    if (useConnectedFunder && (!connected || !publicKey)) {
-      addSystemLog("Wallet not connected", "error")
-      toast.error("connect wallet first")
       return
     }
 
@@ -434,112 +414,69 @@ export default function WalletToolsPage() {
     try {
       const amountPerWallet = parseFloat(gasAmount) || 0.003
       const totalSolNeeded = (amountPerWallet * active.length) + 0.01
-      const connection = await getResilientConnection()
-      if (useConnectedFunder) {
-        const balanceRes = await fetch(`/api/solana/balance?publicKey=${publicKey!.toBase58()}`)
-        const balanceData = await balanceRes.json()
-        const balanceInSol = Number(balanceData?.sol ?? 0)
-
-        if (balanceInSol < totalSolNeeded) {
-          const error = `Insufficient balance. Need ${totalSolNeeded.toFixed(4)} SOL, have ${balanceInSol.toFixed(4)} SOL`
-          addSystemLog(error, "error")
-          toast.error(error)
-          return
-        }
-
-        addSystemLog(`Balance check passed: ${balanceInSol.toFixed(4)} SOL available`, "success")
-
-        const BATCH_SIZE = 8
-        for (let i = 0; i < active.length; i += BATCH_SIZE) {
-          const batch = active.slice(i, i + BATCH_SIZE)
-          const tx = new Transaction()
-          batch.forEach((wallet) => {
-            tx.add(
-              SystemProgram.transfer({
-                fromPubkey: publicKey!,
-                toPubkey: new PublicKey(wallet.publicKey),
-                lamports: Math.floor(amountPerWallet * LAMPORTS_PER_SOL),
-              })
-            )
-          })
-
-          const sig = await sendTransaction(tx, connection)
-          await connection.confirmTransaction(sig, "confirmed")
-          addSystemLog(`Batch ${Math.floor(i / BATCH_SIZE) + 1} confirmed: ${sig.slice(0, 8)}...`, "success")
-        }
-      } else {
-        const trimmed = funderKey.trim()
-        if (!trimmed) {
-          const error = "Funder private key required"
-          addSystemLog(error, "error")
-          toast.error(error)
-          return
-        }
-
-        let funderPubkey: PublicKey | null = null
-        try {
-          funderPubkey = Keypair.fromSecretKey(bs58.decode(trimmed)).publicKey
-        } catch (error: any) {
-          const message = `Invalid funder key: ${error?.message || error}`
-          addSystemLog(message, "error")
-          toast.error(message)
-          return
-        }
-
-        const balanceRes = await fetch(`/api/solana/balance?publicKey=${funderPubkey.toBase58()}`)
-        const balanceData = await balanceRes.json()
-        const balanceInSol = Number(balanceData?.sol ?? 0)
-        if (balanceInSol < totalSolNeeded) {
-          const error = `Insufficient balance. Need ${totalSolNeeded.toFixed(4)} SOL, have ${balanceInSol.toFixed(4)} SOL`
-          addSystemLog(error, "error")
-          toast.error(error)
-          return
-        }
-
-        addSystemLog(`Balance check passed: ${balanceInSol.toFixed(4)} SOL available`, "success")
-
-        const res = await fetch("/api/bundler/wallets", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            action: "fund",
-            funderSecretKey: trimmed,
-            wallets: active,
-            amounts: active.map(() => amountPerWallet),
-          }),
-        })
-
-        const data = await res.json()
-        if (!res.ok || data?.error) {
-          const message = data?.error || "Failed to fund wallets"
-          addSystemLog(message, "error")
-          toast.error(message)
-          return
-        }
-
-        addSystemLog(`Funder tx confirmed: ${data.signature?.slice(0, 8)}...`, "success")
+      const trimmed = funderKey.trim()
+      if (!trimmed) {
+        const error = "Funder private key required"
+        addSystemLog(error, "error")
+        toast.error(error)
+        return
       }
+
+      let funderPubkey: PublicKey | null = null
+      try {
+        funderPubkey = Keypair.fromSecretKey(bs58.decode(trimmed)).publicKey
+      } catch (error: any) {
+        const message = `Invalid funder key: ${error?.message || error}`
+        addSystemLog(message, "error")
+        toast.error(message)
+        return
+      }
+
+      const balanceRes = await fetch(`/api/solana/balance?publicKey=${funderPubkey.toBase58()}`)
+      const balanceData = await balanceRes.json()
+      const balanceInSol = Number(balanceData?.sol ?? 0)
+      if (balanceInSol < totalSolNeeded) {
+        const error = `Insufficient balance. Need ${totalSolNeeded.toFixed(4)} SOL, have ${balanceInSol.toFixed(4)} SOL`
+        addSystemLog(error, "error")
+        toast.error(error)
+        return
+      }
+
+      addSystemLog(`Balance check passed: ${balanceInSol.toFixed(4)} SOL available`, "success")
+
+      const res = await fetch("/api/bundler/wallets", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "fund",
+          funderSecretKey: trimmed,
+          wallets: active,
+          amounts: active.map(() => amountPerWallet),
+        }),
+      })
+
+      const data = await res.json()
+      if (!res.ok || data?.error) {
+        const message = data?.error || "Failed to fund wallets"
+        addSystemLog(message, "error")
+        toast.error(message)
+        return
+      }
+
+      addSystemLog(`Funder tx confirmed: ${data.signature?.slice(0, 8)}...`, "success")
 
       addSystemLog(`Successfully funded ${active.length} wallets`, "success")
       toast.success(`funded ${active.length} wallets`)
       setTimeout(() => loadSavedWallets(), 2000)
     } catch (error: any) {
-      addSystemLog(`Gas distribution error: ${error.message}`, "error")
+      const userMessage = "Invalid funder key"
+      addSystemLog(userMessage, "error")
       console.error("distribute gas error:", error)
-      toast.error(`failed to fund wallets: ${error.message}`)
+      toast.error(userMessage)
     } finally {
       setGasLoading(false)
     }
-  }, [
-    addSystemLog,
-    bundlerWallets,
-    connected,
-    funderKey,
-    loadSavedWallets,
-    publicKey,
-    sendTransaction,
-    useConnectedFunder,
-  ])
+  }, [addSystemLog, bundlerWallets, funderKey, gasAmount, loadSavedWallets])
 
   const createATAs = useCallback(async () => {
     if (!selectedToken || activeWallets.length === 0) return
@@ -623,14 +560,6 @@ export default function WalletToolsPage() {
   useEffect(() => {
     loadFunderWallet()
   }, [loadFunderWallet])
-
-  useEffect(() => {
-    if (typeof window === "undefined") return
-    const savedBuy = window.localStorage.getItem("dashboardManualBuyAmount")
-    const savedSell = window.localStorage.getItem("dashboardManualSellPercent")
-    if (savedBuy) setManualBuyAmount(savedBuy)
-    if (savedSell) setManualSellPercent(savedSell)
-  }, [])
 
   return (
     <div className="p-2 space-y-2">
@@ -767,19 +696,12 @@ export default function WalletToolsPage() {
           </CardHeader>
           <CardContent className="px-2 pb-2 space-y-2">
             <div className="space-y-1">
-              <div className="flex items-center justify-between">
-                <Label className="text-[10px] text-slate-600">Funder Wallet</Label>
-                <div className="flex items-center gap-1 text-[10px] text-slate-500">
-                  <span>Connected</span>
-                  <Switch checked={useConnectedFunder} onCheckedChange={setUseConnectedFunder} />
-                </div>
-              </div>
+              <Label className="text-[10px] text-slate-600">Funder Wallet</Label>
               <Input
                 type="password"
                 placeholder="funder wallet private key"
                 value={funderKey}
                 onChange={(e) => setFunderKey(e.target.value)}
-                disabled={useConnectedFunder}
                 className="h-7 bg-background border-border text-xs"
               />
             </div>
@@ -794,15 +716,7 @@ export default function WalletToolsPage() {
                 className="h-7 bg-background border-border text-xs"
               />
             </div>
-            <div className="text-[9px] text-slate-500">
-              Gas funder: {useConnectedFunder
-                ? connected
-                  ? `${publicKey?.toBase58().slice(0, 8)}...${publicKey?.toBase58().slice(-4)}`
-                  : "Not connected"
-                : funderKey
-                  ? "Manual key"
-                  : "Not set"}
-            </div>
+            <div className="text-[9px] text-slate-500">Gas funder uses the provided private key.</div>
           </CardContent>
         </Card>
       </div>
@@ -840,7 +754,7 @@ export default function WalletToolsPage() {
                     <Button
                       size="sm"
                       onClick={distributeGas}
-                      disabled={(useConnectedFunder && !connected) || activeWallets.length === 0 || gasLoading}
+                      disabled={activeWallets.length === 0 || gasLoading || !funderKey}
                       className="h-6 px-2 bg-blue-600 hover:bg-blue-700 text-xs disabled:opacity-50"
                     >
                       {gasLoading ? (
@@ -851,12 +765,7 @@ export default function WalletToolsPage() {
                     </Button>
                   </TooltipTrigger>
                   <TooltipContent>
-                    {useConnectedFunder
-                      ? connected
-                        ? `Distribute ${gasAmount} SOL to ${activeWallets.length} wallets from connected wallet`
-                        : "Connect wallet to distribute gas"
-                      : `Distribute ${gasAmount} SOL to ${activeWallets.length} wallets from manual funder`
-                    }
+                    {`Distribute ${gasAmount} SOL to ${activeWallets.length} wallets from the funder wallet`}
                   </TooltipContent>
                 </Tooltip>
               </TooltipProvider>
@@ -889,47 +798,6 @@ export default function WalletToolsPage() {
           <div className="text-[10px] text-slate-400">Active: {activeWallets.length}</div>
         </CardHeader>
         <CardContent className="px-2 pb-2">
-          <div className="grid grid-cols-2 gap-2 mb-2">
-            <div className="space-y-1">
-              <Label className="text-[10px] text-slate-400">Manual Buy (SOL)</Label>
-              <Input
-                type="number"
-                step="0.0001"
-                value={manualBuyAmount}
-                onChange={(e) => {
-                  setManualBuyAmount(e.target.value)
-                  setManualTradeDirty(true)
-                }}
-                className="h-6 bg-background border-border text-xs"
-              />
-            </div>
-            <div className="space-y-1">
-              <Label className="text-[10px] text-slate-400">Manual Sell (%)</Label>
-              <Input
-                type="number"
-                min="1"
-                max="100"
-                step="1"
-                value={manualSellPercent}
-                onChange={(e) => {
-                  setManualSellPercent(e.target.value)
-                  setManualTradeDirty(true)
-                }}
-                className="h-6 bg-background border-border text-xs"
-              />
-            </div>
-          </div>
-          <div className="flex justify-end mb-2">
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={saveManualTradeSettings}
-              disabled={!manualTradeDirty}
-              className="h-6 px-2 border-neutral-700 text-[10px]"
-            >
-              Save
-            </Button>
-          </div>
           <div className="flex items-center justify-between mb-2 pb-1 border-b border-slate-800">
              <div className="text-[10px] text-slate-400">Total Wallets: {bundlerWallets.length}</div>
           </div>
