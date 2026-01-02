@@ -3096,72 +3096,27 @@ export default function DashboardPage() {
           </DialogHeader>
           <div className="space-y-3">
             <div className="space-y-1 bg-neutral-800/50 p-2 rounded">
-              <Label className="text-xs text-neutral-300 font-bold">Strategy Presets</Label>
-              <div className="flex gap-2">
-                <div className="flex flex-col items-center">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    title={`Mode: Wash\nAmount: 0.005 - 0.05 SOL\nSlippage: 15%\nPriority: 0.0001 SOL\nInterval: 30s - 120s`}
-                    className="h-6 text-[10px] border-green-500/30 hover:bg-green-500/10 hover:text-green-400 w-full"
-                    onClick={() => setVolumeBotConfig(prev => ({
-                      ...prev,
-                      mode: "wash",
-                      amountMode: "random",
-                      minAmount: "0.005",
-                      maxAmount: "0.05",
-                      slippage: "15",
-                      priorityFee: "0.0001",
-                      minInterval: "30",
-                      maxInterval: "120"
-                    }))}
-                  >
-                    Organic Growth
-                  </Button>
-                  <span className="text-[9px] text-neutral-500">(30-120s)</span>
+              <Label className="text-xs text-neutral-300 font-bold">Speed Mode (Seconds)</Label>
+              <div className="grid grid-cols-2 gap-2">
+                <div className="space-y-1">
+                  <Label className="text-xs text-neutral-400">From (Min)</Label>
+                  <Input
+                    type="number"
+                    min="1"
+                    className="bg-background border-border text-xs"
+                    value={volumeBotConfig.minInterval}
+                    onChange={(e) => setVolumeBotConfig(prev => ({ ...prev, minInterval: e.target.value }))}
+                  />
                 </div>
-                <div className="flex flex-col items-center">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    title={`Mode: Wash\nAmount: 0.1 - 0.5 SOL\nSlippage: 25%\nPriority: 0.005 SOL\nInterval: 5s - 25s`}
-                    className="h-6 text-[10px] border-purple-500/30 hover:bg-purple-500/10 hover:text-purple-400 w-full"
-                    onClick={() => setVolumeBotConfig(prev => ({
-                      ...prev,
-                      mode: "wash",
-                      amountMode: "random",
-                      minAmount: "0.1",
-                      maxAmount: "0.5",
-                      slippage: "25",
-                      priorityFee: "0.005",
-                      minInterval: "5",
-                      maxInterval: "25"
-                    }))}
-                  >
-                    Frenzy Mode
-                  </Button>
-                  <span className="text-[9px] text-neutral-500">(5-25s)</span>
-                </div>
-                <div className="flex flex-col items-center">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    title={`Mode: Buy Only\nAmount: Fixed 0.01 SOL\nSlippage: 10%\nPriority: 0.0001 SOL\nInterval: 120s - 600s`}
-                    className="h-6 text-[10px] border-blue-500/30 hover:bg-blue-500/10 hover:text-blue-400 w-full"
-                    onClick={() => setVolumeBotConfig(prev => ({
-                      ...prev,
-                      mode: "buy",
-                      amountMode: "fixed",
-                      fixedAmount: "0.01",
-                      slippage: "10",
-                      priorityFee: "0.0001",
-                      minInterval: "120",
-                      maxInterval: "600"
-                    }))}
-                  >
-                    Slow Accumulate
-                  </Button>
-                  <span className="text-[9px] text-neutral-500">(2-10m)</span>
+                <div className="space-y-1">
+                  <Label className="text-xs text-neutral-400">To (Max)</Label>
+                  <Input
+                    type="number"
+                    min="1"
+                    className="bg-background border-border text-xs"
+                    value={volumeBotConfig.maxInterval}
+                    onChange={(e) => setVolumeBotConfig(prev => ({ ...prev, maxInterval: e.target.value }))}
+                  />
                 </div>
               </div>
             </div>
