@@ -1066,15 +1066,37 @@ export default function DashboardPage() {
       if (data.status) {
         setVolumeBotStatus(data)
         // Update local config to match server state
-        setVolumeBotConfig(prev => ({
-          ...prev,
-          isRunning: data.status === "running"
-        }))
+        setVolumeBotConfig(prev => {
+          // If settings are open, don't overwrite config fields, only status
+          if (settingsOpen) return { ...prev, isRunning: data.status === "running" }
+
+          const newConfig = {
+            ...prev,
+            isRunning: data.status === "running",
+          }
+
+          // Merge settings if they exist
+          if (data.settings) {
+            if (data.settings.mode) newConfig.mode = data.settings.mode
+            if (data.settings.amountMode) newConfig.amountMode = data.settings.amountMode
+            if (data.settings.fixedAmount) newConfig.fixedAmount = data.settings.fixedAmount
+            if (data.settings.minAmount) newConfig.minAmount = data.settings.minAmount
+            if (data.settings.maxAmount) newConfig.maxAmount = data.settings.maxAmount
+            if (data.settings.minPercentage) newConfig.minPercentage = data.settings.minPercentage
+            if (data.settings.maxPercentage) newConfig.maxPercentage = data.settings.maxPercentage
+            if (data.settings.slippage) newConfig.slippage = data.settings.slippage
+            if (data.settings.priorityFee) newConfig.priorityFee = data.settings.priorityFee
+            if (data.settings.jitoTip) newConfig.jitoTip = data.settings.jitoTip
+            if (data.settings.jitoRegion) newConfig.jitoRegion = data.settings.jitoRegion
+          }
+
+          return newConfig
+        })
       }
     } catch (error) {
       console.error("Failed to get bot status:", error)
     }
-  }, [volumeBotConfig.pairId])
+  }, [volumeBotConfig.pairId, settingsOpen])
 
   // Poll bot status every 60 seconds when running
   useEffect(() => {
@@ -1613,16 +1635,16 @@ export default function DashboardPage() {
       const result = await response.json()
       if (result.success) {
         setVolumeBotConfig(prev => ({ ...prev, isRunning: false }))
-        addSystemLog("Volume bot stopped successfully", "success")
-        toast.success("Volume bot stopped")
+        addSystemLog("Volume bot paused", "success")
+        toast.success("Volume bot paused")
       } else {
-        addSystemLog(`Failed to stop volume bot: ${result.error}`, "error")
-        toast.error(result.error || "Failed to stop volume bot")
+        addSystemLog(`Failed to pause volume bot: ${result.error}`, "error")
+        toast.error(result.error || "Failed to pause volume bot")
       }
     } catch (error) {
       console.error("Stop volume bot error:", error)
       addSystemLog(`Stop volume bot error: ${error}`, "error")
-      toast.error("Failed to stop volume bot")
+      toast.error("Failed to pause volume bot")
     }
   }, [volumeBotConfig.pairId, addSystemLog])
 
@@ -2223,8 +2245,8 @@ export default function DashboardPage() {
                     VOLUME BOT
                   </CardTitle>
                   <div className="flex items-center gap-2">
-                    <Badge className={volumeRunning ? "bg-green-500/20 text-green-400" : "bg-red-500/20 text-red-400"}>
-                      {volumeRunning ? "RUNNING" : "STOPPED"}
+                    <Badge className={volumeRunning ? "bg-green-500/20 text-green-400" : "bg-orange-500/20 text-orange-400"}>
+                      {volumeRunning ? "RUNNING" : (volumeBotStatus?.totalTrades > 0 ? "PAUSED" : "READY")}
                     </Badge>
                     <div className="text-[9px] text-slate-300 font-medium">
                       {volumeBotStatus ? (
@@ -2255,14 +2277,14 @@ export default function DashboardPage() {
               <CardContent className="space-y-1 px-2 pb-2">
                 <div className="flex flex-wrap items-center gap-1">
                   {volumeRunning ? (
-                    <Button onClick={stopVolumeBot} className="h-8 bg-red-500 hover:bg-red-600">
+                    <Button onClick={stopVolumeBot} className="h-8 bg-orange-500 hover:bg-orange-600 text-black">
                       <Pause className="w-4 h-4 mr-2" />
-                      Stop
+                      Pause
                     </Button>
                   ) : (
                     <Button onClick={startVolumeBot} disabled={!selectedToken} className="h-8 bg-green-500 hover:bg-green-600">
                       <Play className="w-4 h-4 mr-2" />
-                      Start
+                      {volumeBotStatus?.totalTrades > 0 ? "Resume" : "Start"}
                     </Button>
                   )}
                   <div className="flex items-center gap-3 text-[11px] text-neutral-400">
