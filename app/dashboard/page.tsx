@@ -1,31 +1,30 @@
 "use client"
 
 import { useState, useEffect, useCallback, useMemo, useRef } from "react"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Textarea } from "@/components/ui/textarea"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Switch } from "@/components/ui/switch"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Alert, AlertDescription } from "@/components/ui/alert"
-import { TrendingUp, TrendingDown, Coins, Activity, Users, Play, Pause, Settings, RefreshCw, Flame, Rocket, AlertTriangle, BarChart3, Trash2, Upload, Wallet, Download } from "lucide-react"
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, LineChart, Line } from "recharts"
-import { PnLSummaryCard, MiniPnLCard } from "@/components/pnl/PnLCard"
-import { TokenRanking } from "@/components/analytics/TokenRanking"
-import { ActivityHeatmap } from "@/components/analytics/ActivityHeatmap"
+import { AlertTriangle, RefreshCw } from "lucide-react"
+import { MiniPnLCard } from "@/components/pnl/PnLCard"
 import type { PnLSummary, TokenPnL, Trade } from "@/lib/pnl/types"
 import { toast } from "sonner"
 import { useWallet } from "@solana/wallet-adapter-react"
 import { LAMPORTS_PER_SOL, PublicKey, Keypair, SystemProgram, Transaction } from "@solana/web3.js"
 import bs58 from "bs58"
-import { getResilientConnection } from "@/lib/solana/config"
+import { getResilientConnection, connection } from "@/lib/solana/config"
 import { getBondingCurveAddress } from "@/lib/solana/pumpfun-sdk"
 import { TokenHolderTracker, type HolderRow } from "@/lib/solana/holder-tracker"
 import { clampNumber } from "@/lib/ui-utils"
+import { TokenInfoCard } from "@/components/dashboard/TokenInfoCard"
+import { RugpullPanel } from "@/components/dashboard/RugpullPanel"
+import { VolumeBotPanel } from "@/components/dashboard/VolumeBotPanel"
+import { LaunchPanel } from "@/components/dashboard/LaunchPanel"
+import { AnalyticsPanel } from "@/components/dashboard/AnalyticsPanel"
+import { LaunchStatus, FsmStatus, FsmStep } from "@/components/dashboard/LaunchStatus"
+import { BundlerWallet } from "@/types/dashboard"
 
 interface DashboardStats {
   activeTokens: number
@@ -60,17 +59,6 @@ interface Activity {
   supply?: string
 }
 
-interface BundlerWallet {
-  publicKey: string
-  secretKey: string
-  solBalance: number
-  tokenBalance: number
-  isActive: boolean
-  label?: string
-  role?: string
-  ataExists?: boolean
-}
-
 interface BuyerWalletSelection {
   publicKey: string
   amount: string
@@ -88,7 +76,6 @@ interface RugpullEstimate {
   priorityFee?: number
 }
 
-const PRIORITY_FEE_COMPUTE_UNITS = 400000
 const PRICE_SERIES_MAX_POINTS = 60
 
 export default function DashboardPage() {
@@ -196,10 +183,36 @@ export default function DashboardPage() {
     volumeSource?: string
   } | null>(null)
   const [tokenFinanceLoading, setTokenFinanceLoading] = useState(false)
+
+  // FSM State for Launch Timeline
+  const [fsmCurrent, setFsmCurrent] = useState<FsmStatus>("idle")
+  const [fsmSteps, setFsmSteps] = useState<FsmStep[]>([{
+    state: "idle",
+    note: "ready for next bundle",
+    at: Date.now(),
+  }])
+  const [activeBundleId, setActiveBundleId] = useState("")
+
   const holderTrackerRef = useRef<TokenHolderTracker | null>(null)
   const hydratedMintsRef = useRef<Set<string>>(new Set())
   const getPairStorageKey = useCallback((mint: string) => `volume_bot_pair_${mint}`, [])
   const getLastTokenKey = useCallback(() => "dashboardLastTokenMint", [])
+
+  const resetFsm = useCallback((note: string) => {
+    const now = Date.now()
+    setFsmCurrent("preparing")
+    setFsmSteps([{ state: "preparing", note, at: now }])
+    setActiveBundleId("")
+  }, [])
+
+  const pushFsm = useCallback((state: FsmStatus, note: string, bundleId?: string) => {
+    setFsmCurrent(state)
+    setFsmSteps((prev) => {
+      const next = [...prev, { state, note, at: Date.now(), ...(bundleId ? { bundleId } : {}) }]
+      return next.slice(-12)
+    })
+    if (bundleId) setActiveBundleId(bundleId)
+  }, [])
 
   // Ref for auto-selection to break dependency cycles
   const hasAutoSelectedRef = useRef(false)
@@ -818,8 +831,12 @@ export default function DashboardPage() {
     }
 
     setLaunchLoading(true)
+    resetFsm("launch: preparing payload")
+
     try {
       const { jitoTipNum, priorityNum, slippageNum } = normalizeLaunchNumbers()
+      pushFsm("building", "assembling launch bundle and jito tip")
+
       const launchWallets = [
         { ...devWallet, isActive: true },
         ...buyersResolved.map((entry) => ({ ...entry.wallet!, isActive: true })),
@@ -830,10 +847,14 @@ export default function DashboardPage() {
       if (autoFundEnabled) {
         if (!Number.isFinite(funderAmount) || funderAmount <= 0) {
           toast.error("set valid funder amount per wallet")
+          pushFsm("failed", "invalid funder amount")
+          setLaunchLoading(false)
           return
         }
 
         addSystemLog(`Auto-funding ${launchWallets.length} wallets`, "info")
+        pushFsm("preparing", `funding ${launchWallets.length} wallets`)
+
         if (useConnectedFunder) {
           if (!connected || !publicKey) {
             toast.error("connect funder wallet")
@@ -847,6 +868,7 @@ export default function DashboardPage() {
             const message = `Insufficient balance. Need ${totalSolNeeded.toFixed(4)} SOL`
             toast.error(message)
             addSystemLog(message, "error")
+            pushFsm("failed", "insufficient funder balance")
             return
           }
 
@@ -888,12 +910,14 @@ export default function DashboardPage() {
             const message = fundData?.error || "failed to fund wallets"
             toast.error(message)
             addSystemLog(`Auto-fund failed: ${message}`, "error")
+            pushFsm("failed", "funding failed")
             return
           }
           addSystemLog(`Auto-fund ok: ${fundData.signature?.slice(0, 8)}...`, "success")
         }
       }
 
+      pushFsm("sending", "POST /api/bundler/launch")
       const res = await fetch("/api/bundler/launch", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -918,13 +942,18 @@ export default function DashboardPage() {
         }),
       })
 
+      pushFsm("confirming", "waiting for jito/bundle response")
       const data = await res.json()
+
       if (data.error) {
         toast.error(data.error)
         addSystemLog(`launch failed: ${data.error}`, "error")
+        pushFsm("failed", data.error)
       } else {
         toast.success(`launched! mint: ${data.mintAddress}`)
         addSystemLog(`launch ok: ${data.mintAddress}`, "success")
+        pushFsm("landed", `bundle ${data.bundleId || "ok"} landed`, data.bundleId || "")
+
         if (data.mintAddress) {
           const mintedToken: Token = {
             name: tokenName.trim() || "New Token",
@@ -978,6 +1007,7 @@ export default function DashboardPage() {
     } catch (error: any) {
       toast.error("launch failed")
       addSystemLog(`launch failed: ${error?.message || "unknown error"}`, "error")
+      pushFsm("failed", error.message || "unknown error")
     } finally {
       setLaunchLoading(false)
     }
@@ -1983,479 +2013,73 @@ export default function DashboardPage() {
       </div>
       )}
 
+      {isLaunchStage && (
+        <div className="mb-4">
+          <LaunchStatus fsmCurrent={fsmCurrent} fsmSteps={fsmSteps} activeBundleId={activeBundleId} />
+        </div>
+      )}
+
       <div className="grid grid-cols-1 xl:grid-cols-12 gap-1">
         {!isLaunchStage && (
         <>
           <div className="xl:col-span-7 space-y-1">
-            <Card className="bg-neutral-900 border-neutral-700">
-              <CardHeader className="py-1 px-2">
-                <CardTitle className="text-xs font-medium text-white tracking-wider flex items-center gap-2 border-b border-slate-800 pb-2">
-                  TOKEN INFO
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-2 px-2 pb-2">
-                {!selectedToken ? (
-                  <div className="text-slate-400 text-xs">Select a token to view info</div>
-                ) : (
-                  <>
-                    <div className="grid grid-cols-1 lg:grid-cols-[1.1fr_1fr] gap-2">
-                      <div className="space-y-2">
-                        <div className="text-[10px] text-slate-400 uppercase tracking-wider">Main</div>
-                        <div className="flex items-start gap-2">
-                          <div className="h-16 w-16 shrink-0 rounded border border-neutral-700 bg-neutral-800 overflow-hidden flex items-center justify-center">
-                            {selectedToken?.imageUrl ? (
-                              <img src={selectedToken.imageUrl} alt="Token" className="h-full w-full object-cover" />
-                            ) : (
-                              <div className="text-[9px] text-neutral-400">No image</div>
-                            )}
-                          </div>
-                          <div className="grid flex-1 grid-cols-[120px_1fr] gap-x-2 gap-y-1 text-[11px]">
-                            <div className="text-slate-500">Name</div>
-                            <div className="text-white">{selectedToken?.name || "-"}</div>
-                            <div className="text-slate-500">Symbol</div>
-                            <div className="text-white">{selectedToken?.symbol || "-"}</div>
-                            <div className="text-slate-500">Mint / Token key</div>
-                            <div className="text-white font-mono truncate">
-                              {selectedToken?.mintAddress
-                                ? `${selectedToken.mintAddress.slice(0, 6)}...${selectedToken.mintAddress.slice(-4)}`
-                                : "-"}
-                            </div>
-                            <div className="text-slate-500">Dev key</div>
-                            <div className="text-white font-mono truncate">
-                              {selectedToken?.creatorWallet
-                                ? `${selectedToken.creatorWallet.slice(0, 6)}...${selectedToken.creatorWallet.slice(-4)}`
-                                : "-"}
-                            </div>
-                            <div className="text-slate-500">Pump.fun link</div>
-                            <div className="text-white">
-                              {selectedToken?.mintAddress ? (
-                                <a
-                                  className="text-cyan-300 hover:text-cyan-200 underline"
-                                  href={`https://pump.fun/${selectedToken.mintAddress}`}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                >
-                                  pump.fun/{selectedToken.mintAddress.slice(0, 6)}...
-                                </a>
-                              ) : (
-                                "-"
-                              )}
-                            </div>
-                          </div>
-                        </div>
-                        <div className="space-y-1">
-                          <div className="text-[10px] text-slate-500">Description</div>
-                          <div className="rounded border border-neutral-800 bg-neutral-950/40 p-2 text-[10px] text-white/90 leading-snug">
-                            {selectedToken?.description || "-"}
-                          </div>
-                        </div>
-                      </div>
-                      <div className="space-y-2">
-                        <div className="text-[10px] text-slate-400 uppercase tracking-wider">Finance</div>
-                        <div className="grid grid-cols-[150px_1fr] gap-x-2 gap-y-1 text-[11px]">
-                          <div className="text-slate-500">Current price (SOL)</div>
-                          <div className="text-white font-mono">
-                            {tokenFinanceLoading
-                              ? "..."
-                              : currentPriceSol == null
-                              ? "-"
-                              : currentPriceSol.toFixed(6)}
-                          </div>
-                          <div className="text-slate-500">Market cap</div>
-                          <div className="text-white font-mono">
-                            {tokenFinanceLoading
-                              ? "..."
-                              : marketCapSol == null
-                              ? "-"
-                              : `${marketCapSol.toLocaleString(undefined, { maximumFractionDigits: 2 })} SOL`}
-                          </div>
-                          <div className="text-slate-500">Total supply</div>
-                          <div className="text-white font-mono">
-                            {tokenFinanceLoading
-                              ? "..."
-                              : totalSupplyValue == null
-                              ? "-"
-                              : totalSupplyValue.toLocaleString()}
-                          </div>
-                          <div className="text-slate-500">SOL reserves / Liquidity</div>
-                          <div className="text-white font-mono">
-                            {tokenFinanceLoading
-                              ? "..."
-                              : tokenFinance?.liquiditySol == null
-                              ? "-"
-                              : `${tokenFinance.liquiditySol.toFixed(4)} SOL`}
-                          </div>
-                          <div className="text-slate-500">Funding balance</div>
-                          <div className="text-white font-mono">
-                            {tokenFinanceLoading
-                              ? "..."
-                              : tokenFinance?.fundingBalanceSol == null
-                              ? "-"
-                              : `${tokenFinance.fundingBalanceSol.toFixed(4)} SOL`}
-                          </div>
-                          <div className="text-slate-500">Holders count</div>
-                          <div className="text-white font-mono">
-                            {holdersLoading ? "..." : holderRows.length.toLocaleString()}
-                          </div>
-                          <div className="text-slate-500">24h volume</div>
-                          <div className="text-white font-mono">
-                            {tokenFinanceLoading
-                              ? "..."
-                              : tokenFinance?.volumeSol != null
-                              ? `${tokenFinance.volumeSol.toFixed(2)} SOL`
-                              : tokenFinance?.volumeUsd != null
-                              ? `$${tokenFinance.volumeUsd.toLocaleString()}`
-                              : "-"}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  </>
-                )}
-              </CardContent>
-            </Card>
+            <TokenInfoCard
+              selectedToken={selectedToken}
+              tokenFinanceLoading={tokenFinanceLoading}
+              currentPriceSol={currentPriceSol}
+              marketCapSol={marketCapSol}
+              totalSupplyValue={totalSupplyValue}
+              tokenFinance={tokenFinance}
+              holdersLoading={holdersLoading}
+              holderCount={holderRows.length}
+            />
           </div>
 
           <div className="xl:col-span-5 space-y-1">
-            <Card className="bg-red-950/20 border-red-500/50">
-              <CardHeader className="py-1 px-2">
-                <CardTitle className="text-xs font-medium text-white tracking-wider flex items-center gap-2 border-b border-slate-800 pb-2">
-                  <Flame className="w-4 h-4 text-red-400" />
-                  RUGPULL
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-1 px-2 pb-2">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-1">
-                  <div className="space-y-1">
-                    <Label className="text-[10px] text-slate-600">Slippage %</Label>
-                    <Input
-                      type="number"
-                      placeholder="20"
-                      value={rugpullSlippage}
-                      onChange={(e) => setRugpullSlippage(e.target.value)}
-                      className="h-7 bg-background border-border text-xs"
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <div className="flex items-center justify-between">
-                      <Label className="text-[10px] text-slate-600">Dev Wallet</Label>
-                      <div className="flex items-center gap-1 text-[10px] text-slate-500">
-                        <span>Connected</span>
-                        <Switch checked={useConnectedDev} onCheckedChange={setUseConnectedDev} />
-                      </div>
-                    </div>
-                    <Input
-                      type="password"
-                      placeholder="dev wallet private key"
-                      value={devKey ? "*".repeat(Math.min(devKey.length, 20)) + (devKey.length > 20 ? "..." : "") : ""}
-                      onChange={(e) => setDevKey(e.target.value)}
-                      disabled={useConnectedDev}
-                      className="h-7 bg-background border-border text-xs"
-                    />
-                  </div>
-                </div>
-                <div className="grid grid-cols-2 gap-1 rounded border border-red-500/20 bg-red-950/30 p-2 text-[10px]">
-                  <div className="space-y-1">
-                    <div className="text-red-200/70">Dump estimate</div>
-                    <div className="font-mono text-white">
-                      {rugpullEstimate?.netSol == null ? "-" : `${rugpullEstimate.netSol.toFixed(4)} SOL`}
-                    </div>
-                  </div>
-                  <div className="space-y-1">
-                    <div className="text-red-200/70">Tokens sold</div>
-                    <div className="font-mono text-white">
-                      {Number.isFinite(totalTokensToSell) ? totalTokensToSell.toFixed(2) : "-"}
-                    </div>
-                  </div>
-                  <div className="col-span-2 flex items-center justify-between pt-1 text-[10px]">
-                    <span className="text-red-200/70">Profit estimate</span>
-                    <span
-                      className={`font-mono ${
-                        profitEstimateSol == null
-                          ? "text-white"
-                          : profitEstimateSol >= 0
-                          ? "text-green-300"
-                          : "text-red-300"
-                      }`}
-                    >
-                      {profitEstimateSol == null
-                        ? "-"
-                        : `${profitEstimateSol >= 0 ? "+" : ""}${profitEstimateSol.toFixed(4)} SOL`}
-                    </span>
-                  </div>
-                </div>
-                <div className="grid grid-cols-2 gap-1">
-                  <Button
-                    onClick={rugpullAllWallets}
-                    disabled={!selectedToken || activeWalletsWithTokens.length === 0}
-                    className="h-6 bg-red-600 hover:bg-red-700 text-[10px]"
-                  >
-                    <Flame className="w-3 h-3 mr-1" />
-                    Dump from buyer
-                  </Button>
-                  <Button
-                    onClick={rugpullDevWallet}
-                    disabled={!selectedToken || (useConnectedDev ? !publicKey : !devKey.trim())}
-                    className="h-6 bg-red-600 hover:bg-red-700 text-[10px]"
-                  >
-                    <Flame className="w-3 h-3 mr-1" />
-                    Dump from dev
-                  </Button>
-                </div>
+            <RugpullPanel
+              rugpullSlippage={rugpullSlippage}
+              setRugpullSlippage={setRugpullSlippage}
+              useConnectedDev={useConnectedDev}
+              setUseConnectedDev={setUseConnectedDev}
+              devKey={devKey}
+              setDevKey={setDevKey}
+              rugpullEstimate={rugpullEstimate}
+              totalTokensToSell={totalTokensToSell}
+              profitEstimateSol={profitEstimateSol}
+              selectedToken={selectedToken}
+              activeWalletsWithTokens={activeWalletsWithTokens}
+              rugpullAllWallets={rugpullAllWallets}
+              rugpullDevWallet={rugpullDevWallet}
+              collectAllToDev={collectAllToDev}
+              withdrawDevToConnected={withdrawDevToConnected}
+              connected={connected}
+              publicKey={publicKey}
+            />
 
-                <div className="pt-2 border-t border-red-500/20 mt-2">
-                    <Label className="text-[10px] text-slate-400 mb-1 block">AFTER DUMP</Label>
-                    <div className="grid grid-cols-2 gap-1">
-                        <Button
-                            onClick={collectAllToDev}
-                            className="h-6 bg-blue-600 hover:bg-blue-700 text-[10px]"
-                        >
-                            <Wallet className="w-3 h-3 mr-1" />
-                            Collect all → dev
-                        </Button>
-                        <Button
-                            onClick={withdrawDevToConnected}
-                            disabled={!connected}
-                            className="h-6 bg-green-600 hover:bg-green-700 text-[10px]"
-                        >
-                            <Download className="w-3 h-3 mr-1" />
-                            Withdraw dev → connected
-                        </Button>
-                    </div>
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card className="bg-neutral-900 border-neutral-700">
-              <CardHeader className="py-1 px-2">
-                <div className="flex items-center justify-between">
-                  <CardTitle className="text-xs font-medium text-white tracking-wider flex items-center gap-2 border-b border-slate-800 pb-2">
-                    <Rocket className="w-4 h-4 text-blue-400" />
-                    VOLUME BOT
-                  </CardTitle>
-                  <div className="flex items-center gap-2">
-                    <Badge className={volumeRunning ? "bg-green-500/20 text-green-400" : "bg-red-500/20 text-red-400"}>
-                      {volumeRunning ? "RUNNING" : "STOPPED"}
-                    </Badge>
-                    <div className="text-[9px] text-slate-400">
-                      {volumeBotStatus ? (
-                        <>
-                          Trades: {volumeBotStatus.totalTrades || 0} |
-                          Vol: {parseFloat(volumeBotStatus.totalVolume || "0").toFixed(3)} SOL |
-                          Spent: {parseFloat(volumeBotStatus.solSpent || "0").toFixed(3)} SOL
-                        </>
-                      ) : (
-                        volumeBotConfig.amountMode === "fixed"
-                          ? `Fixed: ${volumeBotConfig.fixedAmount} SOL`
-                          : volumeBotConfig.amountMode === "random"
-                          ? `Range: ${volumeBotConfig.minAmount}-${volumeBotConfig.maxAmount} SOL`
-                          : `Perc: ${volumeBotConfig.minPercentage}-${volumeBotConfig.maxPercentage}%`
-                      )}
-                    </div>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-7 w-7"
-                      onClick={() => setSettingsOpen(true)}
-                    >
-                      <Settings className="w-4 h-4" />
-                    </Button>
-                  </div>
-                </div>
-              </CardHeader>
-              <CardContent className="space-y-1 px-2 pb-2">
-                <div className="flex flex-wrap items-center gap-1">
-                  {volumeRunning ? (
-                    <Button onClick={stopVolumeBot} className="h-8 bg-red-500 hover:bg-red-600">
-                      <Pause className="w-4 h-4 mr-2" />
-                      Stop
-                    </Button>
-                  ) : (
-                    <Button onClick={startVolumeBot} disabled={!selectedToken} className="h-8 bg-green-500 hover:bg-green-600">
-                      <Play className="w-4 h-4 mr-2" />
-                      Start
-                    </Button>
-                  )}
-                  <div className="flex items-center gap-3 text-[11px] text-neutral-400">
-                    <span>Pairs: {loading ? "..." : volumeBotStats.activePairs}</span>
-                    <span>Trades: {loading ? "..." : volumeBotStats.tradesToday.toLocaleString()}</span>
-                    <span>Vol: {loading ? "..." : `${parseFloat(volumeBotStats.volumeGenerated).toLocaleString()} SOL`}</span>
-                  </div>
-                </div>
-
-                <div className="resize-y overflow-auto min-h-[120px] p-1 border border-transparent hover:border-neutral-800 transition-colors">
-                  <div className="grid grid-cols-6 sm:grid-cols-8 lg:grid-cols-12 gap-1 auto-rows-min">
-                    {activeWallets.length === 0 ? (
-                      <div className="col-span-full text-xs text-neutral-500">No active wallets</div>
-                    ) : (
-                      activeWallets.map((wallet, index) => {
-                        let borderColor = "border-slate-500"
-                        let badgeBg = "bg-slate-100"
-                        let badgeText = "text-slate-800"
-
-                        if (wallet.role === 'dev') {
-                          borderColor = "border-purple-500 hover:border-purple-400"
-                          badgeBg = "bg-purple-100"
-                          badgeText = "text-purple-800"
-                        } else if (wallet.role === 'buyer') {
-                          borderColor = "border-cyan-500 hover:border-cyan-400"
-                          badgeBg = "bg-cyan-100"
-                          badgeText = "text-cyan-800"
-                        } else if (wallet.role === 'funder') {
-                          borderColor = "border-green-500 hover:border-green-400"
-                          badgeBg = "bg-green-100"
-                          badgeText = "text-green-800"
-                        } else if (wallet.role === 'volume_bot' || wallet.role === 'bot') {
-                          borderColor = "border-orange-500 hover:border-orange-400"
-                          badgeBg = "bg-orange-100"
-                          badgeText = "text-orange-800"
-                        }
-
-                        return (
-                          <button
-                            key={wallet.publicKey}
-                            type="button"
-                            onClick={() => setQuickTradeWallet(wallet)}
-                            className={`h-10 rounded border ${borderColor} bg-white p-1 text-left text-[9px] leading-tight transition`}
-                          >
-                            <div className="flex items-center justify-between gap-1">
-                              <div className="text-[9px] truncate" style={{ color: "#000", fontWeight: 700 }}>
-                                {index + 1}. {wallet.label || 'Wallet'}
-                              </div>
-                              {wallet.role && wallet.role !== 'project' && (
-                                <span className={`text-[8px] ${badgeBg} ${badgeText} px-1 rounded uppercase min-w-[20px] text-center truncate max-w-[40px]`}>
-                                  {wallet.role}
-                                </span>
-                              )}
-                            </div>
-                            <div className="font-mono text-[9px] text-neutral-900 truncate">
-                              {wallet.publicKey.slice(0, 6)}...{wallet.publicKey.slice(-4)}
-                            </div>
-                          </button>
-                        )
-                      })
-                  )}
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
+            <VolumeBotPanel
+              volumeRunning={volumeRunning}
+              volumeBotStatus={volumeBotStatus}
+              volumeBotConfig={volumeBotConfig}
+              setSettingsOpen={setSettingsOpen}
+              startVolumeBot={startVolumeBot}
+              stopVolumeBot={stopVolumeBot}
+              selectedToken={selectedToken}
+              loading={loading}
+              volumeBotStats={volumeBotStats}
+              activeWallets={activeWallets}
+              setQuickTradeWallet={setQuickTradeWallet}
+            />
           </div>
 
-          <div className="xl:col-span-12 grid grid-cols-1 xl:grid-cols-2 gap-1">
-            <Card className="bg-neutral-900 border-neutral-700">
-              <CardHeader className="py-1 px-2">
-                <CardTitle className="text-xs font-medium text-white tracking-wider flex items-center gap-2 border-b border-slate-800 pb-2">
-                  <Users className="w-4 h-4" />
-                  HOLDERS
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="px-2 pb-2">
-                <div className="space-y-1">
-                  {holdersLoading ? (
-                    <div className="text-slate-400 text-xs p-2 text-center">Loading holders...</div>
-                  ) : holderRows.length === 0 ? (
-                    <div className="text-slate-400 text-xs p-2 text-center">No holders yet</div>
-                  ) : (
-                    holderRows.map((wallet, index) => {
-                      const isLiquidityPool = wallet.isBondingCurve || index === 0
-                      return (
-                        <div key={wallet.address} className="flex items-center justify-between text-[11px]">
-                          <div className="flex items-center gap-2">
-                            <span className="font-mono text-neutral-400">
-                              {wallet.address.slice(0, 6)}...{wallet.address.slice(-4)}
-                            </span>
-                            {isLiquidityPool && (
-                              <span className="rounded bg-cyan-500/10 px-1 text-[9px] text-cyan-300">
-                                Liquidity pool
-                              </span>
-                            )}
-                          </div>
-                          <span className="text-white">
-                            {wallet.balance.toFixed(2)} ({wallet.percentage.toFixed(2)}%)
-                          </span>
-                        </div>
-                      )
-                    })
-                  )}
-                </div>
-              </CardContent>
-            </Card>
-            <Card className="bg-neutral-900 border-neutral-700">
-              <Tabs defaultValue="trades" className="w-full">
-                <CardHeader className="py-1 px-2">
-                  <div className="flex items-center justify-between border-b border-slate-800 pb-2">
-                    <TabsList className="h-7 bg-neutral-800 border border-neutral-700">
-                      <TabsTrigger value="trades" className="text-[10px]">
-                        <Activity className="w-3 h-3 mr-1" />
-                        LIVE TRADES
-                      </TabsTrigger>
-                      <TabsTrigger value="logs" className="text-[10px]">
-                        <AlertTriangle className="w-3 h-3 mr-1" />
-                        SYSTEM LOGS
-                      </TabsTrigger>
-                    </TabsList>
-                  </div>
-                </CardHeader>
-                <CardContent className="px-2 pb-2">
-                  <TabsContent value="trades" className="mt-0">
-                    <div className="space-y-1">
-                      {trades.length === 0 ? (
-                        <div className="text-slate-400 text-xs p-2 text-center">No trades yet</div>
-                      ) : (
-                        trades.slice(0, 6).map((trade) => (
-                          <div key={trade.id} className="flex items-center justify-between text-[11px]">
-                            <div className="flex items-center gap-2">
-                              <Badge className={trade.type === "buy" ? "bg-green-500/20 text-green-400" : "bg-red-500/20 text-red-400"}>
-                                {trade.type.toUpperCase()}
-                              </Badge>
-                              <span className="font-mono text-neutral-400">
-                                {trade.mintAddress.slice(0, 6)}...{trade.mintAddress.slice(-4)}
-                              </span>
-                            </div>
-                            <div className="text-right">
-                              <div className="text-white">{trade.solAmount.toFixed(3)} SOL</div>
-                              <div className="text-[10px] text-neutral-500">{formatTimeAgo(new Date(trade.timestamp).toISOString())}</div>
-                            </div>
-                          </div>
-                        ))
-                      )}
-                    </div>
-                  </TabsContent>
-                  <TabsContent value="logs" className="mt-0">
-                    <div className="flex items-center justify-end pb-1">
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        onClick={clearSystemLogs}
-                        className="h-6 px-2 text-[10px] text-slate-400 hover:text-slate-200"
-                      >
-                        <Trash2 className="w-3 h-3 mr-1" />
-                        Clear
-                      </Button>
-                    </div>
-                    <div className="space-y-1 max-h-24 overflow-y-auto bg-neutral-950 rounded p-2">
-                      {systemLogs.length === 0 && (!volumeBotStatus || volumeBotStatus.recentLogs?.length === 0) ? (
-                        <div className="text-slate-400 text-xs">No logs yet</div>
-                      ) : (
-                        <>
-                          {systemLogs.slice(0, 8).map((log, index) => (
-                            <div key={`system-${index}`} className="text-[9px] font-mono text-slate-300">
-                              {log}
-                            </div>
-                          ))}
-                          {volumeBotStatus?.recentLogs?.slice(0, 8).map((log: any, index: number) => (
-                            <div key={`bot-${index}`} className="text-[9px] font-mono text-slate-300">
-                              [{new Date(log.createdAt).toLocaleTimeString()}] {log.type.toUpperCase()}: {log.message}
-                            </div>
-                          ))}
-                        </>
-                      )}
-                    </div>
-                  </TabsContent>
-                </CardContent>
-              </Tabs>
-            </Card>
-          </div>
+          <AnalyticsPanel
+            holdersLoading={holdersLoading}
+            holderRows={holderRows}
+            trades={trades}
+            systemLogs={systemLogs}
+            volumeBotStatus={volumeBotStatus}
+            clearSystemLogs={clearSystemLogs}
+            formatTimeAgo={formatTimeAgo}
+          />
         </>
         )}
         <Dialog open={cloneDialogOpen} onOpenChange={setCloneDialogOpen}>
@@ -2569,545 +2193,67 @@ export default function DashboardPage() {
         </Dialog>
 
         {isLaunchStage && (
-        <div className="xl:col-span-12 space-y-1">
-          <Card className="bg-neutral-900 border-cyan-500/30">
-            <CardHeader className="py-1 px-2">
-              <CardTitle className="text-xs font-medium text-white tracking-wider flex items-center gap-2 border-b border-slate-800 pb-2">
-                <span className="flex h-4 w-4 items-center justify-center rounded bg-cyan-500/20 text-[9px] text-cyan-300">
-                  1
-                </span>
-                SELECT TOKEN TO LAUNCH
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-2 px-2 pb-2">
-              <div className="space-y-1">
-                <Label className="text-[10px] text-black">Prefill</Label>
-                <div className="flex flex-wrap items-center gap-2">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => {
-                      setCloneTokenMint(launchTemplateMint)
-                      setCloneDialogOpen(true)
-                    }}
-                    className="h-8 px-2 text-[10px] border-neutral-700"
-                  >
-                    Clone from existing
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={resetLaunchForm}
-                    className="h-8 px-2 text-[10px] text-neutral-400 hover:text-white"
-                  >
-                    New
-                  </Button>
-                  <span className="text-[10px] text-slate-500">
-                    {launchTemplateMint
-                      ? `Template: ${launchTemplateMint.slice(0, 6)}...${launchTemplateMint.slice(-4)}`
-                      : "No template selected"}
-                  </span>
-                </div>
-                {cloneLoading && (
-                  <div className="text-[10px] text-slate-500">Loading metadata...</div>
-                )}
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                <div className="space-y-1">
-                  <Label className="text-[10px] text-black">Name</Label>
-                  <Input
-                    value={tokenName}
-                    onChange={(e) => setTokenName(e.target.value)}
-                    placeholder="Token Name"
-                    className="h-8 bg-background border-border text-xs"
-                  />
-                </div>
-                <div className="space-y-1">
-                  <Label className="text-[10px] text-black">Symbol</Label>
-                  <Input
-                    value={tokenSymbol}
-                    onChange={(e) => setTokenSymbol(e.target.value.toUpperCase())}
-                    placeholder="SYMBOL"
-                    maxLength={10}
-                    className="h-8 bg-background border-border text-xs"
-                  />
-                </div>
-              </div>
-
-              <div className="space-y-1">
-                <Label className="text-[10px] text-black">Description</Label>
-                <Textarea
-                  value={tokenDescription}
-                  onChange={(e) => setTokenDescription(e.target.value)}
-                  placeholder="Token description..."
-                  className="min-h-[48px] bg-background border-border text-xs"
-                  rows={2}
-                />
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
-                <div className="space-y-1">
-                  <Label className="text-[10px] text-black">Website</Label>
-                  <Input
-                    value={tokenWebsite}
-                    onChange={(e) => setTokenWebsite(e.target.value)}
-                    placeholder="https://example.com"
-                    className="h-8 bg-background border-border text-xs"
-                  />
-                </div>
-                <div className="space-y-1">
-                  <Label className="text-[10px] text-black">Twitter</Label>
-                  <Input
-                    value={tokenTwitter}
-                    onChange={(e) => setTokenTwitter(e.target.value)}
-                    placeholder="https://x.com/..."
-                    className="h-8 bg-background border-border text-xs"
-                  />
-                </div>
-                <div className="space-y-1">
-                  <Label className="text-[10px] text-black">Telegram</Label>
-                  <Input
-                    value={tokenTelegram}
-                    onChange={(e) => setTokenTelegram(e.target.value)}
-                    placeholder="https://t.me/..."
-                    className="h-8 bg-background border-border text-xs"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-2 items-start">
-                <div className="space-y-1">
-                  <Label className="text-[10px] text-black">Image</Label>
-                  <Input
-                    type="file"
-                    accept="image/*"
-                    onChange={(e) => handleTokenImageChange(e.target.files?.[0] || null)}
-                    className="h-8 bg-background border-border text-xs"
-                  />
-                </div>
-                <div className="rounded border border-neutral-800 bg-neutral-950/40 p-2">
-                  <div className="flex items-center gap-2">
-                    <div className="h-10 w-10 overflow-hidden rounded bg-neutral-800">
-                      {tokenImagePreview ? (
-                        <img src={tokenImagePreview} alt="token preview" className="h-full w-full object-cover" />
-                      ) : (
-                        <div className="flex h-full w-full items-center justify-center text-[9px] text-neutral-500">
-                          No image
-                        </div>
-                      )}
-                    </div>
-                    <div className="text-[10px] text-neutral-400 space-y-0.5">
-                      <div>Name: <span className="text-white">{tokenName || "-"}</span></div>
-                      <div>Symbol: <span className="text-white">{tokenSymbol || "-"}</span></div>
-                      <div>Website: <span className="text-white">{tokenWebsite || "-"}</span></div>
-                      <div>Telegram: <span className="text-white">{tokenTelegram || "-"}</span></div>
-                      <div>Twitter: <span className="text-white">{tokenTwitter || "-"}</span></div>
-                      <div>Template: <span className="text-white">{launchTemplateMint ? `${launchTemplateMint.slice(0, 6)}...${launchTemplateMint.slice(-4)}` : "-"}</span></div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <div className="flex flex-wrap items-center gap-2">
-                <Button
-                  onClick={handleImageUpload}
-                  disabled={launchLoading || !tokenImage || !tokenName || !tokenSymbol}
-                  className="h-8 bg-cyan-500 hover:bg-cyan-600 text-xs text-black"
-                >
-                  <Upload className="w-3 h-3 mr-2" />
-                  Upload to IPFS
-                </Button>
-                {metadataUri && (
-                  <div className="rounded border border-green-500/30 bg-green-500/10 px-2 py-1 text-[9px] text-green-300">
-                    Metadata: <span className="font-mono break-all">{metadataUri}</span>
-                  </div>
-                )}
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card className="bg-neutral-900 border-cyan-500/30">
-            <CardHeader className="py-1 px-2">
-              <CardTitle className="text-xs font-medium text-white tracking-wider flex items-center gap-2 border-b border-slate-800 pb-2">
-                <span className="flex h-4 w-4 items-center justify-center rounded bg-cyan-500/20 text-[9px] text-cyan-300">
-                  2
-                </span>
-                SELECT DEV WALLET
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-2 px-2 pb-2">
-              <div className="space-y-1">
-                <div className="flex justify-between items-center">
-                    <Label className="text-[10px] text-black">Dev address</Label>
-                    <Button
-                        size="sm"
-                        variant="outline"
-                        className="h-5 px-2 text-[9px] border-blue-500/50 text-blue-400 hover:bg-blue-500/10"
-                        onClick={() => {
-                            if (connectedWalletKey) {
-                                if (launchDevWallet) updateWalletRole(launchDevWallet, 'project')
-                                updateWalletRole(connectedWalletKey, 'dev')
-                                setLaunchDevWallet(connectedWalletKey)
-                                setBuyerWallets((prev) => prev.filter((wallet) => wallet.publicKey !== connectedWalletKey))
-                            } else {
-                                toast.error("Connect wallet first")
-                            }
-                        }}
-                    >
-                        Use Connected
-                    </Button>
-                </div>
-                <Select
-                  value={launchDevWallet}
-                  onValueChange={(value) => {
-                    if (launchDevWallet) {
-                      updateWalletRole(launchDevWallet, 'project')
-                    }
-                    updateWalletRole(value, 'dev')
-                    setLaunchDevWallet(value)
-                    setBuyerWallets((prev) => prev.filter((wallet) => wallet.publicKey !== value))
-                  }}
-                >
-                  <SelectTrigger className="h-8 bg-background border-border text-xs">
-                    <SelectValue placeholder="Pick dev wallet" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {devWalletOptions.map((wallet, index) => {
-                      const isConnectedWallet = connectedWalletKey.length > 0 && wallet.publicKey === connectedWalletKey
-                      const labelPrefix = isConnectedWallet ? "Connected" : "Balance"
-
-                      let roleColor = "text-slate-400"
-                      let roleLabel = ""
-                      if (wallet.role === 'dev') { roleColor = "text-purple-400"; roleLabel = "DEV" }
-                      else if (wallet.role === 'buyer') { roleColor = "text-cyan-400"; roleLabel = "BUYER" }
-                      else if (wallet.role === 'funder') { roleColor = "text-green-400"; roleLabel = "FUNDER" }
-                      else if (wallet.role === 'volume_bot') { roleColor = "text-orange-400"; roleLabel = "BOT" }
-                      else if (wallet.role && wallet.role !== 'project') { roleLabel = wallet.role.toUpperCase() }
-
-                      return (
-                        <SelectItem key={wallet.publicKey} value={wallet.publicKey}>
-                          <div className="flex items-center gap-2">
-                            <span className="text-neutral-600 font-bold font-mono text-[10px]">#{index + 1}</span>
-                            <span className="text-neutral-800 font-medium">{labelPrefix}: {wallet.solBalance.toFixed(4)} SOL</span>
-                            <span className="text-neutral-400">-</span>
-                            <span className="font-mono text-neutral-900 font-semibold">{wallet.publicKey.slice(0, 6)}...{wallet.publicKey.slice(-4)}</span>
-                            {roleLabel && (
-                              <span className={`text-[9px] font-bold ${roleColor} border border-current px-1 rounded`}>
-                                {roleLabel}
-                              </span>
-                            )}
-                          </div>
-                        </SelectItem>
-                      )
-                    })}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="text-[10px] text-slate-500">
-                {launchDevWallet
-                  ? `Selected: ${launchDevWallet.slice(0, 8)}...${launchDevWallet.slice(-4)}`
-                  : "No dev wallet selected"}
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card className="bg-neutral-900 border-cyan-500/30">
-            <CardHeader className="py-1 px-2">
-              <div className="flex items-center justify-between border-b border-slate-800 pb-2">
-                <CardTitle className="text-xs font-medium text-white tracking-wider flex items-center gap-2">
-                  <span className="flex h-4 w-4 items-center justify-center rounded bg-cyan-500/20 text-[9px] text-cyan-300">
-                    3
-                  </span>
-                  ADD BUYER WALLETS
-                </CardTitle>
-                <div className="text-[10px] text-slate-500">
-                  {buyerWallets.length} buyers
-                </div>
-              </div>
-            </CardHeader>
-            <CardContent className="space-y-2 px-2 pb-2">
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
-                <div className="space-y-1">
-                  <Label className="text-[10px] text-black">Total buy amount (SOL)</Label>
-                  <Input
-                    type="number"
-                    step="0.0001"
-                    value={totalBuyAmount}
-                    onChange={(e) => setTotalBuyAmount(e.target.value)}
-                    className="h-8 bg-background border-border text-xs"
-                  />
-                </div>
-                <div className="flex flex-wrap gap-2 md:col-span-2 md:items-end">
-                  <Button
-                    size="sm"
-                    onClick={handleAddBuyerWallet}
-                    className="h-8 px-2 text-[10px] bg-blue-600 hover:bg-blue-700"
-                  >
-                    Add wallet
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => handleRemoveBuyerWallet()}
-                    className="h-8 px-2 text-[10px] border-neutral-700"
-                  >
-                    Delete wallet
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={handleEqualBuy}
-                    className="h-8 px-2 text-[10px] border-neutral-700"
-                  >
-                    Equal buy
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={handleRandomBuy}
-                    className="h-8 px-2 text-[10px] border-neutral-700"
-                  >
-                    Random buy
-                  </Button>
-                </div>
-              </div>
-
-              <div className="space-y-1">
-                {buyerWallets.length === 0 ? (
-                  <div className="text-[10px] text-slate-500">No buyer wallets selected</div>
-                ) : (
-                  buyerWallets.map((wallet, index) => {
-                    const usedKeys = new Set(buyerWallets.map((entry) => entry.publicKey))
-                    const options = activeWallets.filter((option) => {
-                      if (option.publicKey === launchDevWallet) return false
-                      if (option.publicKey === wallet.publicKey) return true
-                      return !usedKeys.has(option.publicKey)
-                    })
-                    return (
-                      <div key={`${wallet.publicKey}-${index}`} className="grid grid-cols-12 gap-2 items-center rounded border border-neutral-800 bg-neutral-950/40 p-2">
-                        <div className="col-span-1 text-[10px] text-slate-400">{index + 1}</div>
-                        <div className="col-span-7">
-                          <Select
-                            value={wallet.publicKey}
-                            onValueChange={(value) => {
-                              updateWalletRole(wallet.publicKey, 'project')
-                              updateWalletRole(value, 'buyer')
-                              setBuyerWallets((prev) =>
-                                prev.map((entry, idx) =>
-                                  idx === index ? { ...entry, publicKey: value } : entry
-                                )
-                              )
-                            }}
-                          >
-                            <SelectTrigger className="h-8 bg-background border-border text-xs">
-                              <SelectValue placeholder="Select wallet" />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {options.map((option) => {
-                                const roleSuffix = option.role && option.role !== 'project' ? ` [${option.role.toUpperCase()}]` : ""
-                                return (
-                                  <SelectItem key={option.publicKey} value={option.publicKey}>
-                                    {option.label ? `${option.label} - ` : ""}
-                                    {option.publicKey.slice(0, 6)}...{option.publicKey.slice(-4)} ({option.solBalance.toFixed(3)} SOL){roleSuffix}
-                                  </SelectItem>
-                                )
-                              })}
-                            </SelectContent>
-                          </Select>
-                        </div>
-                        <div className="col-span-3">
-                          <Input
-                            type="number"
-                            step="0.0001"
-                            value={wallet.amount}
-                            onChange={(e) => {
-                              setBuyerWallets((prev) =>
-                                prev.map((entry, idx) =>
-                                  idx === index ? { ...entry, amount: e.target.value } : entry
-                                )
-                              )
-                            }}
-                            className="h-8 bg-background border-border text-xs"
-                          />
-                        </div>
-                        <div className="col-span-1 flex justify-end">
-                          <Button
-                            size="icon"
-                            variant="ghost"
-                            onClick={() => handleRemoveBuyerWallet(index)}
-                            className="h-8 w-8 text-red-400 hover:text-red-300"
-                          >
-                            <Trash2 className="h-3 w-3" />
-                          </Button>
-                        </div>
-                      </div>
-                    )
-                  })
-                )}
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card className="bg-neutral-900 border-cyan-500/30">
-            <CardHeader className="py-1 px-2">
-              <CardTitle className="text-xs font-medium text-white tracking-wider flex items-center gap-2 border-b border-slate-800 pb-2">
-                <span className="flex h-4 w-4 items-center justify-center rounded bg-cyan-500/20 text-[9px] text-cyan-300">
-                  4
-                </span>
-                AUTO FUNDING + ATA
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-2 px-2 pb-2">
-              <div className="flex flex-wrap items-center gap-2">
-                <div className="flex items-center gap-2 rounded border border-neutral-800 bg-neutral-950/40 px-2 py-1 text-[10px] text-slate-400">
-                  <span>Auto fund</span>
-                  <Switch checked={autoFundEnabled} onCheckedChange={setAutoFundEnabled} />
-                </div>
-                <div className="flex items-center gap-2 rounded border border-neutral-800 bg-neutral-950/40 px-2 py-1 text-[10px] text-slate-400">
-                  <span>Auto ATA</span>
-                  <Switch checked={autoCreateAtaEnabled} onCheckedChange={setAutoCreateAtaEnabled} />
-                </div>
-                <div className="flex items-center gap-2 rounded border border-neutral-800 bg-neutral-950/40 px-2 py-1 text-[10px] text-slate-400">
-                  <span>Use connected funder</span>
-                  <Switch checked={useConnectedFunder} onCheckedChange={setUseConnectedFunder} />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
-                <div className="space-y-1">
-                  <Label className="text-[10px] text-black">Amount per wallet (SOL)</Label>
-                  <Input
-                    type="number"
-                    step="0.0001"
-                    value={funderAmountPerWallet}
-                    onChange={(e) => setFunderAmountPerWallet(e.target.value)}
-                    className="h-8 bg-background border-border text-xs"
-                    disabled={!autoFundEnabled}
-                  />
-                </div>
-                <div className="space-y-1 md:col-span-2">
-                  <Label className="text-[10px] text-black">Funder private key</Label>
-                  <div className="flex gap-2">
-                    <Input
-                      type="password"
-                      placeholder="funder wallet private key"
-                      value={funderKey}
-                      onChange={(e) => setFunderKey(e.target.value)}
-                      className="h-8 bg-background border-border text-xs"
-                      disabled={!autoFundEnabled || useConnectedFunder}
-                    />
-                    {!useConnectedFunder && (
-                      <>
-                        <Button onClick={generateFunderWallet} size="sm" variant="outline" className="h-8 px-2 text-[10px] border-neutral-700">
-                          Gen
-                        </Button>
-                        <Button onClick={topUpFunder} size="sm" variant="outline" className="h-8 px-2 text-[10px] border-neutral-700 bg-green-900/20 text-green-400">
-                          TopUp
-                        </Button>
-                      </>
-                    )}
-                  </div>
-                </div>
-              </div>
-              <div className="text-[10px] text-slate-500">
-                Auto-fund runs before launch. Auto-ATA runs after mint is created.
-                {useConnectedFunder ? " Uses connected wallet for funding." : ""}
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card className="bg-neutral-900 border-cyan-500/30">
-            <CardHeader className="py-1 px-2">
-              <CardTitle className="text-xs font-medium text-white tracking-wider flex items-center gap-2 border-b border-slate-800 pb-2">
-                <span className="flex h-4 w-4 items-center justify-center rounded bg-cyan-500/20 text-[9px] text-cyan-300">
-                  5
-                </span>
-                LAUNCH SETTINGS
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-2 px-2 pb-2">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                <div className="space-y-1">
-                  <Label className="text-[10px] text-black">Dev buy (SOL)</Label>
-                  <Input
-                    type="number"
-                    step="0.001"
-                    value={devBuyAmount}
-                    onChange={(e) => setDevBuyAmount(e.target.value)}
-                    className="h-8 bg-background border-border text-xs"
-                  />
-                </div>
-                <div className="space-y-1">
-                  <Label className="text-[10px] text-black">Default buyer (SOL)</Label>
-                  <Input
-                    type="number"
-                    step="0.001"
-                    value={buyAmountPerWallet}
-                    onChange={(e) => setBuyAmountPerWallet(e.target.value)}
-                    className="h-8 bg-background border-border text-xs"
-                  />
-                </div>
-              </div>
-
-              <div className="rounded bg-neutral-800 p-2 text-[11px]">
-                <div className="flex justify-between">
-                  <span className="text-neutral-400">Wallets</span>
-                  <span className="text-white font-mono">{(launchDevWallet ? 1 : 0) + buyerWallets.length}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-neutral-400">Dev buy</span>
-                  <span className="text-white font-mono">{parseSol(devBuyAmount).toFixed(4)} SOL</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-neutral-400">Buyer total</span>
-                  <span className="text-cyan-300 font-mono">
-                    {buyerWallets.reduce((sum, wallet) => sum + parseSol(wallet.amount), 0).toFixed(4)} SOL
-                  </span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-neutral-400">Jito tip</span>
-                  <span className="text-white font-mono">{parseSol(jitoTipSol).toFixed(6)} SOL</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-neutral-400">Priority fee</span>
-                  <span className="text-white font-mono">{parseSol(priorityFeeSol).toFixed(6)} SOL</span>
-                </div>
-                <div className="flex justify-between border-t border-neutral-700 pt-1">
-                  <span className="text-neutral-400">Estimated total</span>
-                  <span className="text-green-400 font-mono">
-                    {(
-                      parseSol(devBuyAmount) +
-                      buyerWallets.reduce((sum, wallet) => sum + parseSol(wallet.amount), 0) +
-                      parseSol(jitoTipSol) +
-                      ((launchDevWallet ? 1 : 0) + buyerWallets.length) * parseSol(priorityFeeSol)
-                    ).toFixed(4)} SOL
-                  </span>
-                </div>
-              </div>
-
-              {networkBlocked && (
-                <Alert className="bg-red-950/30 border-red-500/30 text-red-200">
-                  <AlertDescription className="text-[10px]">
-                    pump.fun unavailable or rpc unhealthy
-                  </AlertDescription>
-                </Alert>
-              )}
-
-              <Button
-                onClick={handleLaunch}
-                disabled={launchLoading || !metadataUri || !launchDevWallet || buyerWallets.length === 0 || !isMainnet || networkBlocked}
-                className="h-8 w-full bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600 text-xs text-white font-bold"
-              >
-                <Rocket className="w-3 h-3 mr-2" />
-                {launchLoading ? "LAUNCHING..." : "LAUNCH TOKEN + BUNDLE"}
-              </Button>
-              <p className="text-[10px] text-neutral-500 text-center">
-                creates token + {buyerWallets.length} bundled buys via jito
-              </p>
-            </CardContent>
-          </Card>
-        </div>
+          <LaunchPanel
+            tokenName={tokenName}
+            setTokenName={setTokenName}
+            tokenSymbol={tokenSymbol}
+            setTokenSymbol={setTokenSymbol}
+            tokenDescription={tokenDescription}
+            setTokenDescription={setTokenDescription}
+            tokenWebsite={tokenWebsite}
+            setTokenWebsite={setTokenWebsite}
+            tokenTwitter={tokenTwitter}
+            setTokenTwitter={setTokenTwitter}
+            tokenTelegram={tokenTelegram}
+            setTokenTelegram={setTokenTelegram}
+            tokenImage={tokenImage}
+            tokenImagePreview={tokenImagePreview}
+            handleTokenImageChange={handleTokenImageChange}
+            handleImageUpload={handleImageUpload}
+            launchLoading={launchLoading}
+            metadataUri={metadataUri}
+            launchTemplateMint={launchTemplateMint}
+            setCloneTokenMint={setCloneTokenMint}
+            setCloneDialogOpen={setCloneDialogOpen}
+            resetLaunchForm={resetLaunchForm}
+            cloneLoading={cloneLoading}
+            launchDevWallet={launchDevWallet}
+            setLaunchDevWallet={setLaunchDevWallet}
+            buyerWallets={buyerWallets}
+            setBuyerWallets={setBuyerWallets}
+            activeWallets={activeWallets}
+            totalBuyAmount={totalBuyAmount}
+            setTotalBuyAmount={setTotalBuyAmount}
+            handleAddBuyerWallet={handleAddBuyerWallet}
+            handleRemoveBuyerWallet={handleRemoveBuyerWallet}
+            handleEqualBuy={handleEqualBuy}
+            handleRandomBuy={handleRandomBuy}
+            autoFundEnabled={autoFundEnabled}
+            setAutoFundEnabled={setAutoFundEnabled}
+            autoCreateAtaEnabled={autoCreateAtaEnabled}
+            setAutoCreateAtaEnabled={setAutoCreateAtaEnabled}
+            useConnectedFunder={useConnectedFunder}
+            setUseConnectedFunder={setUseConnectedFunder}
+            funderAmountPerWallet={funderAmountPerWallet}
+            setFunderAmountPerWallet={setFunderAmountPerWallet}
+            funderKey={funderKey}
+            setFunderKey={setFunderKey}
+            generateFunderWallet={generateFunderWallet}
+            topUpFunder={topUpFunder}
+            devBuyAmount={devBuyAmount}
+            setDevBuyAmount={setDevBuyAmount}
+            buyAmountPerWallet={buyAmountPerWallet}
+            setBuyAmountPerWallet={setBuyAmountPerWallet}
+            jitoTipSol={jitoTipSol}
+            priorityFeeSol={priorityFeeSol}
+            handleLaunch={handleLaunch}
+            networkBlocked={networkBlocked}
+            isMainnet={isMainnet}
+            connectedWalletKey={connectedWalletKey}
+            updateWalletRole={updateWalletRole}
+            parseSol={parseSol}
+            devWalletOptions={devWalletOptions}
+          />
         )}
       </div>
 
