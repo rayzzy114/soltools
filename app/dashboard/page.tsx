@@ -249,7 +249,7 @@ export default function DashboardPage() {
 
   const activeWallets = useMemo(() => bundlerWallets.filter(w => w.isActive), [bundlerWallets])
   const mainStageWallets = useMemo(
-    () => activeWallets.filter((wallet) => wallet.role !== 'buyer' && wallet.role !== 'dev'),
+    () => activeWallets.filter((wallet) => wallet.role !== 'buyer'),
     [activeWallets]
   )
   const connectedWalletKey = publicKey?.toBase58() || ""
