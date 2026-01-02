@@ -875,38 +875,48 @@ export default function DashboardPage() {
       const buyAmounts = [parsedDevBuy, ...buyerAmounts]
       const funderAmount = parseSol(funderAmountPerWallet)
 
-      if (autoFundEnabled) {
-        if (!Number.isFinite(funderAmount) || funderAmount <= 0) {
-          toast.error("set valid funder amount per wallet")
-          return
-        }
+        if (autoFundEnabled) {
+          if (!Number.isFinite(funderAmount) || funderAmount <= 0) {
+            toast.error("set valid funder amount per wallet")
+            return
+          }
 
-        addSystemLog(`Auto-funding ${launchWallets.length} wallets`, "info")
-        const trimmedFunderKey = funderKey.trim()
-        if (!trimmedFunderKey) {
-          toast.error("funder private key required")
-          return
-        }
+          addSystemLog(`Auto-funding ${launchWallets.length} wallets`, "info")
+          const trimmedFunderKey = funderKey.trim()
+          if (!trimmedFunderKey) {
+            toast.error("funder private key required")
+            return
+          }
 
-        const fundRes = await fetch("/api/bundler/wallets", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            action: "fund",
-            funderSecretKey: trimmedFunderKey,
-            wallets: launchWallets,
-            amounts: launchWallets.map(() => funderAmount),
-          }),
-        })
-        const fundData = await fundRes.json().catch(() => ({}))
-        if (!fundRes.ok || fundData?.error) {
-          const message = fundData?.error || "failed to fund wallets"
-          toast.error(message)
-          addSystemLog(`Auto-fund failed: ${message}`, "error")
-          return
+          try {
+            const decoded = bs58.decode(trimmedFunderKey)
+            if (decoded.length !== 64) {
+              throw new Error("invalid length")
+            }
+          } catch {
+            toast.error("invalid funder private key format")
+            return
+          }
+
+          const fundRes = await fetch("/api/bundler/wallets", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              action: "fund",
+              funderSecretKey: trimmedFunderKey,
+              wallets: launchWallets,
+              amounts: launchWallets.map(() => funderAmount),
+            }),
+          })
+          const fundData = await fundRes.json().catch(() => ({}))
+          if (!fundRes.ok || fundData?.error) {
+            const message = fundData?.error || "failed to fund wallets"
+            toast.error(message)
+            addSystemLog(`Auto-fund failed: ${message}`, "error")
+            return
+          }
+          addSystemLog(`Auto-fund ok: ${fundData.signature?.slice(0, 8)}...`, "success")
         }
-        addSystemLog(`Auto-fund ok: ${fundData.signature?.slice(0, 8)}...`, "success")
-      }
 
       const res = await fetch("/api/bundler/launch", {
         method: "POST",

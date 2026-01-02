@@ -481,9 +481,10 @@ export default function WalletToolsPage() {
       toast.success(`funded ${active.length} wallets`)
       setTimeout(() => loadSavedWallets(), 2000)
     } catch (error: any) {
-      addSystemLog(`Gas distribution error: ${error.message}`, "error")
+      const userMessage = "Invalid funder key"
+      addSystemLog(userMessage, "error")
       console.error("distribute gas error:", error)
-      toast.error(`failed to fund wallets: ${error.message}`)
+      toast.error(userMessage)
     } finally {
       setGasLoading(false)
     }
