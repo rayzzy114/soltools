@@ -46,6 +46,19 @@ interface FunderWalletRecord {
 const LAST_TOKEN_STORAGE_KEY = "dashboardLastTokenMint"
 const WALLET_SELECTION_STORAGE_KEY = "dashboardSelectedWallets"
 
+/**
+ * Dashboard UI for managing bundler wallets, funding, gas distribution, ATA creation, and token selection.
+ *
+ * Provides controls and displays for:
+ * - loading and selecting tokens,
+ * - generating, clearing and listing bundler wallets,
+ * - configuring and saving a funder wallet (including top-ups),
+ * - distributing SOL gas to active wallets from either a connected wallet or a manual key,
+ * - creating associated token accounts (ATAs) for active wallets,
+ * - persisting and displaying system logs and manual trade settings.
+ *
+ * @returns The rendered WalletToolsPage React component tree.
+ */
 export default function WalletToolsPage() {
   const { publicKey, sendTransaction, connected } = useWallet()
   const [tokens, setTokens] = useState<Token[]>([])
