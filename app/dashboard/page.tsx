@@ -3088,6 +3088,7 @@ export default function DashboardPage() {
                 <Button
                   size="sm"
                   variant="outline"
+                  title={`Mode: Wash\nAmount: 0.005 - 0.05 SOL\nSlippage: 15%\nPriority: 0.0001 SOL`}
                   className="h-6 text-[10px] border-green-500/30 hover:bg-green-500/10 hover:text-green-400"
                   onClick={() => setVolumeBotConfig(prev => ({
                     ...prev,
@@ -3104,6 +3105,7 @@ export default function DashboardPage() {
                 <Button
                   size="sm"
                   variant="outline"
+                  title={`Mode: Wash\nAmount: 0.1 - 0.5 SOL\nSlippage: 25%\nPriority: 0.005 SOL`}
                   className="h-6 text-[10px] border-purple-500/30 hover:bg-purple-500/10 hover:text-purple-400"
                   onClick={() => setVolumeBotConfig(prev => ({
                     ...prev,
@@ -3120,6 +3122,7 @@ export default function DashboardPage() {
                 <Button
                   size="sm"
                   variant="outline"
+                  title={`Mode: Buy Only\nAmount: Fixed 0.01 SOL\nSlippage: 10%\nPriority: 0.0001 SOL`}
                   className="h-6 text-[10px] border-blue-500/30 hover:bg-blue-500/10 hover:text-blue-400"
                   onClick={() => setVolumeBotConfig(prev => ({
                     ...prev,
