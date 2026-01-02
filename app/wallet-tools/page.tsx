@@ -381,6 +381,7 @@ export default function WalletToolsPage() {
       }
 
       setBundlerWallets([])
+      await loadSavedWallets({ silent: true })
       toast.success(`cleared ${data.count || publicKeys.length} wallets`)
     } catch (error: any) {
       console.error("clear wallets error:", error)

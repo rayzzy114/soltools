@@ -193,10 +193,45 @@ export async function POST(request: NextRequest) {
       }
 
       try {
-        const result = await prisma.wallet.deleteMany({
-          where: { publicKey: { in: publicKeys } },
+        const { deleteResult, missingKeys } = await prisma.$transaction(async (tx) => {
+          // fetch wallet ids first to clean up related group records
+          const walletsToDelete = await tx.wallet.findMany({
+            where: { publicKey: { in: publicKeys } },
+            select: { id: true, publicKey: true },
+          })
+
+          if (walletsToDelete.length === 0) {
+            throw new Error("no matching wallets found for deletion")
+          }
+
+          const walletIds = walletsToDelete.map((w) => w.id)
+
+          if (walletIds.length > 0) {
+            await tx.walletGroupWallet.deleteMany({
+              where: { walletId: { in: walletIds } },
+            })
+          }
+
+          const deleteResult = await tx.wallet.deleteMany({
+            where: { id: { in: walletIds } },
+          })
+
+          const missingKeys = publicKeys.filter(
+            (pk) => !walletsToDelete.some((wallet) => wallet.publicKey === pk)
+          )
+
+          return { deleteResult, missingKeys }
         })
-        return NextResponse.json({ success: true, count: result.count })
+
+        if (deleteResult.count === 0) {
+          return NextResponse.json({ error: "failed to delete wallets" }, { status: 500 })
+        }
+
+        if (missingKeys.length > 0) {
+          logger.warn({ correlationId, missingKeys }, "some requested wallets not found during deletion")
+        }
+
+        return NextResponse.json({ success: true, count: deleteResult.count })
       } catch (error: any) {
         return NextResponse.json({ error: error.message }, { status: 400 })
       }
