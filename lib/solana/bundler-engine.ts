@@ -306,10 +306,10 @@ export interface BundleConfig {
     symbol: string
     description: string
     metadataUri: string
+    imageUrl: string
     website?: string
     twitter?: string
     telegram?: string
-    imageUrl?: string
   }
   devBuyAmount?: number
   // buy/sell amounts
@@ -657,12 +657,18 @@ export async function createLaunchBundle(config: BundleConfig): Promise<BundleRe
     const createTx = new Transaction()
 
     // create token instruction
-    const createIx = await createCreateTokenInstruction(
+    const createIx = createCreateTokenInstruction(
       devKeypair.publicKey,
       mintKeypair.publicKey,
-      tokenMetadata.name,
-      tokenMetadata.symbol,
-      tokenMetadata.metadataUri
+      {
+        name: tokenMetadata.name,
+        symbol: tokenMetadata.symbol,
+        description: tokenMetadata.description,
+        imageUrl: tokenMetadata.imageUrl || tokenMetadata.metadataUri,
+        website: tokenMetadata.website,
+        twitter: tokenMetadata.twitter,
+        telegram: tokenMetadata.telegram,
+      }
     )
 
     const initialCurve = await getInitialCurve()
