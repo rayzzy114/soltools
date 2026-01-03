@@ -1,7 +1,7 @@
 import { Keypair, PublicKey, Transaction, SystemProgram, LAMPORTS_PER_SOL } from "@solana/web3.js"
 import { connection } from "./config"
-import { createBundle, BundleTransaction } from "./bundler-engine"
 import bs58 from "bs58"
+import { sendBundle, createTipInstruction, type JitoRegion } from "./jito"
 
 export interface StealthFundConfig {
   intermediaryCount: number
@@ -54,9 +54,6 @@ export async function prepareStealthFunding(
   const targetsPerProxy = Math.ceil(targetWallets.length / proxies.length)
 
   // Calculate needed balance for each proxy
-  // Each proxy needs: sum(target amounts) + fees
-  // We'll just distribute evenly for now, but better to be precise
-
   let targetIndex = 0
   for (let i = 0; i < proxies.length; i++) {
     let proxyTotal = 0
@@ -64,17 +61,15 @@ export async function prepareStealthFunding(
 
     for (let j = 0; j < count; j++) {
       if (targetIndex < targetWallets.length) {
-        // Add jitter to target amount if not already jittered?
-        // The prompt says "randomize each transfer amount".
-        // We assume targetWallets.amount is the base desired.
+        // Add jitter to target amount
         const targetAmount = applyJitter(targetWallets[targetIndex].amount, config.jitterPercent)
-        targetWallets[targetIndex].amount = targetAmount // Update target with jittered amount
+        targetWallets[targetIndex].amount = targetAmount
         proxyTotal += targetAmount
         targetIndex++
       }
     }
 
-    // Add transaction fees buffer (approx 0.005 SOL per proxy for its outgoing txs)
+    // Add transaction fees buffer (approx 0.005 SOL per proxy for its outgoing txs + tip)
     proxyTotal += 0.005
 
     proxies[i].balance = proxyTotal
@@ -92,38 +87,35 @@ export async function prepareStealthFunding(
 export async function fundProxies(
   mainSecretKey: string,
   proxies: { address: string; amount: number }[],
-  useJito: boolean = true
+  useJito: boolean = true,
+  region: JitoRegion = "frankfurt"
 ) {
   const mainWallet = Keypair.fromSecretKey(bs58.decode(mainSecretKey))
-
-  const transactions: BundleTransaction[] = proxies.map(p => ({
-    walletAddress: mainWallet.publicKey.toBase58(), // Payer
-    tokenMint: "So11111111111111111111111111111111111111112", // SOL
-    amount: p.amount.toString(),
-    type: "buy" // misused type, but bundler logic handles "buy" as tx building.
-                // Wait, bundler-engine createBundle expects tokenMint and builds buy/sell txs.
-                // It does NOT support simple SOL transfers.
-                // I need to implement SOL transfer support in bundler or here.
-  }))
-
-  // Since createBundle is specific to PumpFun buys/sells, I should implement a simple Jito SOL transfer batcher here.
-  // or use sendBundle directly.
-
-  return await executeSolTransfers(mainWallet, proxies, useJito)
+  return await executeSolTransfers(mainWallet, proxies, useJito, region)
 }
 
 /**
- * Execute batch SOL transfers using Jito
+ * Step 3: Fund Targets from specific Proxy
+ */
+export async function fundTargetsFromProxy(
+  proxySecretKey: string,
+  targets: { address: string; amount: number }[],
+  useJito: boolean = true,
+  region: JitoRegion = "frankfurt"
+) {
+  const proxyWallet = Keypair.fromSecretKey(bs58.decode(proxySecretKey))
+  return await executeSolTransfers(proxyWallet, targets, useJito, region)
+}
+
+/**
+ * Execute batch SOL transfers
  */
 async function executeSolTransfers(
   fromWallet: Keypair,
   transfers: { address: string; amount: number }[],
-  useJito: boolean
+  useJito: boolean,
+  region: JitoRegion
 ) {
-  // We can bundle multiple transfers in one transaction (up to ~20)
-  // or multiple transactions in a bundle (up to 5).
-  // Ideally: 1 transaction with multiple instructions.
-
   const MAX_IKS_PER_TX = 12 // Safe limit
   const txs: Transaction[] = []
 
@@ -151,24 +143,17 @@ async function executeSolTransfers(
     txs.push(currentTx)
   }
 
-  // Send via Jito
+  const results = []
+
+  // Send via Jito (bundled in groups of 5) or Standard
+  const BUNDLE_SIZE = 5
+
   if (useJito) {
-    // Import dynamically to avoid circular deps if any, or just standard import
-    const { sendBundle, waitForBundleConfirmation, createTipInstruction } = await import("./jito")
-
-    // Add tip to each transaction (or just the last one if bundled? Jito bundles are atomic)
-    // If we have multiple transactions, we can bundle them (max 5).
-    // If we have more than 5 txs, we need multiple bundles.
-
-    const results = []
-
-    // Chunk into bundles of 5
-    const BUNDLE_SIZE = 5
     for (let i = 0; i < txs.length; i += BUNDLE_SIZE) {
       const bundleTxs = txs.slice(i, i + BUNDLE_SIZE)
 
       // Add tip to the last tx in the bundle
-      const tipIx = createTipInstruction(fromWallet.publicKey, 0.001) // 0.001 SOL tip
+      const tipIx = createTipInstruction(fromWallet.publicKey, 0.001, region)
       bundleTxs[bundleTxs.length - 1].add(tipIx)
 
       const { blockhash } = await connection.getLatestBlockhash()
@@ -178,47 +163,21 @@ async function executeSolTransfers(
         tx.sign(fromWallet)
       })
 
-      const { bundleId } = await sendBundle(bundleTxs, "frankfurt") // Configurable region?
+      const { bundleId } = await sendBundle(bundleTxs, region)
       results.push(bundleId)
 
-      // Wait a bit between bundles to avoid rate limits?
-      await new Promise(r => setTimeout(r, 2000))
+      // Small delay to avoid rate limits if many bundles
+      if (i + BUNDLE_SIZE < txs.length) {
+        await new Promise(r => setTimeout(r, 1000))
+      }
     }
-
-    return results
   } else {
-    // Standard send
-    const signatures = []
     for (const tx of txs) {
        const sig = await connection.sendTransaction(tx, [fromWallet])
        await connection.confirmTransaction(sig)
-       signatures.push(sig)
+       results.push(sig)
     }
-    return signatures
   }
-}
 
-/**
- * Step 3: Fund Targets from Proxies
- */
-export async function fundTargetsFromProxies(
-  proxies: { address: string; secretKey: string }[],
-  targetWallets: { address: string; amount: number }[],
-  useJito: boolean = true
-) {
-  // Distribute targets to proxies
-  const targetsPerProxy = Math.ceil(targetWallets.length / proxies.length)
-
-  const promises = proxies.map(async (proxy, i) => {
-    const start = i * targetsPerProxy
-    const end = Math.min(start + targetsPerProxy, targetWallets.length)
-    const myTargets = targetWallets.slice(start, end)
-
-    if (myTargets.length === 0) return
-
-    const proxyWallet = Keypair.fromSecretKey(bs58.decode(proxy.secretKey))
-    return await executeSolTransfers(proxyWallet, myTargets, useJito)
-  })
-
-  return await Promise.all(promises)
+  return results
 }
