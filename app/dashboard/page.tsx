@@ -2075,6 +2075,10 @@ export default function DashboardPage() {
       )
 
       const sig = await sendTransaction(tx, connection)
+      if (!sig) {
+        throw new Error("transaction signature not received")
+      }
+
       await connection.confirmTransaction(sig, "confirmed")
       toast.success(`top up sent: ${sig.slice(0, 8)}...`)
     } catch (error: any) {

@@ -36,6 +36,7 @@ import { useQuery } from "@tanstack/react-query"
 import { useWallet } from "@solana/wallet-adapter-react"
 import { SystemProgram, Transaction, PublicKey } from "@solana/web3.js"
 import { getResilientConnection, RPC_ENDPOINT, connection } from "@/lib/solana/config"
+import { ensureTransactionSignature } from "@/lib/solana/send-helpers"
 
 interface BundlerWallet {
   publicKey: string
@@ -364,7 +365,13 @@ export default function BundlerPage() {
       transaction.recentBlockhash = blockhash
       transaction.lastValidBlockHeight = lastValidBlockHeight
 
-      const signature = await sendTransaction(transaction, connection)
+      const signature = await ensureTransactionSignature({
+        transaction,
+        connection,
+        sendTransaction,
+        signTransaction,
+      })
+
       toast.success(`top up sent: ${signature.slice(0, 8)}...`)
       await connection.confirmTransaction(signature, "confirmed")
       toast.success("top up confirmed")
