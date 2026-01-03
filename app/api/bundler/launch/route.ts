@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server"
 import {
   createLaunchBundle,
   estimateBundleCost,
+  resolveLaunchBuyAmount,
   type BundleConfig,
   type BundlerWallet,
 } from "@/lib/solana/bundler-engine"
@@ -18,12 +19,6 @@ const MINT_RENT_BUFFER_SOL = 0.0022
 const FEE_BUFFER_SOL = 0.0015
 const BUY_BUFFER_SOL = ATA_RENT_BUFFER_SOL + FEE_BUFFER_SOL
 const DEV_CREATE_BUFFER_SOL = MINT_RENT_BUFFER_SOL
-
-const resolveLaunchBuyAmount = (index: number, devBuyAmount: number, buyAmounts: number[]) => {
-  if (index === 0) return devBuyAmount
-  const fallback = buyAmounts[0] ?? 0.01
-  return buyAmounts[index] ?? fallback
-}
 
 // POST - create launch bundle (create token + bundled buys)
 export async function POST(request: NextRequest) {

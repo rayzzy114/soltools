@@ -49,6 +49,12 @@ import {
 // max transactions per Jito bundle (hard limit)
 export const MAX_BUNDLE_WALLETS = 5
 
+export const resolveLaunchBuyAmount = (index: number, devBuyAmount: number, buyAmounts: number[]) => {
+  if (index === 0) return devBuyAmount
+  const fallback = buyAmounts[0] ?? 0.01
+  return buyAmounts[index] ?? fallback
+}
+
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 const getRetryDelay = (attempt: number) => {
   const base = STAGGER_RETRY_BASE_MS + attempt * 400
@@ -909,9 +915,10 @@ export async function createBuyBundle(config: BundleConfig): Promise<BundleResul
     const signatures: string[] = []
 
     const chunks = chunkArray(activeWallets, MAX_BUNDLE_WALLETS)
+    const initialBondingCurve = await getBondingCurveData(mint)
     for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex++) {
       const walletsChunk = chunks[chunkIndex]
-      const bondingCurve = chunkIndex === 0 ? initialCurve : await getBondingCurveData(mint)
+      const bondingCurve = chunkIndex === 0 ? initialBondingCurve : await getBondingCurveData(mint)
       if (!bondingCurve) {
         return {
           bundleId: "",
