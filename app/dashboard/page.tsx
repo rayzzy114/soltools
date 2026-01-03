@@ -564,7 +564,7 @@ export default function DashboardPage() {
     } catch (error) {
       console.error("failed to load system logs:", error)
     }
-  }, [volumeBotConfig.pairId, selectedToken?.mintAddress, logMintAddress])
+  }, [volumeBotConfig.pairId, selectedToken?.mintAddress, logMintAddress, volumeBotConfig.mintAddress])
 
   const clearSystemLogs = useCallback(() => {
     const mintForLogs =
@@ -680,7 +680,7 @@ export default function DashboardPage() {
     }
   }
 
-  const handleAddBuyerWallet = () => {
+  const handleAddBuyerWallet = useCallback(() => {
     const used = new Set(buyerWallets.map((wallet) => wallet.publicKey))
     const available = activeWallets.filter(
       (wallet) => wallet.publicKey !== launchDevWallet && !used.has(wallet.publicKey)
@@ -698,7 +698,7 @@ export default function DashboardPage() {
         amount: buyAmountPerWallet || "0.01",
       },
     ])
-  }
+  }, [buyerWallets, activeWallets, launchDevWallet, buyAmountPerWallet, updateWalletRole, setBuyerWallets])
 
   const handleRemoveBuyerWallet = (index?: number) => {
     setBuyerWallets((prev) => {
