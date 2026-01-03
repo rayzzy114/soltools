@@ -18,7 +18,7 @@ import { PnLSummaryCard, MiniPnLCard } from "@/components/pnl/PnLCard"
 import type { PnLSummary, TokenPnL, Trade } from "@/lib/pnl/types"
 import { toast } from "sonner"
 import { useWallet } from "@solana/wallet-adapter-react"
-import { LAMPORTS_PER_SOL, PublicKey, Keypair, SystemProgram, Transaction } from "@solana/web3.js"
+import { LAMPORTS_PER_SOL, PublicKey, Keypair, SystemProgram, Transaction, VersionedTransaction } from "@solana/web3.js"
 import bs58 from "bs58"
 import { getResilientConnection } from "@/lib/solana/config"
 import { getBondingCurveAddress } from "@/lib/solana/pumpfun-sdk"
@@ -227,6 +227,9 @@ export default function DashboardPage() {
   const [quickBuyAmount, setQuickBuyAmount] = useState("0.01")
   const [volumeBotStatus, setVolumeBotStatus] = useState<any>(null)
   const [logMintAddress, setLogMintAddress] = useState("")
+  const [stealthFunding, setStealthFunding] = useState(false)
+  const [warmupLoading, setWarmupLoading] = useState(false)
+  const [warmupProgress, setWarmupProgress] = useState(0)
   const [holderRows, setHolderRows] = useState<HolderRow[]>([])
   const [holdersLoading, setHoldersLoading] = useState(false)
   const [tokenFinance, setTokenFinance] = useState<{
@@ -1586,6 +1589,137 @@ export default function DashboardPage() {
     addSystemLog,
   ])
 
+  const runStealthFunding = useCallback(async () => {
+    if (!connected || !connectedWalletKey) {
+      toast.error("Connect funder wallet")
+      return
+    }
+
+    if (activeWallets.length === 0) {
+      toast.error("No active wallets to fund")
+      return
+    }
+
+    const lamportsPerWallet = Math.floor(Number.parseFloat(funderAmountPerWallet) * LAMPORTS_PER_SOL)
+    if (!Number.isFinite(lamportsPerWallet) || lamportsPerWallet <= 0) {
+      toast.error("Set valid stealth fund amount")
+      return
+    }
+
+    setStealthFunding(true)
+    addSystemLog(`Stealth funding ${activeWallets.length} wallets`, "info")
+
+    try {
+      const recipients = activeWallets.map((w) => ({
+        to: w.publicKey,
+        lamports: lamportsPerWallet,
+      }))
+
+      const res = await fetch("/api/volume-bot/fund", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ fromPubkey: connectedWalletKey, recipients }),
+      })
+
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || data?.error) {
+        const message = data?.error || "Stealth funding failed"
+        addSystemLog(message, "error")
+        toast.error(message)
+        return
+      }
+
+      const connection = await getResilientConnection()
+      const signatures: string[] = []
+
+      for (const raw of data.transactions || []) {
+        try {
+          const tx = VersionedTransaction.deserialize(Buffer.from(raw, "base64"))
+          const sig = await sendTransaction(tx, connection, { skipPreflight: true })
+          signatures.push(sig)
+          await connection.confirmTransaction(sig, "confirmed")
+        } catch (error: any) {
+          console.error("stealth fund tx failed", error)
+          addSystemLog(`Stealth fund tx failed: ${error?.message || error}`, "error")
+        }
+      }
+
+      if (signatures.length > 0) {
+        addSystemLog(`Stealth fund sent: ${signatures[0].slice(0, 8)}...`, "success")
+        toast.success(`Funded ${signatures.length} txs`)
+      } else {
+        toast.error("No stealth fund transactions sent")
+      }
+    } catch (error: any) {
+      console.error("stealth funding error", error)
+      addSystemLog(`Stealth funding error: ${error?.message || error}`, "error")
+      toast.error("Stealth funding failed")
+    } finally {
+      setStealthFunding(false)
+    }
+  }, [
+    activeWallets,
+    addSystemLog,
+    connected,
+    connectedWalletKey,
+    funderAmountPerWallet,
+    sendTransaction,
+  ])
+
+  const warmupVolumeWallets = useCallback(async () => {
+    if (activeWallets.length === 0) {
+      toast.error("No active wallets to warmup")
+      return
+    }
+
+    const secretKeys = activeWallets.map((w) => w.secretKey).filter(Boolean)
+    if (secretKeys.length === 0) {
+      toast.error("Wallet secret keys required for warmup")
+      return
+    }
+
+    setWarmupLoading(true)
+    setWarmupProgress(0)
+    addSystemLog(`Warming ${secretKeys.length} wallets`, "info")
+
+    try {
+      const safeTip = Number.isFinite(Number.parseFloat(jitoTipSol))
+        ? Math.max(0, Number.parseFloat(jitoTipSol))
+        : 0.0001
+
+      const res = await fetch("/api/bundler/warmup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "warmup_batch",
+          walletSecretKeys: secretKeys,
+          jitoTip: safeTip,
+          jitoRegion,
+          transferSol: 0.000001,
+        }),
+      })
+
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || data?.error) {
+        const message = data?.error || "Warmup failed"
+        addSystemLog(message, "error")
+        toast.error(message)
+        return
+      }
+
+      setWarmupProgress(100)
+      addSystemLog(`Warmup complete for ${secretKeys.length} wallets`, "success")
+      toast.success(`Warmed ${secretKeys.length} wallets`)
+    } catch (error: any) {
+      console.error("warmup error", error)
+      addSystemLog(`Warmup error: ${error?.message || error}`, "error")
+      toast.error("Warmup failed")
+    } finally {
+      setWarmupLoading(false)
+      setWarmupProgress(0)
+    }
+  }, [activeWallets, addSystemLog, jitoRegion, jitoTipSol])
+
   // Start volume bot
   const startVolumeBot = useCallback(async () => {
     if (!selectedToken) return
@@ -2323,6 +2457,32 @@ export default function DashboardPage() {
                     <span>Trades: {loading ? "..." : volumeBotStats.tradesToday.toLocaleString()}</span>
                     <span>Vol: {loading ? "..." : `${parseFloat(volumeBotStats.volumeGenerated).toLocaleString()} SOL`}</span>
                   </div>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2 text-[11px] text-neutral-300">
+                  <Button
+                    onClick={runStealthFunding}
+                    disabled={stealthFunding || activeWallets.length === 0 || !connected}
+                    variant="outline"
+                    className="h-8 border-neutral-700 text-xs"
+                  >
+                    <ShieldCheck className="w-3 h-3 mr-2" />
+                    {stealthFunding ? "Stealth funding..." : "Stealth fund"}
+                  </Button>
+                  <Button
+                    onClick={warmupVolumeWallets}
+                    disabled={warmupLoading || activeWallets.length === 0}
+                    variant="outline"
+                    className="h-8 border-neutral-700 text-xs"
+                  >
+                    <Flame className="w-3 h-3 mr-2" />
+                    {warmupLoading
+                      ? `Warmup ${warmupProgress > 0 ? `${warmupProgress}%` : "in progress"}`
+                      : "Wallet warmup"}
+                  </Button>
+                  <span className="text-neutral-500 hidden sm:inline">
+                    Prep wallets with stealth funding and warmup before running the bot.
+                  </span>
                 </div>
 
                 <div className="resize-y overflow-auto min-h-[120px] p-1 border border-transparent hover:border-neutral-800 transition-colors">
