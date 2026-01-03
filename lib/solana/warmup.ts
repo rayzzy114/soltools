@@ -1,6 +1,6 @@
 /**
  * Wallet Warmup System
- * Генерирует реальную активность для кошельков перед использованием
+ * Generates real activity for wallets before usage
  */
 
 import {
@@ -15,19 +15,20 @@ import { connection } from "./config"
 import bs58 from "bs58"
 
 export interface WarmupConfig {
-  minTransactions: number  // минимум транзакций
-  maxTransactions: number  // максимум
-  minDelayMs: number       // мин задержка между tx
-  maxDelayMs: number       // макс задержка
-  minAmount: number        // мин сумма SOL
-  maxAmount: number        // макс сумма SOL
-  enableSelfTransfers: boolean   // переводы самому себе
-  enableMemoProgram: boolean     // использовать memo
-  enableComputeBudget: boolean   // добавлять compute budget
+  minTransactions: number  // min transactions
+  maxTransactions: number  // max transactions
+  minDelayMs: number       // min delay between tx
+  maxDelayMs: number       // max delay
+  minAmount: number        // min SOL amount
+  maxAmount: number        // max SOL amount
+  enableSelfTransfers: boolean   // self transfers
+  enableMemoProgram: boolean     // use memo
+  enableComputeBudget: boolean   // add compute budget
+  enableBurnTransfers: boolean   // transfer to burn address
 }
 
 export interface WarmupAction {
-  type: "self_transfer" | "memo" | "compute_budget"
+  type: "self_transfer" | "memo" | "compute_budget" | "burn_transfer"
   amount?: number
   signature?: string
   timestamp: Date
@@ -63,10 +64,40 @@ const DEFAULT_WARMUP_CONFIG: WarmupConfig = {
   enableSelfTransfers: true,
   enableMemoProgram: true,
   enableComputeBudget: true,
+  enableBurnTransfers: true,
+}
+
+// Presets for UI
+export const WARMUP_PRESETS = {
+  OFF: {
+    minTransactions: 0,
+    maxTransactions: 0,
+  },
+  LOW: {
+    minTransactions: 1,
+    maxTransactions: 2,
+    minDelayMs: 1000,
+    maxDelayMs: 3000,
+    enableBurnTransfers: true,
+    enableSelfTransfers: true,
+  },
+  HIGH: {
+    minTransactions: 4,
+    maxTransactions: 8,
+    minDelayMs: 2000,
+    maxDelayMs: 8000,
+    enableBurnTransfers: true,
+    enableSelfTransfers: true,
+    enableMemoProgram: true,
+    enableComputeBudget: true,
+  }
 }
 
 // memo program
+// User requested: MemoSq4gqABAXDe96nc9fqS2ipTHS1asv8mR6WXW8
 const MEMO_PROGRAM_ID = new PublicKey("MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr")
+// System Program (Using as burn destination for tiny amounts per request)
+const SYSTEM_PROGRAM_ID = new PublicKey("11111111111111111111111111111111")
 
 // random helpers
 function randomInt(min: number, max: number): number {
@@ -86,16 +117,14 @@ function sleep(ms: number): Promise<void> {
  */
 function generateMemo(): string {
   const memos = [
+    "Warmup_v1",
+    "Activity_Check",
+    "Hello Solana",
     "gm",
     "test",
-    "hey",
-    "lol",
-    "",
-    "ok",
-    "nice",
-    "wagmi",
-    "gg",
-    Date.now().toString().slice(-6),
+    "ping",
+    `init_${Date.now().toString().slice(-4)}`,
+    "setup",
   ]
   return memos[randomInt(0, memos.length - 1)]
 }
@@ -129,6 +158,33 @@ async function createSelfTransfer(
 }
 
 /**
+ * Create burn transfer transaction
+ * Sends tiny amount to System Program
+ */
+async function createBurnTransfer(
+  wallet: Keypair,
+  amount: number
+): Promise<Transaction> {
+  const tx = new Transaction()
+
+  tx.add(
+    ComputeBudgetProgram.setComputeUnitLimit({
+      units: randomInt(10000, 50000),
+    })
+  )
+
+  tx.add(
+    SystemProgram.transfer({
+      fromPubkey: wallet.publicKey,
+      toPubkey: SYSTEM_PROGRAM_ID,
+      lamports: Math.floor(amount * LAMPORTS_PER_SOL),
+    })
+  )
+
+  return tx
+}
+
+/**
  * Create memo transaction
  */
 async function createMemoTransaction(
@@ -157,7 +213,7 @@ async function createMemoTransaction(
  */
 async function executeWarmupAction(
   wallet: Keypair,
-  actionType: "self_transfer" | "memo" | "compute_budget",
+  actionType: "self_transfer" | "memo" | "compute_budget" | "burn_transfer",
   amount?: number
 ): Promise<WarmupAction> {
   const action: WarmupAction = {
@@ -173,6 +229,9 @@ async function executeWarmupAction(
     switch (actionType) {
       case "self_transfer":
         tx = await createSelfTransfer(wallet, amount || 0.0001)
+        break
+      case "burn_transfer":
+        tx = await createBurnTransfer(wallet, amount || 0.000001)
         break
       case "memo":
         tx = await createMemoTransaction(wallet, generateMemo())
@@ -239,19 +298,13 @@ export async function warmupWallet(
   const numTransactions = randomInt(cfg.minTransactions, cfg.maxTransactions)
   
   // build action plan
-  const actionTypes: Array<"self_transfer" | "memo" | "compute_budget"> = []
-  
-  if (cfg.enableSelfTransfers) {
-    actionTypes.push("self_transfer", "self_transfer")
-  }
-  if (cfg.enableMemoProgram) {
-    actionTypes.push("memo")
-  }
-  if (cfg.enableComputeBudget) {
-    actionTypes.push("compute_budget")
-  }
-  
-  if (actionTypes.length === 0) {
+  // Randomize mix as requested: some memo, some burn, some self
+  const availableTypes: Array<"self_transfer" | "memo" | "burn_transfer"> = []
+  if (cfg.enableSelfTransfers) availableTypes.push("self_transfer")
+  if (cfg.enableMemoProgram) availableTypes.push("memo")
+  if (cfg.enableBurnTransfers) availableTypes.push("burn_transfer")
+
+  if (availableTypes.length === 0 || numTransactions <= 0) {
     return {
       walletAddress,
       actions: [],
@@ -270,15 +323,21 @@ export async function warmupWallet(
         currentStep: i + 1,
         totalSteps: numTransactions,
         percentage: ((i + 1) / numTransactions) * 100,
-        currentAction: actionTypes[i % actionTypes.length],
+        currentAction: "pending...",
       })
     }
     
-    // pick random action
-    const actionType = actionTypes[randomInt(0, actionTypes.length - 1)]
-    const amount = actionType === "self_transfer" 
-      ? randomFloat(cfg.minAmount, cfg.maxAmount) 
-      : undefined
+    // pick random action from enabled types
+    const actionType = availableTypes[randomInt(0, availableTypes.length - 1)]
+
+    // calculate amount if needed
+    let amount: number | undefined
+    if (actionType === "burn_transfer") {
+      // 0.000001 - 0.000005
+      amount = randomFloat(0.000001, 0.000005)
+    } else if (actionType === "self_transfer") {
+      amount = randomFloat(cfg.minAmount, cfg.maxAmount)
+    }
     
     const action = await executeWarmupAction(wallet, actionType, amount)
     actions.push(action)
