@@ -365,6 +365,10 @@ export default function BundlerPage() {
       transaction.lastValidBlockHeight = lastValidBlockHeight
 
       const signature = await sendTransaction(transaction, connection)
+      if (!signature) {
+        throw new Error("transaction signature not received")
+      }
+
       toast.success(`top up sent: ${signature.slice(0, 8)}...`)
       await connection.confirmTransaction(signature, "confirmed")
       toast.success("top up confirmed")
