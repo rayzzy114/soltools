@@ -766,7 +766,13 @@ export default function WalletToolsPage() {
                 onChange={(e) => setWalletCount(e.target.value)}
                 className="h-6 w-10 bg-background border-border text-xs"
               />
-              <Button size="sm" onClick={generateWallets} className="h-6 px-2 bg-purple-500 hover:bg-purple-600 text-xs">
+              <Button
+                size="sm"
+                onClick={generateWallets}
+                className="h-6 px-2 bg-purple-500 hover:bg-purple-600 text-xs"
+                aria-label="Generate wallets"
+                title="Generate wallets"
+              >
                 <Plus className="w-3 h-3" />
               </Button>
               <Button
@@ -775,6 +781,8 @@ export default function WalletToolsPage() {
                 onClick={clearWallets}
                 disabled={clearingWallets}
                 className="h-6 px-2 border-neutral-700 disabled:opacity-50"
+                aria-label="Clear all wallets"
+                title="Clear all wallets"
               >
                 <Trash2 className="w-3 h-3" />
               </Button>
@@ -786,6 +794,7 @@ export default function WalletToolsPage() {
                       onClick={distributeGas}
                       disabled={activeWallets.length === 0 || gasLoading || !funderKey}
                       className="h-6 px-2 bg-blue-600 hover:bg-blue-700 text-xs disabled:opacity-50"
+                      aria-label="Distribute gas"
                     >
                       {gasLoading ? (
                         <div className="w-3 h-3 border border-white border-t-transparent rounded-full animate-spin" />
@@ -807,6 +816,7 @@ export default function WalletToolsPage() {
                       onClick={createATAs}
                       disabled={!selectedToken || activeWallets.length === 0 || activeWallets.some(w => w.solBalance < 0.001) || ataLoading}
                       className="h-6 px-2 bg-purple-600 hover:bg-purple-700 text-xs disabled:opacity-50"
+                      aria-label="Create token accounts"
                     >
                       {ataLoading ? (
                         <div className="w-3 h-3 border border-white border-t-transparent rounded-full animate-spin" />

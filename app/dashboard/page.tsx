@@ -2016,7 +2016,14 @@ export default function DashboardPage() {
             <AlertTriangle className="w-3 h-3 mr-1" />
             STOP ALL
           </Button>
-          <Button onClick={fetchDashboardData} variant="outline" size="sm" className="h-7 px-2">
+          <Button
+            onClick={fetchDashboardData}
+            variant="outline"
+            size="sm"
+            className="h-7 px-2"
+            aria-label="Refresh data"
+            title="Refresh data"
+          >
             <RefreshCw className="w-3 h-3" />
           </Button>
         </div>
@@ -2289,6 +2296,8 @@ export default function DashboardPage() {
                       size="icon"
                       className="h-7 w-7"
                       onClick={() => setSettingsOpen(true)}
+                      aria-label="Bot settings"
+                      title="Bot settings"
                     >
                       <Settings className="w-4 h-4" />
                     </Button>
@@ -2931,6 +2940,8 @@ export default function DashboardPage() {
                             variant="ghost"
                             onClick={() => handleRemoveBuyerWallet(index)}
                             className="h-8 w-8 text-red-400 hover:text-red-300"
+                            aria-label="Remove wallet"
+                            title="Remove wallet"
                           >
                             <Trash2 className="h-3 w-3" />
                           </Button>
