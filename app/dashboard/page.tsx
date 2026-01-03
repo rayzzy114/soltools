@@ -2463,8 +2463,7 @@ export default function DashboardPage() {
                   <Button
                     onClick={runStealthFunding}
                     disabled={stealthFunding || activeWallets.length === 0 || !connected}
-                    variant="outline"
-                    className="h-8 border-neutral-700 text-xs"
+                    className="h-8 text-xs font-semibold bg-emerald-500 hover:bg-emerald-400 text-black shadow-sm disabled:opacity-50 disabled:cursor-not-allowed disabled:bg-emerald-600/60"
                   >
                     <ShieldCheck className="w-3 h-3 mr-2" />
                     {stealthFunding ? "Stealth funding..." : "Stealth fund"}
@@ -2472,8 +2471,7 @@ export default function DashboardPage() {
                   <Button
                     onClick={warmupVolumeWallets}
                     disabled={warmupLoading || activeWallets.length === 0}
-                    variant="outline"
-                    className="h-8 border-neutral-700 text-xs"
+                    className="h-8 text-xs font-semibold bg-amber-400 hover:bg-amber-300 text-black shadow-sm disabled:opacity-50 disabled:cursor-not-allowed disabled:bg-amber-500/70"
                   >
                     <Flame className="w-3 h-3 mr-2" />
                     {warmupLoading
