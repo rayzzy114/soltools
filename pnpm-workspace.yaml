@@ -10,3 +10,6 @@ onlyBuiltDependencies:
   - tiny-secp256k1
   - usb
   - utf-8-validate
+
+patchedDependencies:
+  bigint-buffer@1.1.5: patches/bigint-buffer@1.1.5.patch
