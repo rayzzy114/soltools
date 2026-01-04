@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useCallback } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -56,13 +56,7 @@ export default function PortfolioPage() {
   const [filter, setFilter] = useState<"all" | "profit" | "loss">("all")
   const [selectedTokens, setSelectedTokens] = useState<Set<string>>(new Set())
 
-  useEffect(() => {
-    if (connected && publicKey) {
-      fetchPortfolio()
-    }
-  }, [connected, publicKey])
-
-  const fetchPortfolio = async () => {
+  const fetchPortfolio = useCallback(async () => {
     if (!publicKey) return
     
     setLoading(true)
@@ -74,36 +68,34 @@ export default function PortfolioPage() {
       // fetch pnl summary
       const pnlRes = await fetch("/api/pnl?type=summary")
       const pnlData = await pnlRes.json()
-      setPnlSummary(pnlData.summary)
 
       // fetch token pnls
-      const tokenPnlRes = await fetch("/api/pnl?type=token")
-      const tokenPnlData = await tokenPnlRes.json()
-      setTokenPnls(tokenPnlData.tokenPnLs || [])
+      const tokenPnlsRes = await fetch("/api/pnl?type=tokens")
+      const tokenPnlsData = await tokenPnlsRes.json()
 
-      // mock holdings for display (in production, fetch from chain)
-      const mockHoldings: TokenHolding[] = tokens.map((token: any) => ({
-        mintAddress: token.mintAddress,
-        symbol: token.symbol,
-        name: token.name,
-        balance: Math.random() * 1000000,
-        balanceUsd: Math.random() * 500,
-        price: Math.random() * 0.0001,
-        priceChange24h: (Math.random() - 0.5) * 40,
-        costBasis: Math.random() * 300,
-        unrealizedPnl: (Math.random() - 0.4) * 200,
-        unrealizedPnlPercent: (Math.random() - 0.4) * 100,
-        isMigrated: Math.random() > 0.7,
-        lastUpdated: new Date(),
-      }))
+      // merge data
+      const merged = tokens.map((token: any) => {
+        const pnl = tokenPnlsData.find((p: any) => p.mintAddress === token.mintAddress)
+        return {
+          ...token,
+          pnl: pnl || null
+        }
+      })
 
-      setHoldings(mockHoldings)
+      setPortfolioItems(merged)
+      setPnlSummary(pnlData)
     } catch (error) {
-      console.error("error fetching portfolio:", error)
+      console.error("failed to fetch portfolio:", error)
     } finally {
       setLoading(false)
     }
-  }
+  }, [publicKey])
+
+  useEffect(() => {
+    if (connected && publicKey) {
+      fetchPortfolio()
+    }
+  }, [connected, publicKey, fetchPortfolio])
 
   const handleSort = (field: SortField) => {
     if (sortField === field) {

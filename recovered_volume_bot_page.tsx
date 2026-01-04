@@ -213,7 +213,7 @@ export default function VolumeBotPage() {
     }
   }
 
-  const refreshWalletBalances = async () => {
+  const refreshWalletBalances = useCallback(async () => {
     if (wallets.length === 0 || !config.mintAddress) {
       emitLog(
         "H1",
@@ -242,7 +242,7 @@ export default function VolumeBotPage() {
     } catch (error) {
       console.error("failed to refresh balances:", error)
     }
-  }
+  }, [wallets, config.mintAddress])
 
   const generateWallet = async () => {
     try {
@@ -303,7 +303,7 @@ export default function VolumeBotPage() {
     ))
   }
 
-  const executeTrade = async (wallet: VolumeWallet, type: "buy" | "sell") => {
+  const executeTrade = useCallback(async (wallet: VolumeWallet, type: "buy" | "sell") => {
     if (!config.mintAddress) return null
     
     // calculate amount
@@ -352,7 +352,7 @@ export default function VolumeBotPage() {
         timestamp: Date.now(),
       }
     }
-  }
+  }, [config.mintAddress, config.amountMode, config.fixedAmount, config.minAmount, config.maxAmount, config.minPercentage, config.maxPercentage, config.slippage, config.priorityFee])
 
   const runBotCycle = useCallback(async () => {
     emitLog(
@@ -467,7 +467,7 @@ export default function VolumeBotPage() {
     
     // refresh balances after trades
     await refreshWalletBalances()
-  }, [wallets, mintAddress, mode, amountMode, fixedAmount, minAmount, maxAmount, minPercentage, maxPercentage, slippage, priorityFee, maxExecutions, multiThreaded])
+  }, [wallets, mintAddress, mode, amountMode, config.maxExecutions, config.multiThreaded, multiThreaded, tokenInfo?.isMigrated, executeTrade, refreshWalletBalances])
 
   const startBot = () => {
     emitLog(

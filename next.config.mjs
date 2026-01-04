@@ -9,7 +9,6 @@ const nextConfig = {
     unoptimized: true,
   },
   experimental: {
-    turbopack: true,
   },
   env: {
     NEXT_PUBLIC_SOLANA_NETWORK: process.env.NEXT_PUBLIC_SOLANA_NETWORK,
