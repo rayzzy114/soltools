@@ -97,10 +97,6 @@ export async function createSimulatedToken(
 
   simulatedTokens.set(mint.toBase58(), bondingCurve)
 
-  console.log(`✅ Создан симулированный токен: ${mint.toBase58()}`)
-  console.log(`   Virtual SOL: ${bondingCurve.virtualSolReserves}`)
-  console.log(`   Virtual Tokens: ${bondingCurve.virtualTokenReserves}`)
-
   // создаем "сигнатуру" (фейковую)
   const signature = bs58.encode(Buffer.from(`sim-${Date.now()}-${mint.toBase58()}`))
 
@@ -215,12 +211,6 @@ export async function simulateBuy(
 
   const newPrice = Number(bondingCurve.virtualSolReserves) / Number(bondingCurve.virtualTokenReserves)
 
-  console.log(`✅ Симуляция покупки:`)
-  console.log(`   SOL потрачено: ${solAmount}`)
-  console.log(`   Токенов получено: ${tokensOut.toString()}`)
-  console.log(`   Новая цена: ${newPrice.toFixed(8)}`)
-  console.log(`   Price impact: ${priceImpact.toFixed(2)}%`)
-
   return {
     signature: bs58.encode(Buffer.from(`sim-buy-${Date.now()}`)),
     tokensOut,
@@ -278,12 +268,6 @@ export async function simulateSell(
 
   const newPrice = Number(bondingCurve.virtualSolReserves) / Number(bondingCurve.virtualTokenReserves)
 
-  console.log(`✅ Симуляция продажи:`)
-  console.log(`   Токенов продано: ${tokenAmount.toString()}`)
-  console.log(`   SOL получено: ${(Number(solOut) / LAMPORTS_PER_SOL).toFixed(6)}`)
-  console.log(`   Новая цена: ${newPrice.toFixed(8)}`)
-  console.log(`   Price impact: ${priceImpact.toFixed(2)}%`)
-
   return {
     signature: bs58.encode(Buffer.from(`sim-sell-${Date.now()}`)),
     solOut,
@@ -324,10 +308,6 @@ export async function simulateRugpull(
 
   // продаем все токены
   const result = await simulateSell(seller, mint, tokenBalance)
-
-  console.log(`🔥 RUGPULL ВЫПОЛНЕН:`)
-  console.log(`   Продано токенов: ${tokenBalance.toString()}`)
-  console.log(`   Получено SOL: ${(Number(result.solOut) / LAMPORTS_PER_SOL).toFixed(6)}`)
 
   return {
     signature: result.signature,

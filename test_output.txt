@@ -1,0 +1,8 @@
+ WARN  Unsupported engine: wanted: {"node":">=23.0.0"} (current: {"node":"v22.21.1","pnpm":"10.20.0"})
+
+> my-v0-project@0.1.0 test /app
+> vitest run
+
+sh: 1: vitest: not found
+ ELIFECYCLE  Test failed. See above for more details.
+ WARN   Local package.json exists, but node_modules missing, did you mean to install?
