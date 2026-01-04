@@ -54,14 +54,39 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    const activeWallets = (wallets as BundlerWallet[]).filter((w) => w.isActive)
+    let activeWallets = (wallets as BundlerWallet[]).filter((w) => w.isActive)
     if (activeWallets.length === 0) {
       return NextResponse.json({ error: "no active wallets" }, { status: 400 })
     }
 
+    // Ensure "Dev" wallet is at index 0 and sync buyAmounts
+    const rawBuyAmounts = (buyAmounts as number[]) || []
+    const fallbackAmount = rawBuyAmounts[0] ?? 0.01
+    const expandedBuyAmounts = activeWallets.map((_, i) => rawBuyAmounts[i] ?? fallbackAmount)
+
+    const combined = activeWallets.map((w, i) => ({ w, amt: expandedBuyAmounts[i] }))
+
+    // Explicitly find Dev wallet
+    const devIndex = combined.findIndex(x => x.w.role?.toLowerCase() === 'dev')
+    if (devIndex > 0) {
+      const [devItem] = combined.splice(devIndex, 1)
+      combined.unshift(devItem)
+    } else {
+        combined.sort((a, b) => {
+          const aIsDev = a.w.role?.toLowerCase() === 'dev'
+          const bIsDev = b.w.role?.toLowerCase() === 'dev'
+          if (aIsDev) return -1
+          if (bIsDev) return 1
+          return 0
+        })
+    }
+
+    activeWallets = combined.map((x) => x.w)
+    const sortedBuyAmounts = combined.map((x) => x.amt)
+
     for (let i = 0; i < activeWallets.length; i++) {
       const wallet = activeWallets[i]
-      const buyAmount = resolveLaunchBuyAmount(i, devBuyAmount, buyAmounts as number[])
+      const buyAmount = resolveLaunchBuyAmount(i, devBuyAmount, sortedBuyAmounts)
       if (!Number.isFinite(buyAmount) || buyAmount < MIN_BUY_SOL) {
         return NextResponse.json({ error: `buy amount too low for wallet ${wallet.publicKey}` }, { status: 400 })
       }
@@ -99,7 +124,7 @@ export async function POST(request: NextRequest) {
         telegram: tokenMetadata.telegram,
       },
       devBuyAmount,
-      buyAmounts,
+      buyAmounts: sortedBuyAmounts,
       jitoTip,
       priorityFee,
       slippage,
