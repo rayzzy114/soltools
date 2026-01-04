@@ -199,6 +199,16 @@ model WalletGroup {
   @@index([isActive])
 }
 
+model LookupTableCache {
+  id                 String   @id @default(cuid())
+  authorityPublicKey String   @unique
+  lutAddress         String
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@index([authorityPublicKey])
+}
+
 model WalletGroupWallet {
   id        String      @id @default(cuid())
   groupId   String

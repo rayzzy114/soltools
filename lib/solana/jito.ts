@@ -1,4 +1,5 @@
 import {
+  Connection,
   Keypair,
   PublicKey,
   Transaction,
@@ -65,8 +66,40 @@ function withUuidParam(url: string, uuid: string): string {
   }
 }
 
+export async function estimateDynamicJitoTip(
+  connection: Connection,
+  computeUnits: number = 800_000,
+  {
+    multiplier = 1.25,
+    floorLamports = MIN_JITO_TIP_LAMPORTS,
+    ceilingLamports = 10_000_000, // 0.01 SOL safety upper bound
+  }: {
+    multiplier?: number
+    floorLamports?: number
+    ceilingLamports?: number
+  } = {}
+): Promise<number> {
+  try {
+    const fees = await connection.getRecentPrioritizationFees()
+    const sorted = fees
+      .map((f) => f.prioritizationFee)
+      .filter((v) => Number.isFinite(v) && v > 0)
+      .sort((a, b) => a - b)
+    const pickIndex = Math.min(sorted.length - 1, Math.floor(sorted.length * 0.75))
+    const p75 = sorted[pickIndex] ?? 0
+    const lamports = Math.min(
+      ceilingLamports,
+      Math.max(floorLamports, Math.floor(p75 * computeUnits * multiplier))
+    )
+    return lamports / LAMPORTS_PER_SOL
+  } catch (error) {
+    console.warn("[jito] failed to estimate dynamic tip, falling back", error)
+    return floorLamports / LAMPORTS_PER_SOL
+  }
+}
+
 // default config
-const MIN_JITO_TIP_LAMPORTS = 1000 // minimum tip per jito docs
+export const MIN_JITO_TIP_LAMPORTS = 1000 // minimum tip per jito docs
 const DEFAULT_JITO_TIP = 0.0001 // SOL (~0.1 cents)
 const DEFAULT_REGION: JitoRegion = "frankfurt"
 

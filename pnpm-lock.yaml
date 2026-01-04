@@ -157,6 +157,9 @@ importers:
       bs58:
         specifier: ^6.0.0
         version: 6.0.0
+      ccxt:
+        specifier: ^4.5.30
+        version: 4.5.30(bufferutil@4.0.9)(utf-8-validate@5.0.10)
       class-variance-authority:
         specifier: ^0.7.1
         version: 0.7.1
@@ -4165,6 +4168,10 @@ packages:
   cbor@10.0.11:
     resolution: {integrity: sha512-vIwORDd/WyB8Nc23o2zNN5RrtFGlR6Fca61TtjkUXueI3Jf2DOZDl1zsshvBntZ3wZHBM9ztjnkXSmzQDaq3WA==}
     engines: {node: '>=20'}
+
+  ccxt@4.5.30:
+    resolution: {integrity: sha512-cG1O08G2jYLHO7F7KrY0oeb0WYFNsbSKT99xFUR9pS6lohC+ZzlnFuPcMF2QwMUu7on6c0scAArHg9jyNwrEdg==}
+    engines: {node: '>=15.0.0'}
 
   chai@5.3.3:
     resolution: {integrity: sha512-4zNhdJD/iOjSH0A05ea+Ke6MU5mmpQcbQsSOkgdaUMJ9zTlDTD/GYlwohmIE2u0gaxHYiVHEn1Fw9mZ/ktJWgw==}
@@ -12923,6 +12930,13 @@ snapshots:
   cbor@10.0.11:
     dependencies:
       nofilter: 3.1.0
+
+  ccxt@4.5.30(bufferutil@4.0.9)(utf-8-validate@5.0.10):
+    dependencies:
+      ws: 8.18.3(bufferutil@4.0.9)(utf-8-validate@5.0.10)
+    transitivePeerDependencies:
+      - bufferutil
+      - utf-8-validate
 
   chai@5.3.3:
     dependencies:
