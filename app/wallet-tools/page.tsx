@@ -246,7 +246,16 @@ export default function WalletToolsPage() {
       if (data?.funderWallet) {
         setFunderWalletRecord(data.funderWallet)
         setFunderWalletInput(data.funderWallet.publicKey)
-        refreshFunderBalance(data.funderWallet.publicKey)
+        // Fetch balance directly to avoid circular dependency
+        try {
+          const balRes = await fetch(`/api/solana/balance?publicKey=${data.funderWallet.publicKey}`)
+          const balData = await balRes.json()
+          if (typeof balData.sol === "number") {
+            setFunderBalance(balData.sol)
+          }
+        } catch (e) {
+          console.error("failed to fetch funder balance", e)
+        }
       } else {
         setFunderWalletRecord(null)
         setFunderBalance(null)
@@ -254,7 +263,7 @@ export default function WalletToolsPage() {
     } catch (error: any) {
       console.error("failed to load funder wallet:", error)
     }
-  }, [refreshFunderBalance])
+  }, [])
 
   const saveFunderWallet = useCallback(async (overridePublicKey?: string) => {
     const trimmed = overridePublicKey || funderWalletInput.trim()
