@@ -73,6 +73,7 @@ export default function WalletToolsPage() {
   const [systemLogs, setSystemLogs] = useState<string[]>([])
   const [logMintAddress, setLogMintAddress] = useState("")
   const [volumeBotConfig] = useState({ pairId: "", mintAddress: "" })
+  const [refreshingWallets, setRefreshingWallets] = useState<Set<string>>(new Set())
 
   const activeWallets = useMemo(() => bundlerWallets.filter(w => w.isActive), [bundlerWallets])
   const selectedTokenValue = selectedToken?.mintAddress || ""
@@ -396,6 +397,38 @@ export default function WalletToolsPage() {
       setClearingWallets(false)
     }
   }, [bundlerWallets, loadSavedWallets])
+
+  const handleRefreshWallet = useCallback(async (wallet: BundlerWallet) => {
+    setRefreshingWallets(prev => {
+        const next = new Set(prev)
+        next.add(wallet.publicKey)
+        return next
+    })
+    try {
+        const res = await fetch("/api/bundler/wallets", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                action: "refresh",
+                wallets: [wallet],
+            }),
+        })
+        const data = await res.json()
+        if (data.wallets && data.wallets.length > 0) {
+             const updated = data.wallets[0]
+             setBundlerWallets(prev => prev.map(w => w.publicKey === updated.publicKey ? updated : w))
+             toast.success("Wallet refreshed")
+        }
+    } catch (error) {
+        toast.error("Failed to refresh wallet")
+    } finally {
+        setRefreshingWallets(prev => {
+            const next = new Set(prev)
+            next.delete(wallet.publicKey)
+            return next
+        })
+    }
+  }, [])
 
   const handleCollectSol = useCallback(async () => {
     if (!publicKey) {
@@ -986,9 +1019,21 @@ export default function WalletToolsPage() {
                       </div>
                     </div>
                   </div>
-                  <Badge className={wallet.isActive ? "bg-green-500/20 text-green-400" : "bg-neutral-600"}>
-                    {wallet.isActive ? "Active" : "Inactive"}
-                  </Badge>
+                  <div className="flex items-center gap-2">
+                    <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => handleRefreshWallet(wallet)}
+                        disabled={refreshingWallets.has(wallet.publicKey)}
+                        className="h-6 w-6 text-slate-400 hover:text-white"
+                        title="Refresh balance"
+                    >
+                        <RefreshCw className={`w-3 h-3 ${refreshingWallets.has(wallet.publicKey) ? "animate-spin" : ""}`} />
+                    </Button>
+                    <Badge className={wallet.isActive ? "bg-green-500/20 text-green-400" : "bg-neutral-600"}>
+                        {wallet.isActive ? "Active" : "Inactive"}
+                    </Badge>
+                  </div>
                 </div>
               ))
             )}
