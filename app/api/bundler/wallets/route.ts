@@ -288,6 +288,12 @@ export async function POST(request: NextRequest) {
       }
 
       try {
+        const existingWallet = await prisma.wallet.findUnique({ where: { publicKey } })
+        if (!existingWallet) {
+          logger.warn({ correlationId, publicKey }, "update requested for unknown wallet")
+          return NextResponse.json({ error: "wallet not found; import it before updating" }, { status: 404 })
+        }
+
         const wallet = await prisma.wallet.update({
           where: { publicKey },
           data: {
@@ -309,7 +315,15 @@ export async function POST(request: NextRequest) {
           },
         })
       } catch (error: any) {
-        return NextResponse.json({ error: error.message }, { status: 400 })
+        const isNotFound =
+          error?.code === "P2025" ||
+          typeof error?.code === "string" && error.code.includes("NotFound") ||
+          typeof error?.message === "string" && error.message.toLowerCase().includes("not found")
+
+        const status = isNotFound ? 404 : 400
+        const message = isNotFound ? "wallet not found; import it before updating" : error?.message
+        logger.error({ correlationId, error: error?.message, publicKey }, "failed to update wallet")
+        return NextResponse.json({ error: message }, { status })
       }
     }
 
