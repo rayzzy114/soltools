@@ -1207,7 +1207,7 @@ export async function createLaunchBundle(config: BundleConfig): Promise<BundleRe
     }
   }
 
-  const activeWallets = wallets.filter((w) => w.isActive)
+  let activeWallets = wallets.filter((w) => w.isActive)
   if (activeWallets.length === 0) {
     return {
       bundleId: "",
@@ -1216,6 +1216,21 @@ export async function createLaunchBundle(config: BundleConfig): Promise<BundleRe
       error: "no active wallets",
     }
   }
+
+  // Ensure "Dev" wallet is at index 0 and sync buyAmounts
+  const rawBuyAmounts = buyAmounts || []
+  const fallbackAmount = rawBuyAmounts[0] ?? 0.01
+  const expandedBuyAmounts = activeWallets.map((_, i) => rawBuyAmounts[i] ?? fallbackAmount)
+
+  const combined = activeWallets.map((w, i) => ({ w, amt: expandedBuyAmounts[i] }))
+  combined.sort((a, b) => {
+    if (a.w.role === "dev") return -1
+    if (b.w.role === "dev") return 1
+    return 0
+  })
+
+  activeWallets = combined.map((x) => x.w)
+  const sortedBuyAmounts = combined.map((x) => x.amt)
 
   try {
     const mintKeypair = Keypair.generate()
@@ -1333,7 +1348,7 @@ export async function createLaunchBundle(config: BundleConfig): Promise<BundleRe
         const wallet = walletsChunk[i]
         const globalIndex = chunkIndex * ghostChunkSize + i
         const keypair = getKeypair(wallet)
-        const baseBuyAmount = resolveLaunchBuyAmount(globalIndex, devBuyAmount, buyAmounts as number[])
+        const baseBuyAmount = resolveLaunchBuyAmount(globalIndex, devBuyAmount, sortedBuyAmounts)
         const buyAmount = getRandomizedBuyAmount(globalIndex, baseBuyAmount, buyRandomizer)
         const solAmountLamports = BigInt(Math.floor(buyAmount * LAMPORTS_PER_SOL))
         const { tokensOut } = calculateBuyAmount(curveState as any, buyAmount)
