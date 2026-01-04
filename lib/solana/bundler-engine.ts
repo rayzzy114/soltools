@@ -1314,11 +1314,7 @@ export async function createLaunchBundle(config: BundleConfig): Promise<BundleRe
           createCreateTokenInstruction(devKeypair.publicKey, mintKeypair.publicKey, {
             name: tokenMetadata.name,
             symbol: tokenMetadata.symbol,
-            description: tokenMetadata.description,
-            imageUrl: tokenMetadata.imageUrl || tokenMetadata.metadataUri,
-            website: tokenMetadata.website,
-            twitter: tokenMetadata.twitter,
-            telegram: tokenMetadata.telegram,
+            uri: tokenMetadata.metadataUri,
           })
         )
 
