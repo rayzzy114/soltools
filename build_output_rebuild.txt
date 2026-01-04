@@ -1,0 +1,141 @@
+ WARN  Unsupported engine: wanted: {"node":">=23.0.0"} (current: {"node":"v22.21.1","pnpm":"10.20.0"})
+
+> my-v0-project@0.1.0 build /app
+> pnpm exec prisma generate && pnpm exec next build
+
+ WARN  Unsupported engine: wanted: {"node":">=23.0.0"} (current: {"node":"v22.21.1","pnpm":"10.20.0"})
+Loaded Prisma config from prisma.config.ts.
+
+Prisma schema loaded from prisma/schema.prisma
+
+✔ Generated Prisma Client (v7.0.1) to ./node_modules/.prisma/client in 156ms
+
+Start by importing your Prisma Client (See: https://pris.ly/d/importing-client)
+
+Tip: Need your database queries to be 1000x faster? Accelerate offers you that and more: https://pris.ly/tip-2-accelerate
+
+ WARN  Unsupported engine: wanted: {"node":">=23.0.0"} (current: {"node":"v22.21.1","pnpm":"10.20.0"})
+   ▲ Next.js 15.5.6
+
+   Creating an optimized production build ...
+ ✓ Compiled successfully in 26.4s
+   Skipping validation of types
+   Linting ...
+   Collecting page data ...
+Solana Network: mainnet-beta
+RPC Endpoint: https://api.mainnet-beta.solana.com
+CRITICAL: RPC is not configured in .env! Using public fallback.
+WARNING: Using PUBLIC RPC on mainnet! This will be slow and rate-limited.
+Set RPC to your provider (Helius, QuickNode, ERPC)
+bigint: Failed to load bindings, pure JS will be used (try npm run rebuild?)
+bigint: Failed to load bindings, pure JS will be used (try npm run rebuild?)
+Solana Network: mainnet-beta
+RPC Endpoint: https://api.mainnet-beta.solana.com
+CRITICAL: RPC is not configured in .env! Using public fallback.
+WARNING: Using PUBLIC RPC on mainnet! This will be slow and rate-limited.
+Set RPC to your provider (Helius, QuickNode, ERPC)
+Solana Network: mainnet-beta
+RPC Endpoint: https://api.mainnet-beta.solana.com
+CRITICAL: RPC is not configured in .env! Using public fallback.
+WARNING: Using PUBLIC RPC on mainnet! This will be slow and rate-limited.
+Set RPC to your provider (Helius, QuickNode, ERPC)
+bigint: Failed to load bindings, pure JS will be used (try npm run rebuild?)
+   Generating static pages (0/53) ...
+Solana Network: mainnet-beta
+RPC Endpoint: https://api.mainnet-beta.solana.com
+CRITICAL: RPC is not configured in .env! Using public fallback.
+WARNING: Using PUBLIC RPC on mainnet! This will be slow and rate-limited.
+Set RPC to your provider (Helius, QuickNode, ERPC)
+bigint: Failed to load bindings, pure JS will be used (try npm run rebuild?)
+CRITICAL: RPC is not configured in .env! Using public fallback.
+WARNING: Using PUBLIC RPC on mainnet! This will be slow and rate-limited.
+Set RPC to your provider (Helius, QuickNode, ERPC)
+Solana Network: mainnet-beta
+RPC Endpoint: https://api.mainnet-beta.solana.com
+bigint: Failed to load bindings, pure JS will be used (try npm run rebuild?)
+Solana Network: mainnet-beta
+RPC Endpoint: https://api.mainnet-beta.solana.com
+CRITICAL: RPC is not configured in .env! Using public fallback.
+WARNING: Using PUBLIC RPC on mainnet! This will be slow and rate-limited.
+Set RPC to your provider (Helius, QuickNode, ERPC)
+bigint: Failed to load bindings, pure JS will be used (try npm run rebuild?)
+   Generating static pages (13/53)
+   Generating static pages (26/53)
+Solana Network: mainnet-beta
+RPC Endpoint: https://api.mainnet-beta.solana.com
+CRITICAL: RPC is not configured in .env! Using public fallback.
+WARNING: Using PUBLIC RPC on mainnet! This will be slow and rate-limited.
+Set RPC to your provider (Helius, QuickNode, ERPC)
+bigint: Failed to load bindings, pure JS will be used (try npm run rebuild?)
+Solana Network: mainnet-beta
+RPC Endpoint: https://api.mainnet-beta.solana.com
+CRITICAL: RPC is not configured in .env! Using public fallback.
+WARNING: Using PUBLIC RPC on mainnet! This will be slow and rate-limited.
+Set RPC to your provider (Helius, QuickNode, ERPC)
+   Generating static pages (39/53)
+ ✓ Generating static pages (53/53)
+   Finalizing page optimization ...
+   Collecting build traces ...
+
+Route (app)                                 Size  First Load JS
+┌ ○ /                                    3.16 kB         321 kB
+├ ○ /_not-found                             1 kB         103 kB
+├ ƒ /api/bump                              228 B         102 kB
+├ ƒ /api/bundler                           228 B         102 kB
+├ ƒ /api/bundler/buy                       228 B         102 kB
+├ ƒ /api/bundler/groups                    228 B         102 kB
+├ ƒ /api/bundler/launch                    228 B         102 kB
+├ ƒ /api/bundler/rugpull                   228 B         102 kB
+├ ƒ /api/bundler/rugpull/estimate          228 B         102 kB
+├ ƒ /api/bundler/sell                      228 B         102 kB
+├ ƒ /api/bundler/wallets                   228 B         102 kB
+├ ƒ /api/bundler/warmup                    228 B         102 kB
+├ ƒ /api/clone                             228 B         102 kB
+├ ƒ /api/clone/pump-scan                   228 B         102 kB
+├ ƒ /api/devnet-simulator                  228 B         102 kB
+├ ƒ /api/fees/priority                     228 B         102 kB
+├ ƒ /api/funder                            228 B         102 kB
+├ ƒ /api/funder/topup                      228 B         102 kB
+├ ƒ /api/health                            228 B         102 kB
+├ ƒ /api/jito/tip-floor                    228 B         102 kB
+├ ƒ /api/network                           228 B         102 kB
+├ ƒ /api/pnl                               228 B         102 kB
+├ ƒ /api/sniper                            228 B         102 kB
+├ ƒ /api/solana/balance                    228 B         102 kB
+├ ƒ /api/stats                             228 B         102 kB
+├ ƒ /api/tests                             228 B         102 kB
+├ ƒ /api/tokens                            228 B         102 kB
+├ ƒ /api/tokens/buy                        228 B         102 kB
+├ ƒ /api/tokens/finance                    228 B         102 kB
+├ ƒ /api/tokens/price                      228 B         102 kB
+├ ƒ /api/tokens/rugpull                    228 B         102 kB
+├ ƒ /api/tokens/sell                       228 B         102 kB
+├ ƒ /api/tokens/upload-metadata            228 B         102 kB
+├ ƒ /api/tools/gather                      228 B         102 kB
+├ ƒ /api/trending                          228 B         102 kB
+├ ƒ /api/triggers                          228 B         102 kB
+├ ƒ /api/volume-bot                        228 B         102 kB
+├ ƒ /api/volume-bot/execute                228 B         102 kB
+├ ƒ /api/volume-bot/fund                   228 B         102 kB
+├ ƒ /api/volume-bot/transactions           228 B         102 kB
+├ ƒ /api/volume-bot/wallets                228 B         102 kB
+├ ○ /bundler                               200 B         272 kB
+├ ○ /dashboard                             202 B         310 kB
+├ ○ /demo                                14.5 kB         236 kB
+├ ○ /devnet-test                         12.8 kB         245 kB
+├ ○ /pipeline                            5.26 kB         124 kB
+├ ○ /portfolio                           5.65 kB         126 kB
+├ ○ /solana-bundler                        283 B         272 kB
+├ ○ /tests                               17.1 kB         244 kB
+├ ○ /token-launcher                      14.6 kB         232 kB
+└ ○ /wallet-tools                        1.03 kB         255 kB
++ First Load JS shared by all             102 kB
+  ├ chunks/1764-6bbe5aea71e37557.js      45.5 kB
+  ├ chunks/f3c9b4f9-7fca81ce88e196b1.js  54.2 kB
+  └ other shared chunks (total)          2.16 kB
+
+
+ƒ Middleware                             34.4 kB
+
+○  (Static)   prerendered as static content
+ƒ  (Dynamic)  server-rendered on demand
