@@ -966,36 +966,57 @@ export async function fundWallets(
   funder: Keypair,
   wallets: BundlerWallet[],
   amounts: number[] // SOL per wallet
-): Promise<string> {
-  const instructions: TransactionInstruction[] = []
+): Promise<string[]> {
+  const signatures: string[] = []
 
-  wallets.forEach((wallet, i) => {
-    const amount = amounts[i] || amounts[0] || 0.01
-    if (amount > 0) {
-      instructions.push(
-        SystemProgram.transfer({
-          fromPubkey: funder.publicKey,
-          toPubkey: new PublicKey(wallet.publicKey),
-          lamports: Math.floor(amount * LAMPORTS_PER_SOL),
-        })
-      )
+  // Chunk wallets to avoid transaction size limits
+  // Max ~20 transfers per tx to be safe with MTU
+  const CHUNK_SIZE = 15
+  const chunks = chunkArray(wallets, CHUNK_SIZE)
+  const amountChunks = chunkArray(amounts, CHUNK_SIZE)
+
+  for (let i = 0; i < chunks.length; i++) {
+    const walletChunk = chunks[i]
+    const amountChunk = amountChunks[i] || []
+    const instructions: TransactionInstruction[] = []
+
+    walletChunk.forEach((wallet, idx) => {
+      // If specific amount for this wallet exists in chunk use it, otherwise use global default from first chunk
+      const amount = amountChunk[idx] ?? amounts[0] ?? 0.01
+      if (amount > 0) {
+        instructions.push(
+          SystemProgram.transfer({
+            fromPubkey: funder.publicKey,
+            toPubkey: new PublicKey(wallet.publicKey),
+            lamports: Math.floor(amount * LAMPORTS_PER_SOL),
+          })
+        )
+      }
+    })
+
+    if (instructions.length === 0) continue
+
+    try {
+      const transaction = new Transaction()
+      transaction.add(...instructions)
+
+      const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash()
+      transaction.recentBlockhash = blockhash
+      transaction.lastValidBlockHeight = lastValidBlockHeight
+      transaction.feePayer = funder.publicKey
+
+      transaction.sign(funder)
+
+      const signature = await connection.sendRawTransaction(transaction.serialize())
+      await connection.confirmTransaction(signature, "confirmed")
+      signatures.push(signature)
+    } catch (error) {
+      console.error(`Fund chunk ${i} failed:`, error)
+      throw error // Re-throw to alert user, partial success will be handled by caller if needed
     }
-  })
+  }
 
-  const transaction = new Transaction()
-  transaction.add(...instructions)
-
-  const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash()
-  transaction.recentBlockhash = blockhash
-  transaction.lastValidBlockHeight = lastValidBlockHeight
-  transaction.feePayer = funder.publicKey
-
-  transaction.sign(funder)
-
-  const signature = await connection.sendRawTransaction(transaction.serialize())
-  await connection.confirmTransaction(signature, "confirmed")
-
-  return signature
+  return signatures
 }
 
 /**

@@ -182,8 +182,8 @@ export async function POST(request: NextRequest) {
 
       try {
         const funder = Keypair.fromSecretKey(bs58.decode(funderSecretKey))
-        const signature = await fundWallets(funder, wallets as BundlerWallet[], amounts)
-        return NextResponse.json({ signature })
+        const signatures = await fundWallets(funder, wallets as BundlerWallet[], amounts)
+        return NextResponse.json({ signatures })
       } catch (error: any) {
         return NextResponse.json({ error: error.message }, { status: 400 })
       }
