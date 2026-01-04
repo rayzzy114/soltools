@@ -422,7 +422,7 @@ export default function DashboardPage() {
   // Update wallet role helper
   const updateWalletRole = useCallback(async (publicKey: string, role: string) => {
     try {
-      await fetch("/api/bundler/wallets", {
+      const res = await fetch("/api/bundler/wallets", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -431,10 +431,30 @@ export default function DashboardPage() {
           role,
         }),
       })
-      // Optimistically update local state
-      setBundlerWallets(prev => prev.map(w => w.publicKey === publicKey ? { ...w, role } : w))
+
+      const data = await res.json().catch(() => null)
+      if (!res.ok || data?.error) {
+        const message = data?.error || `failed to update wallet role (status ${res.status})`
+        console.error("Failed to update wallet role:", message)
+        toast.error(message)
+        return null
+      }
+
+      const updatedWallet = data?.wallet as BundlerWallet | undefined
+      setBundlerWallets((prev) => {
+        if (updatedWallet) {
+          const exists = prev.some((w) => w.publicKey === updatedWallet.publicKey)
+          return exists
+            ? prev.map((w) => (w.publicKey === updatedWallet.publicKey ? { ...w, role: updatedWallet.role } : w))
+            : [...prev, updatedWallet]
+        }
+        return prev.map((w) => (w.publicKey === publicKey ? { ...w, role } : w))
+      })
+      return data
     } catch (error) {
       console.error("Failed to update wallet role:", error)
+      toast.error("Failed to update wallet role")
+      return null
     }
   }, [])
 
@@ -2936,6 +2956,12 @@ export default function DashboardPage() {
                         className="h-5 px-2 text-[9px] border-blue-500/50 text-blue-400 hover:bg-blue-500/10"
                         onClick={() => {
                             if (connectedWalletKey) {
+                                const isRegistered = bundlerWallets.some((wallet) => wallet.publicKey === connectedWalletKey)
+                                if (!isRegistered) {
+                                  toast.error("Connected wallet not imported yet. Import it before selection.")
+                                  console.warn("Attempted to use unregistered connected wallet", connectedWalletKey)
+                                  return
+                                }
                                 if (launchDevWallet) updateWalletRole(launchDevWallet, 'project')
                                 updateWalletRole(connectedWalletKey, 'dev')
                                 setLaunchDevWallet(connectedWalletKey)
