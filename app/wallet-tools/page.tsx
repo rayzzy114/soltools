@@ -169,27 +169,28 @@ export default function WalletToolsPage() {
         return
       }
       if (data.wallets && Array.isArray(data.wallets)) {
-        // Optimistic update
-        setBundlerWallets(data.wallets)
+        let walletsToUse = data.wallets
 
-        // Refresh in background
-        if (data.wallets.length > 0) {
-          fetch("/api/bundler/wallets", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              action: "refresh",
-              wallets: data.wallets,
-            }),
-          })
-          .then(res => res.json())
-          .then(refreshData => {
-            if (refreshData.wallets && Array.isArray(refreshData.wallets)) {
-              setBundlerWallets(refreshData.wallets)
+        if (walletsToUse.length > 0) {
+          try {
+            const refreshRes = await fetch("/api/bundler/wallets", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                action: "refresh",
+                wallets: walletsToUse,
+              }),
+            })
+            const refreshData = await refreshRes.json()
+            if (refreshRes.ok && refreshData.wallets && Array.isArray(refreshData.wallets)) {
+              walletsToUse = refreshData.wallets
             }
-          })
-          .catch(err => console.error("background wallet refresh failed", err))
+          } catch (err) {
+            console.error("wallet refresh failed", err)
+          }
         }
+
+        setBundlerWallets(walletsToUse)
       }
     } catch (error: any) {
       console.error("failed to load saved wallets:", error)
