@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useRef, useMemo } from "react"
+import { useState, useEffect, useRef, useMemo, useCallback } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -15,6 +15,7 @@ import bs58 from "bs58"
 import { validateTokenParams, validateBuyAmount } from "@/lib/utils/token-validation"
 import { clampPercent as clampPercentUtil, parseSafe } from "@/lib/ui-utils"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
+import Image from "next/image"
 import {
   Rocket,
   Coins,
@@ -663,9 +664,9 @@ export default function TokenLauncherPage() {
     }
   }
 
-  const fetchRugpullStatus = async () => {
+  const fetchRugpullStatus = useCallback(async () => {
     if (!publicKey || !selectedToken) return
-    
+
     try {
       const res = await fetch(
         `/api/tokens/rugpull?mintAddress=${selectedToken.mintAddress}&userWallet=${publicKey.toBase58()}`
@@ -675,13 +676,13 @@ export default function TokenLauncherPage() {
     } catch (error) {
       console.error("error fetching rugpull status:", error)
     }
-  }
+  }, [publicKey, selectedToken])
 
   useEffect(() => {
     if (selectedToken && publicKey) {
       fetchRugpullStatus()
     }
-  }, [selectedToken, publicKey])
+  }, [fetchRugpullStatus, selectedToken, publicKey])
 
   const handleRugpull = async () => {
     if (!publicKey || !signTransaction || !selectedToken) {
@@ -960,7 +961,13 @@ export default function TokenLauncherPage() {
               >
                 {imagePreview ? (
                   <div className="flex items-center justify-center gap-4">
-                    <img src={imagePreview} alt="preview" className="w-16 h-16 rounded-lg object-cover" />
+                    <Image
+                      src={imagePreview}
+                      alt="preview"
+                      width={64}
+                      height={64}
+                      className="h-16 w-16 rounded-lg object-cover"
+                    />
                     <span className="text-muted-foreground text-sm">Click to change image</span>
                   </div>
                 ) : (

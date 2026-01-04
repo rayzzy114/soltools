@@ -1,6 +1,7 @@
 "use client"
 
 import { useState, useEffect, useCallback, useMemo, useRef, memo } from "react"
+import Image from "next/image"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -489,7 +490,7 @@ export default function DashboardPage() {
       console.error("failed to load saved wallets:", error)
       toast.error(`failed to load wallets: ${error.message || "unknown error"}`)
     }
-  }, [])
+  }, [buyAmountPerWallet])
 
   // Add system log
   const getLogStorageKey = useCallback((mint: string) => `system_logs_${mint}`, [])
@@ -536,7 +537,7 @@ export default function DashboardPage() {
         }),
       }).catch(() => {})
     }
-  }, [volumeBotConfig.pairId, selectedToken?.mintAddress, logMintAddress, saveLogToLocalStorage])
+  }, [volumeBotConfig.pairId, volumeBotConfig.mintAddress, selectedToken?.mintAddress, logMintAddress, saveLogToLocalStorage])
 
   const loadSystemLogs = useCallback(async () => {
     const mintForLogs =
@@ -2188,9 +2189,16 @@ export default function DashboardPage() {
                       <div className="space-y-2">
                         <div className="text-[10px] text-slate-400 uppercase tracking-wider">Main</div>
                         <div className="flex items-start gap-2">
-                          <div className="h-16 w-16 shrink-0 rounded border border-neutral-700 bg-neutral-800 overflow-hidden flex items-center justify-center">
+                          <div className="relative h-16 w-16 shrink-0 rounded border border-neutral-700 bg-neutral-800 overflow-hidden flex items-center justify-center">
                             {selectedToken?.imageUrl ? (
-                              <img src={selectedToken.imageUrl} alt="Token" className="h-full w-full object-cover" />
+                              <Image
+                                src={selectedToken.imageUrl}
+                                alt="Token"
+                                fill
+                                sizes="64px"
+                                className="object-cover"
+                                priority
+                              />
                             ) : (
                               <div className="text-[9px] text-neutral-400">No image</div>
                             )}
@@ -2854,9 +2862,15 @@ export default function DashboardPage() {
                 </div>
                 <div className="rounded border border-neutral-800 bg-neutral-950/40 p-2">
                   <div className="flex items-center gap-2">
-                    <div className="h-10 w-10 overflow-hidden rounded bg-neutral-800">
+                    <div className="relative h-10 w-10 overflow-hidden rounded bg-neutral-800">
                       {tokenImagePreview ? (
-                        <img src={tokenImagePreview} alt="token preview" className="h-full w-full object-cover" />
+                        <Image
+                          src={tokenImagePreview}
+                          alt="token preview"
+                          fill
+                          sizes="40px"
+                          className="object-cover"
+                        />
                       ) : (
                         <div className="flex h-full w-full items-center justify-center text-[9px] text-neutral-500">
                           No image
