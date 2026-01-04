@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
+import { Checkbox } from "@/components/ui/checkbox"
 import { Wallet, Zap, Package, Plus, Trash2, RefreshCw, ArrowDownToLine, Download, Copy, Key } from "lucide-react"
 import { toast } from "sonner"
 import { useWallet } from "@solana/wallet-adapter-react"
@@ -75,6 +76,7 @@ export default function WalletToolsPage() {
   const [logMintAddress, setLogMintAddress] = useState("")
   const [volumeBotConfig] = useState({ pairId: "", mintAddress: "" })
   const [refreshingWallets, setRefreshingWallets] = useState<Set<string>>(new Set())
+  const [selectedWallets, setSelectedWallets] = useState<Set<string>>(new Set())
 
   const activeWallets = useMemo(() => bundlerWallets.filter(w => w.isActive), [bundlerWallets])
   const selectedTokenValue = selectedToken?.mintAddress || ""
@@ -387,14 +389,34 @@ export default function WalletToolsPage() {
     }
   }, [walletCount])
 
-  const clearWallets = useCallback(async () => {
-    if (bundlerWallets.length === 0) {
-      toast.error("no wallets to clear")
+  const handleSelectAll = useCallback((checked: boolean) => {
+    if (checked) {
+      setSelectedWallets(new Set(bundlerWallets.map(w => w.publicKey)))
+    } else {
+      setSelectedWallets(new Set())
+    }
+  }, [bundlerWallets])
+
+  const toggleWalletSelection = useCallback((publicKey: string) => {
+    setSelectedWallets(prev => {
+      const next = new Set(prev)
+      if (next.has(publicKey)) {
+        next.delete(publicKey)
+      } else {
+        next.add(publicKey)
+      }
+      return next
+    })
+  }, [])
+
+  const deleteSelectedWallets = useCallback(async () => {
+    if (selectedWallets.size === 0) {
+      toast.error("No wallets selected")
       return
     }
     setClearingWallets(true)
     try {
-      const publicKeys = bundlerWallets.map(w => w.publicKey)
+      const publicKeys = Array.from(selectedWallets)
       const res = await fetch("/api/bundler/wallets", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -406,17 +428,18 @@ export default function WalletToolsPage() {
         throw new Error(data?.error || "failed to batch delete wallets")
       }
 
-      setBundlerWallets([])
+      setBundlerWallets(prev => prev.filter(w => !selectedWallets.has(w.publicKey)))
+      setSelectedWallets(new Set()) // Clear selection
       await loadSavedWallets({ silent: true })
-      toast.success(`cleared ${data.count || publicKeys.length} wallets`)
+      toast.success(`Deleted ${data.count || publicKeys.length} wallets`)
     } catch (error: any) {
-      console.error("clear wallets error:", error)
-      toast.error(error?.message || "failed to clear wallets")
+      console.error("delete wallets error:", error)
+      toast.error(error?.message || "failed to delete wallets")
       await loadSavedWallets()
     } finally {
       setClearingWallets(false)
     }
-  }, [bundlerWallets, loadSavedWallets])
+  }, [selectedWallets, loadSavedWallets])
 
   const handleRefreshWallet = useCallback(async (wallet: BundlerWallet) => {
     setRefreshingWallets(prev => {
@@ -1012,17 +1035,26 @@ export default function WalletToolsPage() {
                     <TooltipContent>Export Wallets (CSV)</TooltipContent>
                   </Tooltip>
                </TooltipProvider>
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={clearWallets}
-                disabled={clearingWallets}
-                className="h-6 px-2 border-neutral-700 disabled:opacity-50"
-                aria-label="Clear all wallets"
-                title="Clear all wallets"
-              >
-                <Trash2 className="w-3 h-3" />
-              </Button>
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={deleteSelectedWallets}
+                      disabled={clearingWallets}
+                      className="h-6 px-2 border-neutral-700 disabled:opacity-50 hover:bg-red-900/20 hover:text-red-400"
+                      aria-label="Delete selected wallets"
+                      title="Delete selected wallets"
+                    >
+                      <Trash2 className="w-3 h-3" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    Delete selected wallets
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
               <TooltipProvider>
                 <Tooltip>
                   <TooltipTrigger asChild>
@@ -1075,8 +1107,16 @@ export default function WalletToolsPage() {
           <div className="text-[10px] text-slate-400">Active: {activeWallets.length}</div>
         </CardHeader>
         <CardContent className="px-2 pb-2">
-          <div className="flex items-center justify-between mb-2 pb-1 border-b border-slate-800">
+          <div className="flex items-center gap-2 mb-2 pb-1 border-b border-slate-800">
+             <Checkbox
+                checked={bundlerWallets.length > 0 && selectedWallets.size === bundlerWallets.length}
+                onCheckedChange={(checked) => handleSelectAll(!!checked)}
+                className="border-neutral-600"
+             />
              <div className="text-[10px] text-slate-400">Total Wallets: {bundlerWallets.length}</div>
+             {selectedWallets.size > 0 && (
+                <div className="text-[10px] text-slate-400 ml-auto">Selected: {selectedWallets.size}</div>
+             )}
           </div>
           <div className="space-y-1 max-h-64 overflow-y-auto">
             {bundlerWallets.length === 0 ? (
@@ -1090,7 +1130,12 @@ export default function WalletToolsPage() {
                   }`}
                 >
                   <div className="flex items-center gap-2 min-w-0">
-                        <div className="text-[10px] text-neutral-700 w-5 text-center font-bold">#{index + 1}</div>
+                    <Checkbox
+                        checked={selectedWallets.has(wallet.publicKey)}
+                        onCheckedChange={() => toggleWalletSelection(wallet.publicKey)}
+                        className="border-neutral-600"
+                    />
+                    <div className="text-[10px] text-neutral-700 w-5 text-center font-bold">#{index + 1}</div>
                     <div className="min-w-0">
                       <div className="flex items-center gap-2">
                           <div className="text-neutral-900 font-mono truncate font-bold">
