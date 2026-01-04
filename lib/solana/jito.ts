@@ -54,6 +54,13 @@ function isUuid(value: string | undefined): boolean {
   return JITO_UUID_REGEX.test(value.trim())
 }
 
+/**
+ * Append a `uuid` query parameter to a URL if it is not already present.
+ *
+ * @param url - The URL string to modify; if it is not a valid URL the original string is returned unchanged
+ * @param uuid - The UUID value to add as the `uuid` query parameter
+ * @returns The URL string with the `uuid` parameter added when it was absent, or the original `url` unchanged otherwise
+ */
 function withUuidParam(url: string, uuid: string): string {
   try {
     const u = new URL(url)
@@ -66,6 +73,20 @@ function withUuidParam(url: string, uuid: string): string {
   }
 }
 
+/**
+ * Estimate a suggested tip in SOL based on recent on-chain prioritization fees.
+ *
+ * Calculates a tip by sampling the 75th percentile of recent prioritization fees,
+ * scaling by the provided compute units and multiplier, and clamping the result
+ * between `floorLamports` and `ceilingLamports`. On error, falls back to `floorLamports`.
+ *
+ * @param connection - Solana connection used to fetch recent prioritization fees
+ * @param computeUnits - Expected compute units for the transaction (used to scale fee)
+ * @param multiplier - Multiplier applied to the estimated fee to provide headroom
+ * @param floorLamports - Minimum tip in lamports to return if estimation fails or is too low
+ * @param ceilingLamports - Upper bound in lamports for the estimated tip
+ * @returns The suggested tip expressed in SOL
+ */
 export async function estimateDynamicJitoTip(
   connection: Connection,
   computeUnits: number = 800_000,

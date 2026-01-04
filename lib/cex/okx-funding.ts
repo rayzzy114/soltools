@@ -23,6 +23,12 @@ const DEFAULT_MIN_AMOUNT = 0.3
 const DEFAULT_MAX_AMOUNT = 0.5
 const DEFAULT_FEE = 0.01
 
+/**
+ * Create an OKX exchange client configured with the provided credentials or environment variables.
+ *
+ * @param creds - Optional credentials. If a field is omitted, the corresponding environment variable (`OKX_API_KEY`, `OKX_API_SECRET`, `OKX_PASSWORD`) will be used.
+ * @returns An `okx` client instance configured with the resolved API key, secret, and password
+ */
 export function createOkxClient(creds: OkxCredentials = {}): okx {
   const { apiKey, secret, password } = creds
   const client = new ccxt.okx({
@@ -34,6 +40,17 @@ export function createOkxClient(creds: OkxCredentials = {}): okx {
   return client as okx
 }
 
+/**
+ * Add SOL withdrawal addresses to the account's whitelist on OKX.
+ *
+ * Calls the OKX private whitelist API for each address in `addresses` on the specified `chain`.
+ * The password used for the operation is taken from `password` if provided, otherwise from
+ * `client.password`, and finally from the `OKX_PASSWORD` environment variable.
+ *
+ * @param addresses - Array of SOL addresses to whitelist
+ * @param chain - Destination chain identifier used by OKX for the whitelist entry
+ * @param password - Optional account password to authorize the whitelist operation
+ */
 export async function whitelistWithdrawalAddresses(
   client: okx,
   addresses: string[],
@@ -51,11 +68,28 @@ export async function whitelistWithdrawalAddresses(
   }
 }
 
+/**
+ * Produce a pseudorandom number greater than or equal to `min` and less than `max`.
+ *
+ * @param min - The lower bound (inclusive)
+ * @param max - The upper bound (exclusive)
+ * @returns `min` if `max` is less than or equal to `min`, otherwise a pseudorandom number `x` such that `min <= x < max`
+ */
 function randomInRange(min: number, max: number): number {
   if (max <= min) return min
   return Math.random() * (max - min) + min
 }
 
+/**
+ * Sends randomized SOL withdrawals to a list of destination addresses with configurable chain, fee, and inter-withdrawal delays.
+ *
+ * @param wallets - Array of destination SOL addresses to withdraw to.
+ * @param options - Configuration for the withdrawals:
+ *   - chain: destination chain identifier (default "4")
+ *   - minAmount / maxAmount: lower and upper bounds for the randomized withdrawal amount (defaults 0.3 / 0.5)
+ *   - fee: withdrawal fee in SOL units (default 0.01)
+ *   - minDelayMs / maxDelayMs: minimum and maximum delay in milliseconds between successive withdrawals (defaults 30000 / 300000)
+ */
 export async function withdrawToSnipers(
   client: okx,
   wallets: string[],
