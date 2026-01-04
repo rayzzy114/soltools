@@ -1,4 +1,5 @@
 import {
+  Connection,
   Keypair,
   PublicKey,
   Transaction,
@@ -53,6 +54,13 @@ function isUuid(value: string | undefined): boolean {
   return JITO_UUID_REGEX.test(value.trim())
 }
 
+/**
+ * Append a `uuid` query parameter to a URL if it is not already present.
+ *
+ * @param url - The URL string to modify; if it is not a valid URL the original string is returned unchanged
+ * @param uuid - The UUID value to add as the `uuid` query parameter
+ * @returns The URL string with the `uuid` parameter added when it was absent, or the original `url` unchanged otherwise
+ */
 function withUuidParam(url: string, uuid: string): string {
   try {
     const u = new URL(url)
@@ -65,8 +73,54 @@ function withUuidParam(url: string, uuid: string): string {
   }
 }
 
+/**
+ * Estimate a suggested tip in SOL based on recent on-chain prioritization fees.
+ *
+ * Calculates a tip by sampling the 75th percentile of recent prioritization fees,
+ * scaling by the provided compute units and multiplier, and clamping the result
+ * between `floorLamports` and `ceilingLamports`. On error, falls back to `floorLamports`.
+ *
+ * @param connection - Solana connection used to fetch recent prioritization fees
+ * @param computeUnits - Expected compute units for the transaction (used to scale fee)
+ * @param multiplier - Multiplier applied to the estimated fee to provide headroom
+ * @param floorLamports - Minimum tip in lamports to return if estimation fails or is too low
+ * @param ceilingLamports - Upper bound in lamports for the estimated tip
+ * @returns The suggested tip expressed in SOL
+ */
+export async function estimateDynamicJitoTip(
+  connection: Connection,
+  computeUnits: number = 800_000,
+  {
+    multiplier = 1.25,
+    floorLamports = MIN_JITO_TIP_LAMPORTS,
+    ceilingLamports = 10_000_000, // 0.01 SOL safety upper bound
+  }: {
+    multiplier?: number
+    floorLamports?: number
+    ceilingLamports?: number
+  } = {}
+): Promise<number> {
+  try {
+    const fees = await connection.getRecentPrioritizationFees()
+    const sorted = fees
+      .map((f) => f.prioritizationFee)
+      .filter((v) => Number.isFinite(v) && v > 0)
+      .sort((a, b) => a - b)
+    const pickIndex = Math.min(sorted.length - 1, Math.floor(sorted.length * 0.75))
+    const p75 = sorted[pickIndex] ?? 0
+    const lamports = Math.min(
+      ceilingLamports,
+      Math.max(floorLamports, Math.floor(p75 * computeUnits * multiplier))
+    )
+    return lamports / LAMPORTS_PER_SOL
+  } catch (error) {
+    console.warn("[jito] failed to estimate dynamic tip, falling back", error)
+    return floorLamports / LAMPORTS_PER_SOL
+  }
+}
+
 // default config
-const MIN_JITO_TIP_LAMPORTS = 1000 // minimum tip per jito docs
+export const MIN_JITO_TIP_LAMPORTS = 1000 // minimum tip per jito docs
 const DEFAULT_JITO_TIP = 0.0001 // SOL (~0.1 cents)
 const DEFAULT_REGION: JitoRegion = "frankfurt"
 

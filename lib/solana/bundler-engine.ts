@@ -4,6 +4,9 @@ import {
   PublicKey,
   Transaction,
   VersionedTransaction,
+  AddressLookupTableProgram,
+  AddressLookupTableAccount,
+  TransactionMessage,
   TransactionInstruction,
   SystemProgram,
   LAMPORTS_PER_SOL,
@@ -29,6 +32,7 @@ import {
   calculateBundlerRugpullProfit,
   isPumpFunAvailable,
   calculateBuyAmount,
+  PUMPFUN_BUY_FEE_BPS,
   calculateSellAmount,
   getBondingCurveData,
 } from "./pumpfun-sdk"
@@ -38,21 +42,60 @@ import {
   createPumpFunCreateInstruction as createCreateTokenInstruction,
 } from "./pumpfun"
 import { buildSellPlan } from "./sell-plan"
-import { sendBundle, createTipInstruction, JitoRegion, JITO_ENDPOINTS } from "./jito"
+import {
+  sendBundle,
+  createTipInstruction,
+  JitoRegion,
+  JITO_ENDPOINTS,
+  estimateDynamicJitoTip,
+  MIN_JITO_TIP_LAMPORTS,
+} from "./jito"
 import bs58 from "bs58"
 import {
   STAGGER_RETRY_ATTEMPTS,
   STAGGER_RETRY_BASE_MS,
   STAGGER_RETRY_JITTER_MS,
 } from "@/lib/config/limits"
+import { prisma } from "@/lib/prisma"
+import {
+  createOkxClient,
+  whitelistWithdrawalAddresses,
+  withdrawToSnipers,
+} from "@/lib/cex/okx-funding"
 
 // max transactions per Jito bundle (hard limit)
-export const MAX_BUNDLE_WALLETS = 5
+export const MAX_BUNDLE_WALLETS = 30
+export const MEMO_PROGRAM_ID = new PublicKey("MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr")
 
 export const resolveLaunchBuyAmount = (index: number, devBuyAmount: number, buyAmounts: number[]) => {
   if (index === 0) return devBuyAmount
   const fallback = buyAmounts[0] ?? 0.01
   return buyAmounts[index] ?? fallback
+}
+
+const DEFAULT_RANDOM_RANGE: [number, number] = [0.8342, 1.5621]
+
+/**
+ * Produce a per-wallet buy amount optionally randomized within a configured range.
+ *
+ * @param index - Zero-based wallet index; the first wallet (index 0) is not randomized.
+ * @param baseAmount - The fallback/base buy amount used when randomization is disabled or for index 0.
+ * @param randomizer - Optional randomization settings. `enabled` toggles randomization; `min` and `max` override the lower/upper bounds.
+ * @returns The buy amount to use: `baseAmount` when randomization is disabled or `index` is 0, otherwise a number within the configured bounds rounded to 6 decimal places.
+ */
+function getRandomizedBuyAmount(
+  index: number,
+  baseAmount: number,
+  randomizer?: { enabled?: boolean; min?: number; max?: number }
+): number {
+  if (!randomizer?.enabled || index === 0) return baseAmount
+  const min = randomizer.min ?? Math.min(baseAmount * 0.8, DEFAULT_RANDOM_RANGE[0])
+  const max = randomizer.max ?? Math.max(baseAmount * 1.25, DEFAULT_RANDOM_RANGE[1])
+  const low = Math.max(0.0001, Math.min(min, max))
+  const high = Math.max(low, max)
+  const span = high - low
+  const jitter = Math.random() * span
+  return Number((low + jitter).toFixed(6))
 }
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -69,7 +112,62 @@ const RPC_REFRESH_CONCURRENCY = 2
 const RPC_RETRY_ATTEMPTS = 4
 const RPC_RETRY_BASE_MS = 500
 const RPC_RETRY_JITTER_MS = 400
+const LUT_CACHE: Record<string, PublicKey> = {}
 
+const LUT_REGISTRY: Record<string, AddressLookupTableAccount> = {}
+
+/**
+ * Retrieves the cached Address Lookup Table (LUT) address for an authority, checking the in-memory LUT cache first and falling back to the database.
+ *
+ * If an address is found in the database, it is parsed as a `PublicKey` and stored in the in-memory `LUT_CACHE`.
+ *
+ * @param authorityKey - The authority's public key string used to look up the LUT.
+ * @returns The LUT address as a `PublicKey` if found, `null` otherwise.
+ */
+async function fetchCachedLutAddress(authorityKey: string): Promise<PublicKey | null> {
+  if (LUT_CACHE[authorityKey]) return LUT_CACHE[authorityKey]
+  try {
+    const record = await prisma.lookupTableCache.findUnique({ where: { authorityPublicKey: authorityKey } })
+    if (record?.lutAddress) {
+      const address = new PublicKey(record.lutAddress)
+      LUT_CACHE[authorityKey] = address
+      return address
+    }
+  } catch (error) {
+    console.warn("[bundler] failed to read LUT cache from db", error)
+  }
+  return null
+}
+
+/**
+ * Persist an address for an authority's Address Lookup Table (LUT) to in-memory cache and the database.
+ *
+ * @param authorityKey - The authority's public key (base58 string) used as the cache key.
+ * @param address - The LUT account address to persist.
+ */
+async function persistLutAddress(authorityKey: string, address: PublicKey) {
+  LUT_CACHE[authorityKey] = address
+  try {
+    await prisma.lookupTableCache.upsert({
+      where: { authorityPublicKey: authorityKey },
+      update: { lutAddress: address.toBase58(), updatedAt: new Date() },
+      create: { authorityPublicKey: authorityKey, lutAddress: address.toBase58() },
+    })
+  } catch (error) {
+    console.warn("[bundler] failed to persist LUT cache", error)
+  }
+}
+
+/**
+ * Converts a decimal string representation of a token amount into a scaled bigint using the given number of decimals.
+ *
+ * The `value` may include commas, a leading minus sign, and a fractional part; the fractional portion is truncated
+ * or padded with zeros to match `decimals`. Empty or non-numeric input yields `0`.
+ *
+ * @param value - Decimal string (e.g., "1,234.567") possibly with a leading "-" for negatives
+ * @param decimals - Number of fractional decimals to scale the value by (result = value * 10^decimals)
+ * @returns The integer amount scaled by 10^`decimals` as a `bigint` (`-` sign preserved for negative inputs)
+ */
 function decimalToBigInt(value: string, decimals: number): bigint {
   const cleaned = value.trim().replace(/,/g, "")
   if (!cleaned) return BigInt(0)
@@ -95,6 +193,12 @@ function toRawTokenAmount(value: number | string, decimals: number = TOKEN_DECIM
   const raw = decimalToBigInt(value, decimals)
   return raw < BigInt(0) ? BigInt(0) : raw
 }
+/**
+ * Determine the serialized size in bytes of a Solana Transaction or VersionedTransaction.
+ *
+ * @param tx - The transaction to measure (supports both legacy `Transaction` and `VersionedTransaction`).
+ * @returns The size of the serialized transaction in bytes.
+ */
 function getTxSize(tx: Transaction | VersionedTransaction): number {
   if (tx instanceof VersionedTransaction) {
     return tx.serialize().length
@@ -102,6 +206,49 @@ function getTxSize(tx: Transaction | VersionedTransaction): number {
   return tx.serialize({ requireAllSignatures: true, verifySignatures: false }).length
 }
 
+/**
+ * Convert a total lamport budget into micro-lamports per compute unit.
+ *
+ * @param totalLamports - Total lamports available for a transaction group
+ * @param computeUnits - Total compute units to divide the budget across
+ * @returns The integer micro-lamports (lamports * 1,000,000) allocated per compute unit, rounded down; returns `0` if `computeUnits` is `0` or negative
+ */
+function toMicroLamportsPerCu(totalLamports: number, computeUnits: number): number {
+  return computeUnits > 0 ? Math.floor((totalLamports * 1_000_000) / computeUnits) : 0
+}
+
+/**
+ * Resolve the Jito tip amount in SOL, ensuring it is not less than the configured floor.
+ *
+ * @param baseTip - Optional base tip in SOL to use when dynamic estimation is not requested
+ * @param dynamic - If `true`, compute a dynamic tip based on `computeUnits`; otherwise use `baseTip` or the floor
+ * @param computeUnits - The compute unit budget used when computing a dynamic tip
+ * @returns The resolved tip amount in SOL, never less than the floor minimum
+ */
+async function resolveJitoTip({
+  baseTip,
+  dynamic,
+  computeUnits,
+}: {
+  baseTip?: number
+  dynamic?: boolean
+  computeUnits: number
+}): Promise<number> {
+  const floorSol = MIN_JITO_TIP_LAMPORTS / LAMPORTS_PER_SOL
+  if (dynamic) {
+    const est = await estimateDynamicJitoTip(connection, computeUnits)
+    return Math.max(est, floorSol)
+  }
+  return Math.max(baseTip ?? floorSol, floorSol)
+}
+
+/**
+ * Validates that each transaction's serialized size does not exceed the configured MTU.
+ *
+ * @param transactions - Array of Transaction or VersionedTransaction objects to check
+ * @param label - Label used in the returned error message to identify the transaction group
+ * @returns An error message identifying the first transaction that exceeds the MTU, or `null` if all transactions are within the MTU
+ */
 function validateBundleMtu(
   transactions: (Transaction | VersionedTransaction)[],
   label: string
@@ -115,6 +262,13 @@ function validateBundleMtu(
   return null
 }
 
+/**
+ * Split an array into consecutive chunks of a given maximum size.
+ *
+ * @param items - The array to split
+ * @param size - Maximum number of elements per chunk; if `size` is less than or equal to 0 the original array is returned as a single chunk
+ * @returns An array of chunks where each chunk contains up to `size` elements
+ */
 function chunkArray<T>(items: T[], size: number): T[][] {
   if (size <= 0) return [items]
   const chunks: T[][] = []
@@ -124,6 +278,35 @@ function chunkArray<T>(items: T[], size: number): T[][] {
   return chunks
 }
 
+/**
+ * Partitions a list of wallets into chunks and assigns a Jito region to each chunk in round-robin order.
+ *
+ * @param wallets - Array of wallet items to partition
+ * @param regions - Candidate Jito regions; falsy values are ignored
+ * @param chunkSize - Desired number of wallets per chunk; values less than 1 are treated as 1
+ * @param fallbackRegion - Region to assign when `regions` is empty or a mapped region is unavailable
+ * @returns An object with `chunks` (array of wallet chunks) and `regions` (parallel array of assigned Jito regions)
+ */
+function planGhostBundles<T>(
+  wallets: T[],
+  regions: JitoRegion[],
+  chunkSize: number,
+  fallbackRegion: JitoRegion
+): { chunks: T[][]; regions: JitoRegion[] } {
+  const sanitizedRegions = regions.filter(Boolean)
+  const chunks = chunkArray(wallets, Math.max(1, chunkSize))
+  const mappedRegions = chunks.map((_, idx) => sanitizedRegions[idx % sanitizedRegions.length] || fallbackRegion)
+  return { chunks, regions: mappedRegions }
+}
+
+/**
+ * Runs an asynchronous worker over a list of items with a maximum number of concurrent executions, preserving the order of results.
+ *
+ * @param items - The array of input items to process
+ * @param limit - Maximum number of workers to run concurrently
+ * @param worker - Async function applied to each item; receives the item and its index
+ * @returns An array of worker results corresponding to each input item, in the original order
+ */
 async function mapWithLimit<T, R>(
   items: T[],
   limit: number,
@@ -147,6 +330,16 @@ function isRateLimitedError(error: any): boolean {
   return message.includes("429") || message.includes("rate limit") || message.includes("too many requests")
 }
 
+/**
+ * Execute an RPC operation with automatic retries when the call is rate-limited.
+ *
+ * Retries the provided operation up to RPC_RETRY_ATTEMPTS when errors are classified
+ * as rate-limited, using exponential backoff with random jitter between attempts.
+ *
+ * @param fn - A function that performs the RPC call and returns a promise for its result
+ * @returns The resolved value from `fn`
+ * @throws The last encountered error if a non-rate-limited error occurs or all retry attempts are exhausted
+ */
 async function rpcWithRetry<T>(fn: () => Promise<T>): Promise<T> {
   let lastError: any
   for (let attempt = 0; attempt < RPC_RETRY_ATTEMPTS; attempt++) {
@@ -163,6 +356,159 @@ async function rpcWithRetry<T>(fn: () => Promise<T>): Promise<T> {
   throw lastError
 }
 
+/**
+ * Creates a synthetic Address Lookup Table object and registers it in the in-memory LUT registry.
+ *
+ * Constructs an AddressLookupTableAccount populated with the provided addresses and authority, returning its address and lookup table instance.
+ *
+ * @param authority - Keypair whose public key will be set as the LUT authority
+ * @param addresses - Array of PublicKey entries to populate the lookup table
+ * @param cachedAddress - Optional PublicKey to use as the LUT address; a new random address is generated if omitted
+ * @returns An object containing `address` (the LUT's PublicKey) and `lookupTable` (the constructed AddressLookupTableAccount)
+ */
+function createSyntheticLookupTable(
+  authority: Keypair,
+  addresses: PublicKey[],
+  cachedAddress?: PublicKey
+): { address: PublicKey; lookupTable: AddressLookupTableAccount } {
+  const lutAddress = cachedAddress ?? Keypair.generate().publicKey
+  const lookupTable = new AddressLookupTableAccount({
+    key: lutAddress,
+    state: {
+      deactivationSlot: BigInt(0),
+      lastExtendedSlot: 0,
+      lastExtendedSlotStartIndex: 0,
+      authority: authority.publicKey,
+      addresses,
+    },
+  })
+  LUT_REGISTRY[lutAddress.toBase58()] = lookupTable
+  return { address: lutAddress, lookupTable }
+}
+
+/**
+ * Create or retrieve an Address Lookup Table (LUT) for the given authority populated with the provided addresses.
+ *
+ * Deduplicates `addresses` (up to `options.maxAddresses`), reuses a cached LUT when available and allowed, extends an existing LUT with any missing addresses, and persists the resulting LUT address for future reuse. In test mode (`TEST_BANKRUN=true`) a synthetic LUT may be created and returned.
+ *
+ * @param authority - Keypair used as the LUT authority and payer for on-chain LUT operations
+ * @param addresses - Array of PublicKeys to include in the LUT; duplicate entries are removed
+ * @param options - Optional configuration:
+ *   - maxAddresses: maximum unique addresses to include (default: 30)
+ *   - reuseExisting: whether to attempt to reuse/extend a cached LUT (default: true)
+ * @returns An object containing `address` (the LUT PublicKey) and `lookupTable` (the AddressLookupTableAccount)
+ * @throws If the LUT account cannot be fetched after creation
+ */
+export async function getOrCreateLUT(
+  authority: Keypair,
+  addresses: PublicKey[],
+  options: { maxAddresses?: number; reuseExisting?: boolean } = {}
+): Promise<{ address: PublicKey; lookupTable: AddressLookupTableAccount }> {
+  const { maxAddresses = 30, reuseExisting = true } = options
+  const authorityKey = authority.publicKey.toBase58()
+  const uniqueAddresses = Array.from(new Map(addresses.map((a) => [a.toBase58(), a])).values()).slice(
+    0,
+    maxAddresses
+  )
+
+  if (process.env.TEST_BANKRUN === "true") {
+    const cachedAddress = await fetchCachedLutAddress(authorityKey)
+    const synthetic = createSyntheticLookupTable(authority, uniqueAddresses, cachedAddress ?? undefined)
+    await persistLutAddress(authorityKey, synthetic.address)
+    return synthetic
+  }
+
+  if (reuseExisting) {
+    const cachedAddress = await fetchCachedLutAddress(authorityKey)
+    if (cachedAddress) {
+      const existing = await connection.getAddressLookupTable(cachedAddress)
+      if (existing.value) {
+        const missing = uniqueAddresses.filter(
+          (addr) => !existing.value?.state?.addresses?.some((a) => a.equals(addr))
+        )
+        if (missing.length) {
+          const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash()
+          const extendIx = AddressLookupTableProgram.extendLookupTable({
+            authority: authority.publicKey,
+            payer: authority.publicKey,
+            lookupTable: cachedAddress,
+            addresses: missing,
+          })
+          const extendMsg = new TransactionMessage({
+            payerKey: authority.publicKey,
+            recentBlockhash: blockhash,
+            instructions: [extendIx],
+          }).compileToV0Message()
+          const extendTx = new VersionedTransaction(extendMsg)
+          extendTx.sign([authority])
+          const sig = await connection.sendTransaction(extendTx)
+          await connection.confirmTransaction({ signature: sig, blockhash, lastValidBlockHeight })
+        }
+        await persistLutAddress(authorityKey, cachedAddress)
+        return { address: cachedAddress, lookupTable: existing.value }
+      }
+    }
+  }
+
+  const recentSlot = await rpcWithRetry(() => connection.getSlot())
+  const [createIx, lookupTableAddress] = AddressLookupTableProgram.createLookupTable({
+    authority: authority.publicKey,
+    payer: authority.publicKey,
+    recentSlot,
+  })
+
+  const { blockhash: createBlockhash, lastValidBlockHeight: createLvh } = await connection.getLatestBlockhash()
+  const createMsg = new TransactionMessage({
+    payerKey: authority.publicKey,
+    recentBlockhash: createBlockhash,
+    instructions: [createIx],
+  }).compileToV0Message()
+  const createTx = new VersionedTransaction(createMsg)
+  createTx.sign([authority])
+  const createSig = await connection.sendTransaction(createTx)
+  await connection.confirmTransaction({ signature: createSig, blockhash: createBlockhash, lastValidBlockHeight: createLvh })
+
+  const minSlot = recentSlot + 1
+  while ((await connection.getSlot()) <= minSlot) {
+    await sleep(400)
+  }
+
+  const extendChunks = chunkArray(uniqueAddresses, maxAddresses)
+  for (const chunk of extendChunks) {
+    if (!chunk.length) continue
+    const extendIx = AddressLookupTableProgram.extendLookupTable({
+      authority: authority.publicKey,
+      payer: authority.publicKey,
+      lookupTable: lookupTableAddress,
+      addresses: chunk,
+    })
+    const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash()
+    const extendMsg = new TransactionMessage({
+      payerKey: authority.publicKey,
+      recentBlockhash: blockhash,
+      instructions: [extendIx],
+    }).compileToV0Message()
+    const extendTx = new VersionedTransaction(extendMsg)
+    extendTx.sign([authority])
+    const sig = await connection.sendTransaction(extendTx)
+    await connection.confirmTransaction({ signature: sig, blockhash, lastValidBlockHeight })
+  }
+
+  const lutAccount = await connection.getAddressLookupTable(lookupTableAddress)
+  if (!lutAccount.value) {
+    throw new Error("failed to fetch LUT after creation")
+  }
+
+  await persistLutAddress(authorityKey, lookupTableAddress)
+  return { address: lookupTableAddress, lookupTable: lutAccount.value }
+}
+
+/**
+ * Extracts the first signature from a Transaction or VersionedTransaction and encodes it in base58.
+ *
+ * @param tx - The Transaction or VersionedTransaction to read the first signature from.
+ * @returns The base58-encoded first signature if present, otherwise a base58-encoded 64-byte zeroed string.
+ */
 function extractTxSignature(tx: Transaction | VersionedTransaction): string {
   if (tx instanceof VersionedTransaction) {
     const sig = tx.signatures?.[0]
@@ -172,6 +518,15 @@ function extractTxSignature(tx: Transaction | VersionedTransaction): string {
   return bs58.encode(sig || new Uint8Array(64))
 }
 
+/**
+ * Polls the RPC for statuses of the provided signatures until all are resolved or the timeout elapses.
+ *
+ * Polls the cluster for each signature's status and reports whether each signature is `"confirmed"`, `"failed"`, or still `"pending"` when the timeout is reached.
+ *
+ * @param signatures - Array of base58-encoded transaction signatures to check
+ * @param timeoutMs - Maximum time in milliseconds to poll before returning pending statuses
+ * @returns An array of objects mapping each `signature` to its `status` (`"confirmed" | "failed" | "pending"`) and an optional `err` when `status` is `"failed"`
+ */
 async function confirmSignaturesOnRpc(
   signatures: string[],
   timeoutMs: number = 60_000
@@ -198,8 +553,21 @@ async function confirmSignaturesOnRpc(
   return signatures.map((s) => ({ signature: s, ...(statusBySig.get(s) || { status: "pending" }) }))
 }
 
+/**
+ * Sends a group of transactions as a Jito bundle after validating sizes, simulating, signing (if a tip is added), and confirming final execution.
+ *
+ * Performs MTU validation for each transaction, simulates each transaction and aborts on simulation errors, submits the bundle to Jito, and waits for RPC confirmation of all signatures.
+ *
+ * @param transactions - Array of transactions to include in the bundle (legacy Transaction or VersionedTransaction).
+ * @param txSigners - Parallel array of signer keypairs for each transaction; used to sign a transaction when a tip instruction is appended.
+ * @param label - Human-readable label used in validation and error messages.
+ * @param jitoRegion - Target Jito region or `"auto"` to let the sender decide.
+ * @param jitoTip - Tip in lamports to attach to the last legacy transaction in the group; ignored for versioned transactions.
+ * @returns An object containing the Jito-assigned `bundleId` and an array of transaction signatures (base58-encoded).
+ * @throws If any transaction exceeds MTU limits, if any simulation reports an error, if bundle submission ultimately fails, or if not all transactions are confirmed within the confirmation timeout.
+ */
 async function sendBundleGroup(
-  transactions: Transaction[],
+  transactions: (Transaction | VersionedTransaction)[],
   txSigners: Keypair[][],
   label: string,
   jitoRegion: JitoRegion | "auto",
@@ -208,12 +576,16 @@ async function sendBundleGroup(
   if (jitoTip > 0 && transactions.length > 0) {
     const lastIdx = transactions.length - 1
     const lastTx = transactions[lastIdx]
-    const lastSigner = txSigners[lastIdx]?.[0]
-    if (lastSigner) {
-      lastTx.add(createTipInstruction(lastSigner.publicKey, jitoTip))
-      lastTx.sign(...txSigners[lastIdx])
+    if (lastTx instanceof Transaction) {
+      const lastSigner = txSigners[lastIdx]?.[0]
+      if (lastSigner) {
+        lastTx.add(createTipInstruction(lastSigner.publicKey, jitoTip))
+        lastTx.sign(...txSigners[lastIdx])
+      } else {
+        console.warn("[bundler] missing signer for last tx (tip not added)")
+      }
     } else {
-      console.warn("[bundler] missing signer for last tx (tip not added)")
+      console.warn("[bundler] tip must be embedded in versioned transactions; skipping auto-tip")
     }
   }
 
@@ -245,6 +617,17 @@ async function sendBundleGroup(
   return { bundleId: result.bundleId, signatures }
 }
 
+/**
+ * Retrieve the initial bonding-curve parameters from pump.fun global state.
+ *
+ * @returns An object containing initial reserve and supply values:
+ * - `virtualTokenReserves`: virtual token reserves as a `bigint`
+ * - `virtualSolReserves`: virtual SOL reserves as a `bigint`
+ * - `realTokenReserves`: real token reserves as a `bigint`
+ * - `realSolReserves`: real SOL reserves as a `bigint` (zeroed here)
+ * - `tokenTotalSupply`: total token supply as a `bigint`
+ * or `null` if the global state is not available.
+ */
 async function getInitialCurve(): Promise<{
   virtualTokenReserves: bigint
   virtualSolReserves: bigint
@@ -263,8 +646,54 @@ async function getInitialCurve(): Promise<{
   }
 }
 
+/**
+ * Applies a buy operation to the bonding curve and returns the updated reserves.
+ *
+ * Updates both virtual and real SOL/token reserves to reflect a purchase of `tokensOut` for
+ * `solAmountLamports`. A protocol buy fee (determined by `PUMPFUN_BUY_FEE_BPS`) is taken from
+ * `solAmountLamports` before updating SOL reserves; the net SOL after fee is added to SOL reserves.
+ *
+ * @param bondingCurve - Current bonding curve reserves (all values in raw units: lamports for SOL, smallest token units for token reserves)
+ * @param solAmountLamports - The total SOL offered for the buy, expressed in lamports
+ * @param tokensOut - The amount of tokens to remove from virtual reserves and credit to real reserves (in token base units)
+ * @returns The new bonding curve reserves object with updated `virtualTokenReserves`, `virtualSolReserves`, `realTokenReserves`, and `realSolReserves`
+ */
+function applyBuyToCurve(
+  bondingCurve: {
+    virtualTokenReserves: bigint
+    virtualSolReserves: bigint
+    realTokenReserves: bigint
+    realSolReserves: bigint
+  },
+  solAmountLamports: bigint,
+  tokensOut: bigint
+): {
+  virtualTokenReserves: bigint
+  virtualSolReserves: bigint
+  realTokenReserves: bigint
+  realSolReserves: bigint
+} {
+  const feeLamports = (solAmountLamports * BigInt(PUMPFUN_BUY_FEE_BPS)) / 10000n
+  const solAfterFee = solAmountLamports - feeLamports
+  return {
+    virtualTokenReserves: bondingCurve.virtualTokenReserves - tokensOut,
+    virtualSolReserves: bondingCurve.virtualSolReserves + solAfterFee,
+    realTokenReserves: bondingCurve.realTokenReserves + tokensOut,
+    realSolReserves: bondingCurve.realSolReserves + solAfterFee,
+  }
+}
+
+/**
+ * Attempts to send a Jito bundle for the provided transactions, retrying across configured regions on failure.
+ *
+ * @param transactions - Transactions to include in the bundle.
+ * @param region - Preferred Jito region or `"auto"` to cycle through configured endpoints.
+ * @param attempts - Maximum number of send attempts before failing; regions will be cycled if available.
+ * @returns The sent bundle's id as `bundleId`.
+ * @throws Error if the bundle could not be sent after the configured number of attempts; the error message contains the last observed failure reason.
+ */
 async function sendBundleWithRetry(
-  transactions: Transaction[],
+  transactions: (Transaction | VersionedTransaction)[],
   region: JitoRegion | "auto",
   attempts: number = 2
 ): Promise<{ bundleId: string }> {
@@ -321,15 +750,37 @@ export interface BundleConfig {
   // buy/sell amounts
   buyAmounts?: number[] // SOL per wallet
   sellPercentages?: number[] // % per wallet (100 = sell all)
+  buyRandomizer?: { enabled?: boolean; min?: number; max?: number; noiseMemos?: boolean }
   // timing
   staggerDelay?: { min: number; max: number }
   // fees
   jitoTip?: number
+  dynamicJitoTip?: boolean
   priorityFee?: number
   slippage?: number
   // jito
   // "auto" will try all regions with retries
   jitoRegion?: JitoRegion | "auto"
+  // stealth launch options
+  ghostMode?: boolean
+  ghostChunkSize?: number
+  ghostRegions?: JitoRegion[]
+  // off-chain funding
+  cexFunding?: {
+    enabled: boolean
+    whitelist?: boolean
+    minAmount?: number
+    maxAmount?: number
+    fee?: number
+    minDelayMs?: number
+    maxDelayMs?: number
+  }
+  // exit
+  smartExit?: boolean
+  exitChunkSize?: number
+  exitDelayMs?: { min: number; max: number }
+  exitPriorityFee?: number
+  exitJitoRegion?: JitoRegion | "auto"
 }
 
 // bundle result
@@ -583,7 +1034,14 @@ export async function collectSol(
 }
 
 /**
- * add priority fee and compute budget instructions
+ * Prepends compute budget and priority-fee instructions to an existing instruction list.
+ *
+ * This adds a compute unit price (derived from `priorityFee`) and a compute unit limit before the supplied instructions.
+ *
+ * @param instructions - The instruction array to augment; the returned array will start with the added compute-budget instructions followed by these.
+ * @param priorityFee - Total SOL to allocate as priority fee for the transaction (used to compute micro-lamports per compute unit).
+ * @param computeUnits - The compute unit limit to set for the transaction.
+ * @returns A new array of `TransactionInstruction` containing the compute budget price and limit instructions followed by the original `instructions`.
  */
 function addPriorityFeeInstructions(
   instructions: TransactionInstruction[],
@@ -603,7 +1061,42 @@ function addPriorityFeeInstructions(
 }
 
 /**
- * create launch bundle - create token + bundled buys
+ * Create a memo instruction and an optional Jito tip instruction for a transaction.
+ *
+ * @param payer - Public key that will fund the tip instruction when `jitoTip` is greater than zero
+ * @param message - UTF-8 memo text to embed in the transaction
+ * @param jitoTip - Tip amount in lamports; when greater than zero a Jito tip instruction is appended
+ * @param jitoRegion - Jito region to target for the tip; `"auto"` resolves to `"frankfurt"` by default
+ * @returns An array with a Memo instruction containing `message` and, if `jitoTip` > 0, a Jito tip instruction targeting `jitoRegion`
+ */
+export function buildCommentInstructions(
+  payer: PublicKey,
+  message: string,
+  jitoTip: number,
+  jitoRegion: JitoRegion | "auto" = "frankfurt"
+): TransactionInstruction[] {
+  const region = jitoRegion === "auto" ? ("frankfurt" as JitoRegion) : jitoRegion
+  const memoIx = new TransactionInstruction({
+    keys: [],
+    programId: MEMO_PROGRAM_ID,
+    data: Buffer.from(message, "utf8"),
+  })
+
+  const instructions: TransactionInstruction[] = [memoIx]
+  if (jitoTip > 0) {
+    instructions.push(createTipInstruction(payer, jitoTip, region))
+  }
+
+  return instructions
+}
+
+/**
+ * Creates a new token mint and executes bundled buy transactions for the provided wallets according to the bundle configuration.
+ *
+ * The function orchestrates mint creation, associated token account setup, and grouped buy transactions (sent via Jito bundles when configured). It honors options on randomized per-wallet buy amounts, ghost/region chunking, priority fees, dynamic Jito tips, and optional off‑chain funding. If prerequisites are missing (for example, pump.fun unavailable or token metadata absent) the returned result will indicate failure and include an error message.
+ *
+ * @param config - Bundle configuration describing wallets, token metadata, buy amounts and behavior (must include active wallets and `tokenMetadata`)
+ * @returns A BundleResult describing the outcome. On success `success` is true and `mintAddress`, `bundleId`/`bundleIds`, and `signatures` are populated; on failure `success` is false and `error` contains a human-readable message.
  */
 export async function createLaunchBundle(config: BundleConfig): Promise<BundleResult> {
   if (!isPumpFunAvailable()) {
@@ -620,6 +1113,7 @@ export async function createLaunchBundle(config: BundleConfig): Promise<BundleRe
     tokenMetadata,
     devBuyAmount = 0.1,
     buyAmounts = [],
+    buyRandomizer = { enabled: true },
     jitoTip = 0.0001,
     priorityFee = 0.0001,
     slippage = 20,
@@ -646,195 +1140,195 @@ export async function createLaunchBundle(config: BundleConfig): Promise<BundleRe
   }
 
   try {
-    // generate mint keypair
     const mintKeypair = Keypair.generate()
     const mint = mintKeypair.publicKey
 
-    // dev wallet (first wallet)
     const devWallet = activeWallets[0]
     const devKeypair = getKeypair(devWallet)
-
-    const bundleIds: string[] = []
-    const bundleSignatures: string[][] = []
-    const signatures: string[] = []
     const safeSlippage = Math.min(Math.max(Math.floor(slippage), 0), 99)
-    // NOTE: Do not use LUT with Jito bundles.
-    // transaction 1: create token + dev buy (+ tip)
-    const createTx = new Transaction()
-
-    // create token instruction
-    const createIx = createCreateTokenInstruction(
-      devKeypair.publicKey,
-      mintKeypair.publicKey,
-      {
-        name: tokenMetadata.name,
-        symbol: tokenMetadata.symbol,
-        description: tokenMetadata.description,
-        imageUrl: tokenMetadata.imageUrl || tokenMetadata.metadataUri,
-        website: tokenMetadata.website,
-        twitter: tokenMetadata.twitter,
-        telegram: tokenMetadata.telegram,
-      }
-    )
+    const computeUnits = 800_000
+    const resolvedTip = await resolveJitoTip({
+      baseTip: jitoTip,
+      dynamic: config.dynamicJitoTip,
+      computeUnits,
+    })
 
     const initialCurve = await getInitialCurve()
     if (!initialCurve) {
       throw new Error("pump.fun global state unavailable")
     }
-    // dev buy instruction (amount in tokens, cap in lamports)
-    const devSolAmountLamports = BigInt(Math.floor(devBuyAmount * LAMPORTS_PER_SOL))
-    const { tokensOut: devTokensOut } = calculateBuyAmount(
-      {
-        ...initialCurve,
-        complete: false,
-        creator: devKeypair.publicKey,
-      },
-      devBuyAmount,
-    )
-    const devMinTokensOut = (devTokensOut * BigInt(100 - safeSlippage)) / BigInt(100)
-    const devBuyIx = await createBuyInstruction(
-      devKeypair.publicKey,
-      mint,
-      devMinTokensOut,
-      devSolAmountLamports,
-      devKeypair.publicKey,
-    )
 
-    // dev ATA (idempotent)
-    const devAta = await getAssociatedTokenAddress(mint, devKeypair.publicKey, false)
-    const devAtaIx = createAssociatedTokenAccountIdempotentInstruction(
-      devKeypair.publicKey,
-      devAta,
-      devKeypair.publicKey,
-      mint
-    )
-
-    const createInstructions = addPriorityFeeInstructions(
-      [createIx, devAtaIx, devBuyIx],
-      priorityFee
-    )
-
-    const { blockhash: createBh } = await connection.getLatestBlockhash()
-    createTx.add(...createInstructions)
-    createTx.recentBlockhash = createBh
-    createTx.feePayer = devKeypair.publicKey
-    createTx.sign(devKeypair, mintKeypair)
-
-    const firstBundleTxs: Transaction[] = [createTx]
-    const firstBundleSigners: Keypair[][] = [[devKeypair, mintKeypair]]
-    const firstBundleCount = Math.min(activeWallets.length, MAX_BUNDLE_WALLETS)
-
-    for (let i = 1; i < firstBundleCount; i++) {
-      const wallet = activeWallets[i]
-      const keypair = getKeypair(wallet)
-      const buyAmount = resolveLaunchBuyAmount(i, devBuyAmount, buyAmounts as number[])
-
-      const ata = await getAssociatedTokenAddress(mint, keypair.publicKey, false)
-      const ataIx = createAssociatedTokenAccountIdempotentInstruction(
-        keypair.publicKey,
-        ata,
-        keypair.publicKey,
-        mint
-      )
-
-      const { tokensOut } = calculateBuyAmount(
-        {
-          ...initialCurve,
-          complete: false,
-          creator: devKeypair.publicKey,
-        },
-        buyAmount,
-      )
-      const minTokensOut = (tokensOut * BigInt(100 - safeSlippage)) / BigInt(100)
-      const solAmountLamports = BigInt(Math.floor(buyAmount * LAMPORTS_PER_SOL))
-      const buyIx = await createBuyInstruction(
-        keypair.publicKey,
-        mint,
-        minTokensOut,
-        solAmountLamports,
-        devKeypair.publicKey
-      )
-
-      const buyInstructions = addPriorityFeeInstructions([ataIx, buyIx], priorityFee)
-      const { blockhash } = await connection.getLatestBlockhash()
-      const buyTx = new Transaction()
-      buyTx.add(...buyInstructions)
-      buyTx.recentBlockhash = blockhash
-      buyTx.feePayer = keypair.publicKey
-      buyTx.sign(keypair)
-      firstBundleTxs.push(buyTx)
-      firstBundleSigners.push([keypair])
+    if (config.cexFunding?.enabled) {
+      const okxClient = createOkxClient()
+      const sniperAddresses = activeWallets.map((w) => w.publicKey)
+      if (config.cexFunding.whitelist) {
+        await whitelistWithdrawalAddresses(okxClient, sniperAddresses)
+      }
+      await withdrawToSnipers(okxClient, sniperAddresses, {
+        minAmount: config.cexFunding.minAmount,
+        maxAmount: config.cexFunding.maxAmount,
+        fee: config.cexFunding.fee,
+        minDelayMs: config.cexFunding.minDelayMs,
+        maxDelayMs: config.cexFunding.maxDelayMs,
+      })
     }
 
-    const firstResult = await sendBundleGroup(
-      firstBundleTxs,
-      firstBundleSigners,
-      "launch",
-      jitoRegion as any,
-      jitoTip
-    )
-    bundleIds.push(firstResult.bundleId)
-    bundleSignatures.push(firstResult.signatures)
-    signatures.push(...firstResult.signatures)
+    const ghostMode = Boolean((config as any).ghostMode)
+    const ghostChunkSize = ghostMode ? Math.max(1, (config as any).ghostChunkSize ?? 5) : activeWallets.length
+    const ghostRegions = ghostMode
+      ? ((config as any).ghostRegions as JitoRegion[] | undefined)
+      : undefined
+    const fallbackRegion: JitoRegion =
+      (jitoRegion as JitoRegion) && jitoRegion !== "auto" ? (jitoRegion as JitoRegion) : "frankfurt"
+    const defaultRegions: JitoRegion[] = ["ny", "frankfurt", "tokyo", "amsterdam"].filter(
+      (r) => r in JITO_ENDPOINTS
+    ) as JitoRegion[]
+    const regionPool = ghostRegions?.filter((r): r is JitoRegion => Boolean(r)) ?? defaultRegions
+    const ghostPlan = ghostMode
+      ? planGhostBundles(activeWallets, regionPool, ghostChunkSize, fallbackRegion)
+      : { chunks: [activeWallets], regions: [fallbackRegion] }
 
-    const remainingWallets = activeWallets.slice(firstBundleCount)
-    if (remainingWallets.length > 0) {
-      const chunks = chunkArray(remainingWallets, MAX_BUNDLE_WALLETS)
-      for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex++) {
-        const chunk = chunks[chunkIndex]
-        const bondingCurve = await getBondingCurveData(mint)
-        if (!bondingCurve) {
-          throw new Error("token not found on pump.fun")
-        }
-        const bundleTxs: Transaction[] = []
-        const bundleSigners: Keypair[][] = []
-        for (let i = 0; i < chunk.length; i++) {
-          const wallet = chunk[i]
-          const keypair = getKeypair(wallet)
-          const globalIndex = firstBundleCount + chunkIndex * MAX_BUNDLE_WALLETS + i
-          const buyAmount = resolveLaunchBuyAmount(globalIndex, devBuyAmount, buyAmounts as number[])
+    let curveState = {
+      ...initialCurve,
+      complete: false,
+      creator: devKeypair.publicKey,
+    }
 
-          const ata = await getAssociatedTokenAddress(mint, keypair.publicKey, false)
-          const ataIx = createAssociatedTokenAccountIdempotentInstruction(
+    const { blockhash } = await connection.getLatestBlockhash()
+
+    const bundleIds: string[] = []
+    const bundleSignatures: string[][] = []
+    const signatures: string[] = []
+
+    for (let chunkIndex = 0; chunkIndex < ghostPlan.chunks.length; chunkIndex++) {
+      const walletsChunk = ghostPlan.chunks[chunkIndex]
+      const lutAddresses = walletsChunk.map((w) => new PublicKey(w.publicKey))
+      const { lookupTable } = await getOrCreateLUT(devKeypair, lutAddresses, {
+        maxAddresses: MAX_BUNDLE_WALLETS,
+        reuseExisting: !ghostMode,
+      })
+
+      const instructions: TransactionInstruction[] = []
+      const totalLamports = Math.max(0, priorityFee) * LAMPORTS_PER_SOL
+      instructions.push(
+        ComputeBudgetProgram.setComputeUnitLimit({ units: computeUnits }),
+        ComputeBudgetProgram.setComputeUnitPrice({
+          microLamports: Math.max(0, toMicroLamportsPerCu(totalLamports, computeUnits)),
+        })
+      )
+
+      if (chunkIndex === 0) {
+        instructions.push(
+          createCreateTokenInstruction(devKeypair.publicKey, mintKeypair.publicKey, {
+            name: tokenMetadata.name,
+            symbol: tokenMetadata.symbol,
+            description: tokenMetadata.description,
+            imageUrl: tokenMetadata.imageUrl || tokenMetadata.metadataUri,
+            website: tokenMetadata.website,
+            twitter: tokenMetadata.twitter,
+            telegram: tokenMetadata.telegram,
+          })
+        )
+
+        const devAta = await getAssociatedTokenAddress(mint, devKeypair.publicKey, false)
+        instructions.push(
+          createAssociatedTokenAccountIdempotentInstruction(
+            devKeypair.publicKey,
+            devAta,
+            devKeypair.publicKey,
+            mint
+          )
+        )
+      }
+
+      for (let i = 0; i < walletsChunk.length; i++) {
+        const wallet = walletsChunk[i]
+        const globalIndex = chunkIndex * ghostChunkSize + i
+        const keypair = getKeypair(wallet)
+        const baseBuyAmount = resolveLaunchBuyAmount(globalIndex, devBuyAmount, buyAmounts as number[])
+        const buyAmount = getRandomizedBuyAmount(globalIndex, baseBuyAmount, buyRandomizer)
+        const solAmountLamports = BigInt(Math.floor(buyAmount * LAMPORTS_PER_SOL))
+        const { tokensOut } = calculateBuyAmount(curveState as any, buyAmount)
+        const minTokensOut = (tokensOut * BigInt(100 - safeSlippage)) / BigInt(100)
+
+        const ata = await getAssociatedTokenAddress(mint, keypair.publicKey, false)
+        instructions.push(
+          createAssociatedTokenAccountIdempotentInstruction(
             keypair.publicKey,
             ata,
             keypair.publicKey,
             mint
           )
-
-          const { tokensOut } = calculateBuyAmount(bondingCurve, buyAmount)
-          const minTokensOut = (tokensOut * BigInt(100 - safeSlippage)) / BigInt(100)
-          const solAmountLamports = BigInt(Math.floor(buyAmount * LAMPORTS_PER_SOL))
-          const buyIx = await createBuyInstruction(
-            keypair.publicKey,
-            mint,
-            minTokensOut,
-            solAmountLamports,
-            bondingCurve.creator
-          )
-
-          const buyInstructions = addPriorityFeeInstructions([ataIx, buyIx], priorityFee)
-          const { blockhash } = await connection.getLatestBlockhash()
-          const buyTx = new Transaction()
-          buyTx.add(...buyInstructions)
-          buyTx.recentBlockhash = blockhash
-          buyTx.feePayer = keypair.publicKey
-          buyTx.sign(keypair)
-          bundleTxs.push(buyTx)
-          bundleSigners.push([keypair])
-        }
-
-        const bundleResult = await sendBundleGroup(
-          bundleTxs,
-          bundleSigners,
-          "launch-followup",
-          jitoRegion as any,
-          jitoTip
         )
-        bundleIds.push(bundleResult.bundleId)
-        bundleSignatures.push(bundleResult.signatures)
-        signatures.push(...bundleResult.signatures)
+        if (buyRandomizer.noiseMemos !== false) {
+          instructions.push(
+            new TransactionInstruction({
+              keys: [],
+              programId: MEMO_PROGRAM_ID,
+              data: Buffer.from(`noise-${globalIndex}-${Math.random().toString(16).slice(2, 8)}`),
+            })
+          )
+        }
+        instructions.push(
+          await createBuyInstruction(keypair.publicKey, mint, minTokensOut, solAmountLamports)
+        )
+
+        curveState = {
+          ...(curveState as any),
+          ...applyBuyToCurve(curveState, solAmountLamports, tokensOut),
+        }
       }
+
+      const message = new TransactionMessage({
+        payerKey: devKeypair.publicKey,
+        recentBlockhash: blockhash,
+        instructions,
+      }).compileToV0Message([lookupTable])
+
+      const signerMap = new Map<string, Keypair>()
+      signerMap.set(devKeypair.publicKey.toBase58(), devKeypair)
+      for (const wallet of walletsChunk) {
+        const keypair = getKeypair(wallet)
+        signerMap.set(keypair.publicKey.toBase58(), keypair)
+      }
+      if (chunkIndex === 0) {
+        signerMap.set(mintKeypair.publicKey.toBase58(), mintKeypair)
+      }
+
+      const massTx = new VersionedTransaction(message)
+      massTx.sign(Array.from(signerMap.values()))
+
+      const txList: VersionedTransaction[] = [massTx]
+      if (chunkIndex === 0) {
+        const commentInstructions = buildCommentInstructions(
+          devKeypair.publicKey,
+          `Bullish! ${mint.toBase58()}`,
+          resolvedTip,
+          ghostPlan.regions[chunkIndex] as any
+        )
+        const commentMessage = new TransactionMessage({
+          payerKey: devKeypair.publicKey,
+          recentBlockhash: blockhash,
+          instructions: commentInstructions,
+        }).compileToV0Message()
+        const commentTx = new VersionedTransaction(commentMessage)
+        commentTx.sign([devKeypair])
+        txList.push(commentTx)
+      }
+
+      for (const tx of txList) {
+        const sim = await connection.simulateTransaction(tx)
+        if (sim?.value?.err) {
+          throw new Error(`simulation failed (launch v0): ${JSON.stringify(sim.value.err)}`)
+        }
+      }
+
+      const region = ghostPlan.regions[chunkIndex] || fallbackRegion
+      const bundleResult = await sendBundleWithRetry(txList, region as any)
+      const txSignatures = txList.map(extractTxSignature)
+      bundleIds.push(bundleResult.bundleId)
+      bundleSignatures.push(txSignatures)
+      signatures.push(...txSignatures)
     }
 
     return {
@@ -856,7 +1350,27 @@ export async function createLaunchBundle(config: BundleConfig): Promise<BundleRe
 }
 
 /**
- * create buy bundle - bundled buys on existing token
+ * Create and send Jito-bundled buy transactions for multiple wallets targeting an existing token mint.
+ *
+ * Builds per-wallet buy transactions (including ATA creation when needed), groups them into bundles
+ * respecting MAX_BUNDLE_WALLETS, signs and sends each bundle via Jito, and collects resulting bundle IDs
+ * and signatures.
+ *
+ * @param config - Bundle configuration containing wallets and mint information. Required fields:
+ *   - `wallets`: array of BundlerWallet objects (only `isActive` wallets are used)
+ *   - `mintAddress`: the target token mint public key (string)
+ *   Optional fields commonly used:
+ *   - `buyAmounts`: per-wallet SOL amounts (fallback to first element or 0.01 SOL)
+ *   - `jitoTip`: base Jito tip in SOL
+ *   - `priorityFee`: compute-priority fee in SOL
+ *   - `slippage`: allowed slippage percentage for min tokens out
+ *   - `jitoRegion`: target Jito region
+ *
+ * @returns A BundleResult describing the operation:
+ *   - `success`: `true` when all bundles were created and sent, `false` on failure
+ *   - `bundleId`/`bundleIds` and `bundleSignatures`: identifiers and signatures for created bundles
+ *   - `signatures`: flattened list of transaction signatures
+ *   - `error`: error message when `success` is `false`
  */
 export async function createBuyBundle(config: BundleConfig): Promise<BundleResult> {
   if (!isPumpFunAvailable()) {
@@ -899,6 +1413,12 @@ export async function createBuyBundle(config: BundleConfig): Promise<BundleResul
 
   try {
     const mint = new PublicKey(mintAddress)
+    const computeUnits = 400_000
+    const resolvedTip = await resolveJitoTip({
+      baseTip: jitoTip,
+      dynamic: config.dynamicJitoTip,
+      computeUnits,
+    })
 
     const bondingCurve = await getBondingCurveData(mint)
     if (!bondingCurve) {
@@ -976,7 +1496,7 @@ export async function createBuyBundle(config: BundleConfig): Promise<BundleResul
         txSigners,
         "buy",
         jitoRegion,
-        jitoTip
+        resolvedTip
       )
       bundleIds.push(result.bundleId)
       bundleSignatures.push(result.signatures)
@@ -1002,7 +1522,9 @@ export async function createBuyBundle(config: BundleConfig): Promise<BundleResul
 
 
 /**
- * create sell bundle - bundled sells
+ * Create and send bundled sell transactions for multiple wallets using pump.fun and Jito.
+ *
+ * @returns A BundleResult containing bundle identifiers and signatures when successful, or failure details in the `error` field when not. 
  */
 export async function createSellBundle(config: BundleConfig): Promise<BundleResult> {
   if (!isPumpFunAvailable()) {
@@ -1045,6 +1567,12 @@ export async function createSellBundle(config: BundleConfig): Promise<BundleResu
 
   try {
     const mint = new PublicKey(mintAddress)
+    const computeUnits = 400_000
+    const resolvedTip = await resolveJitoTip({
+      baseTip: jitoTip,
+      dynamic: config.dynamicJitoTip,
+      computeUnits,
+    })
 
     const bondingCurve = await getBondingCurveData(mint)
     if (!bondingCurve) {
@@ -1107,7 +1635,7 @@ export async function createSellBundle(config: BundleConfig): Promise<BundleResu
         txSigners,
         "sell",
         jitoRegion,
-        jitoTip
+        resolvedTip
       )
       bundleIds.push(result.bundleId)
       bundleSignatures.push(result.signatures)
@@ -1143,8 +1671,20 @@ export async function createSellBundle(config: BundleConfig): Promise<BundleResu
 
 
 /**
- * create staggered buy transactions (not bundled, with delays)
- */
+ * Execute buy transactions sequentially for active wallets, spacing each submission with a randomized delay.
+ *
+ * For each active wallet this function: ensures the associated token account exists (idempotent), computes
+ * the minimum acceptable tokens out using the current bonding curve and the configured slippage, builds
+ * a buy transaction (optionally preceded by compute/prioritization instructions), signs and submits the
+ * raw transaction, and records the resulting signature. Transient RPC errors are retried with backoff a
+ * limited number of times; non-recoverable failures are recorded in the returned `errors` array.
+ *
+ * @param config - Bundle configuration containing wallets, mintAddress, per-wallet buy amounts, staggerDelay,
+ *   priorityFee, slippage, and other bundle-related options used to build each buy transaction.
+ * @param onTransaction - Optional callback invoked after a successful submission with the wallet public key,
+ *   transaction signature, and the wallet index.
+ * @returns An object with `signatures` — an array of submitted transaction signatures (in submission order),
+ *   and `errors` — an array of error messages for wallets that failed to submit.
 export async function createStaggeredBuys(
   config: BundleConfig,
   onTransaction?: (wallet: string, signature: string, index: number) => void
@@ -1243,7 +1783,7 @@ export async function createStaggeredBuys(
 
     // random delay before next transaction
     if (i < activeWallets.length - 1) {
-      const delay = Math.random() * (staggerDelay.max - staggerDelay.min) + staggerDelay.min
+      const delay = Math.random() * (resolvedDelay.max - resolvedDelay.min) + resolvedDelay.min
       await new Promise((resolve) => setTimeout(resolve, delay))
     }
   }
@@ -1252,8 +1792,13 @@ export async function createStaggeredBuys(
 }
 
 /**
- * create staggered sell transactions (not bundled, with delays)
- */
+ * Execute sell transactions sequentially for active wallets, applying per-wallet sell percentages, optional inter-transaction delays, and retry/backoff logic.
+ *
+ * The function processes only wallets that are active and hold a token balance, computes per-wallet sell amounts, enforces slippage and priority-fee settings, optionally includes Jito tips, and submits raw transactions one-by-one. Retries transient/rate-limited failures up to configured attempts and collects per-wallet errors while returning all successful signatures.
+ *
+ * @param config - BundleConfig that specifies wallets, `mintAddress`, sell percentages, delay settings (`staggerDelay` / `exitDelayMs`), priority fee overrides, `slippage`, Jito tip settings (`jitoTip`, `dynamicJitoTip`, `jitoRegion`, `exitJitoRegion`), and related sell options.
+ * @param onTransaction - Optional callback invoked after a successful transaction with the wallet public key (string), the transaction signature, and the wallet index.
+ * @returns An object containing `signatures`: an array of submitted transaction signatures, and `errors`: an array of per-wallet error messages describing failures.
 export async function createStaggeredSells(
   config: BundleConfig,
   onTransaction?: (wallet: string, signature: string, index: number) => void
@@ -1263,8 +1808,14 @@ export async function createStaggeredSells(
     mintAddress,
     sellPercentages = [],
     staggerDelay = { min: 1000, max: 3000 },
+    exitDelayMs,
     priorityFee = 0.0001,
+    exitPriorityFee,
     slippage = 20,
+    jitoTip = 0.0001,
+    dynamicJitoTip = false,
+    jitoRegion = "frankfurt",
+    exitJitoRegion,
   } = config
 
   if (!mintAddress) {
@@ -1274,6 +1825,15 @@ export async function createStaggeredSells(
   const activeWallets = wallets.filter((w) => w.isActive && w.tokenBalance > 0)
   const signatures: string[] = []
   const errors: string[] = []
+  const computeUnits = 400_000
+  const resolvedTip = await resolveJitoTip({
+    baseTip: jitoTip,
+    dynamic: dynamicJitoTip,
+    computeUnits,
+  })
+  const resolvedDelay = exitDelayMs ?? staggerDelay
+  const resolvedPriorityFee = exitPriorityFee ?? priorityFee
+  const resolvedRegion = exitJitoRegion ?? jitoRegion
 
   const mint = new PublicKey(mintAddress)
 
@@ -1316,14 +1876,17 @@ export async function createStaggeredSells(
             mint,
             tokenAmountRaw,
             minSolOut,
-            priorityFee
+            resolvedPriorityFee
           )
         } else {
           const { solOut } = calculateSellAmount(bondingCurve, tokenAmountRaw)
           minSolOut = (solOut * BigInt(100 - slippage)) / BigInt(100)
           sellTx = new Transaction()
           const sellIx = await createSellInstruction(keypair.publicKey, mint, tokenAmountRaw, minSolOut)
-          const instructions = addPriorityFeeInstructions([sellIx], priorityFee)
+          const instructions = addPriorityFeeInstructions([sellIx], resolvedPriorityFee, computeUnits)
+          if (resolvedTip > 0) {
+            instructions.push(createTipInstruction(keypair.publicKey, resolvedTip, resolvedRegion as any))
+          }
           sellTx.add(...instructions)
         }
 
@@ -1368,9 +1931,14 @@ export async function createStaggeredSells(
 }
 
 /**
- * create rugpull bundle - sells ALL tokens from ALL wallets via Jito bundle
- * gets real token balances from RPC and sells 100% from each wallet with tokens
- * NOW INCLUDES: sequential profit calculation with price impact accounting
+ * Creates Jito bundles that sell all token holdings from the active wallets in the provided configuration.
+ *
+ * Attempts to read each wallet's on-chain token balance and constructs sell transactions that liquidate 100% of each token balance.
+ * Supports a "smart exit" mode that delegates to staggered sells, dynamic Jito tip resolution, per-bundle compute budgeting, and
+ * sequential profit estimation including price impact. Returns a summary of bundle IDs, signatures, and estimated profit data when successful.
+ *
+ * @param config - BundleConfig controlling wallets, target mintAddress, tip/fee settings, slippage, smart-exit and stagger options, and other bundling behavior
+ * @returns A BundleResult containing bundle identifiers and signatures, a `success` flag, an optional `error` message, the `mintAddress`, and `estimatedProfit` details when available
  */
 export async function createRugpullBundle(config: BundleConfig): Promise<BundleResult> {
   if (!isPumpFunAvailable()) {
@@ -1423,6 +1991,13 @@ export async function createRugpullBundle(config: BundleConfig): Promise<BundleR
       }
     }
 
+    const computeUnits = 400_000
+    const resolvedTip = await resolveJitoTip({
+      baseTip: jitoTip,
+      dynamic: config.dynamicJitoTip,
+      computeUnits,
+    })
+
     const walletBalances: { wallet: BundlerWallet; tokenAmount: bigint; keypair: any }[] = []
 
     for (const wallet of activeWallets) {
@@ -1457,6 +2032,30 @@ export async function createRugpullBundle(config: BundleConfig): Promise<BundleR
       }
     }
 
+    if (config.smartExit) {
+      const tokenDivisor = Math.pow(10, TOKEN_DECIMALS)
+      const enrichedWallets = walletBalances.map((entry) => ({
+        ...entry.wallet,
+        tokenBalance: Number(entry.tokenAmount) / tokenDivisor,
+      }))
+      const { signatures, errors } = await createStaggeredSells({
+        ...config,
+        wallets: enrichedWallets,
+        mintAddress,
+        staggerDelay: config.exitDelayMs ?? config.staggerDelay,
+        exitPriorityFee: config.exitPriorityFee ?? priorityFee,
+        exitJitoRegion: config.exitJitoRegion ?? jitoRegion,
+      })
+
+      return {
+        bundleId: "",
+        success: errors.length === 0,
+        signatures,
+        error: errors.length ? errors.join("; ") : undefined,
+        mintAddress,
+      }
+    }
+
     const profitData = await calculateBundlerRugpullProfit(
       mint,
       walletBalances.map(w => ({
@@ -1467,7 +2066,7 @@ export async function createRugpullBundle(config: BundleConfig): Promise<BundleR
 
     const bundleCount = Math.ceil(walletBalances.length / MAX_BUNDLE_WALLETS)
     const estimatedGasFee = BigInt(Math.floor(priorityFee * LAMPORTS_PER_SOL * walletBalances.length))
-    const estimatedJitoTip = BigInt(Math.floor(jitoTip * LAMPORTS_PER_SOL * bundleCount))
+    const estimatedJitoTip = BigInt(Math.floor(resolvedTip * LAMPORTS_PER_SOL * bundleCount))
     const netEstimatedProfit = profitData.totalEstimatedSol - estimatedGasFee - estimatedJitoTip
 
     const bundleIds: string[] = []
@@ -1512,7 +2111,7 @@ export async function createRugpullBundle(config: BundleConfig): Promise<BundleR
         txSigners,
         "rugpull",
         jitoRegion as any,
-        jitoTip
+        resolvedTip
       )
       bundleIds.push(result.bundleId)
       bundleSignatures.push(result.signatures)
@@ -1556,7 +2155,17 @@ export async function createRugpullBundle(config: BundleConfig): Promise<BundleR
 
 
 /**
- * estimate bundle costs
+ * Estimate total SOL required and per-wallet allocations for a bundle.
+ *
+ * @param walletCount - Number of wallets in the bundle; used to scale fee estimates.
+ * @param buyAmounts - Per-wallet buy amounts in SOL; when an entry is falsy the first element of this array is used as a fallback.
+ * @param jitoTip - Jito tip in SOL to include in the estimate.
+ * @param priorityFee - Per-wallet priority fee in SOL to include in the estimate.
+ * @returns An object containing:
+ *  - `totalSol`: Total SOL required for the bundle (sum of per-wallet allocations, fees, and `jitoTip`).
+ *  - `perWallet`: Array of SOL allocations per wallet (buy amount plus estimated ATA/rent and fees).
+ *  - `jitoTip`: The `jitoTip` value included in the estimate.
+ *  - `fees`: Estimated aggregated fees (includes per-wallet fee components and the `jitoTip` contribution used in the calculation).
  */
 export function estimateBundleCost(
   walletCount: number,
@@ -1584,4 +2193,16 @@ export function estimateBundleCost(
     jitoTip,
     fees,
   }
+}
+
+export const __testing = {
+  fetchCachedLutAddress,
+  persistLutAddress,
+  resetLutCache: () => {
+    Object.keys(LUT_CACHE).forEach((key) => delete LUT_CACHE[key])
+    Object.keys(LUT_REGISTRY).forEach((key) => delete LUT_REGISTRY[key])
+  },
+  buildCommentInstructions,
+  planGhostBundles,
+  getRandomizedBuyAmount,
 }

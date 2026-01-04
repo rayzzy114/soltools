@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "postinstall": "node -e \"console.log('skip prisma generate on install; run pnpm db:generate manually')\"",
+    "pretest": "pnpm exec prisma generate",
     "build": "pnpm exec prisma generate && pnpm exec next build",
     "dev": "next dev --turbopack",
     "lint": "eslint .",
@@ -92,6 +93,7 @@
     "autoprefixer": "^10.4.20",
     "bottleneck": "^2.19.5",
     "bs58": "^6.0.0",
+    "ccxt": "^4.5.30",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cmdk": "1.0.4",

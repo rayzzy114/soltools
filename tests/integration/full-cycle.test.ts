@@ -14,6 +14,7 @@
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest"
 import { Connection, Keypair, PublicKey, LAMPORTS_PER_SOL } from "@solana/web3.js"
+import { ensureLocalValidator } from "./helpers/local-validator"
 import bs58 from "bs58"
 import {
   createTestConnection,
@@ -53,6 +54,7 @@ import { estimateTip, getRandomTipAccount } from "@/lib/solana/jito"
 describe("Full Pump & Dump Cycle", () => {
   let connection: Connection
   let report: TestReport
+  let validatorHandle: Awaited<ReturnType<typeof ensureLocalValidator>> | null = null
   
   // test wallets
   let creatorWallet: ReturnType<typeof generateTestWallet>
@@ -68,7 +70,8 @@ describe("Full Pump & Dump Cycle", () => {
   let totalVolumeGenerated: number = 0
 
   beforeAll(async () => {
-    connection = createTestConnection()
+    validatorHandle = await ensureLocalValidator()
+    connection = validatorHandle.connection
     report = createTestReport("Full Pump & Dump Cycle")
     
     // generate test wallets
@@ -80,9 +83,10 @@ describe("Full Pump & Dump Cycle", () => {
     console.log(`Volume wallets: ${volumeWallets.length}`)
   })
 
-  afterAll(() => {
+  afterAll(async () => {
     finalizeTestReport(report, report.steps.every(s => s.success))
     printTestReport(report)
+    await validatorHandle?.stop()
   })
 
   describe("Phase 1: Setup & Token Creation", () => {

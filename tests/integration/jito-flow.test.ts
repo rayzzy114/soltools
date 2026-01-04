@@ -1,6 +1,7 @@
-import { describe, it, expect, vi } from "vitest"
-import { Connection, Keypair } from "@solana/web3.js"
+import { describe, it, expect, vi, beforeAll, afterAll } from "vitest"
+import { Connection, Keypair, SystemProgram, PublicKey, Transaction } from "@solana/web3.js"
 import bs58 from "bs58"
+import { ensureLocalValidator } from "./helpers/local-validator"
 
 vi.mock("@/lib/prisma", () => ({
   prisma: {
@@ -9,8 +10,32 @@ vi.mock("@/lib/prisma", () => ({
   },
 }))
 
+vi.mock("@/lib/solana/pumpfun-sdk", () => ({
+  getBondingCurveData: vi.fn().mockResolvedValue({
+    virtualTokenReserves: 1_000_000n,
+    virtualSolReserves: 1_000_000n,
+    realTokenReserves: 1_000n,
+    realSolReserves: 1_000n,
+    tokenTotalSupply: 1_000_000n,
+    complete: false,
+    creator: PublicKey.default,
+  }),
+  calculateBuyAmount: () => ({ tokensOut: 1n, priceImpact: 0 }),
+  isPumpFunAvailable: () => true,
+  getPumpfunGlobalState: vi.fn(),
+  PUMPFUN_BUY_FEE_BPS: 100,
+  buildBuyTransaction: vi.fn().mockResolvedValue(new Transaction()),
+  getBondingCurveAddress: () => new PublicKey("11111111111111111111111111111111"),
+}))
+
 vi.mock("@/lib/solana/jito", () => ({
-  createTipInstruction: vi.fn(() => null),
+  createTipInstruction: vi.fn((from: PublicKey) =>
+    SystemProgram.transfer({
+      fromPubkey: from,
+      toPubkey: new PublicKey("96gYZGLnJYVFmbjzopPSU6QiEV5fGqZNyN9nmNhvrZU5"),
+      lamports: 1000,
+    })
+  ),
   sendBundle: vi.fn(async () => {
     throw new Error("sendBundle skipped")
   }),
@@ -18,36 +43,26 @@ vi.mock("@/lib/solana/jito", () => ({
 }))
 
 describe("Jito flow integration", () => {
+  let validator: Awaited<ReturnType<typeof ensureLocalValidator>> | null = null
+
+  beforeAll(async () => {
+    validator = await ensureLocalValidator()
+  })
+
+  afterAll(async () => {
+    await validator?.stop()
+  })
+
   it("simulates a buy transaction before bundle send", async () => {
     const { VolumeBotPairEngine } = await import("@/lib/solana/volume-bot-engine")
-    const rpcUrl = process.env.RPC || ""
-    console.log("RPC URL:", rpcUrl.split("?")[0])
-    const connection = new Connection(rpcUrl, "confirmed")
+    const connection = validator?.connection ?? new Connection("http://127.0.0.1:8899", "confirmed")
     const simulateSpy = vi.spyOn(connection, "simulateTransaction")
 
-    const secretRaw = process.env.TEST_WALLET_SECRET ?? ""
-    const secretKey = secretRaw.trim().replace(/^['"]|['"]$/g, "").replace(/\s/g, "")
-    if (!secretKey) {
-      console.warn("TEST_WALLET_SECRET is missing; skipping Jito flow integration test.")
-      expect(true).toBe(true)
-      return
-    }
-
-    let keypair: Keypair
-    try {
-      keypair = Keypair.fromSecretKey(bs58.decode(secretKey))
-    } catch (error: any) {
-      throw new Error(`Invalid TEST_WALLET_SECRET: ${error?.message || error}`)
-    }
+    const keypair = Keypair.generate()
 
     console.log("Test wallet pubkey:", keypair.publicKey.toBase58())
-    try {
-      await connection.getBalance(keypair.publicKey)
-    } catch (error: any) {
-      console.warn(`RPC unavailable, skipping Jito flow test: ${error?.message || error}`)
-      expect(true).toBe(true)
-      return
-    }
+    const airdropSig = await connection.requestAirdrop(keypair.publicKey, 2_000_000_000)
+    await connection.confirmTransaction(airdropSig, "confirmed")
 
     const mintAddress = "6dQEEy4E574FmCRZiiLCNo6CvpcrGoSAJVmL5hobhxTL"
     console.log("Test mint:", mintAddress)
