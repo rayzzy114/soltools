@@ -94,7 +94,7 @@ export async function withdrawToSnipers(
   client: okx,
   wallets: string[],
   options: WithdrawOptions = {}
-): Promise<void> {
+): Promise<{ success: string[]; failed: Array<{ address: string; error: string }> }> {
   const {
     chain = "4",
     minAmount = DEFAULT_MIN_AMOUNT,
@@ -104,18 +104,27 @@ export async function withdrawToSnipers(
     maxDelayMs = DEFAULT_MAX_DELAY_MS,
   } = options
 
+  const success: string[] = []
+  const failed: Array<{ address: string; error: string }> = []
+
   for (const address of wallets) {
     const amount = randomInRange(minAmount, maxAmount)
-    await client.withdraw("SOL", amount, address, undefined, {
-      dest: chain,
-      fee,
-    })
+    try {
+      await client.withdraw("SOL", amount, address, undefined, {
+        dest: chain,
+        fee,
+      })
+      success.push(address)
+    } catch (error: any) {
+      failed.push({ address, error: error?.message || String(error) })
+    }
 
     const delay = randomInRange(minDelayMs, maxDelayMs)
     if (delay > 0) {
       await sleep(delay)
     }
   }
+  return { success, failed }
 }
 
 export const __testing = {
