@@ -67,8 +67,10 @@ export function generateMetadata(params: {
  * For now, return a data URI. In production, upload to IPFS
  */
 export function getMetadataUri(metadata: string): string {
-  // TODO: Upload to IPFS (Pinata, NFT.Storage, etc.)
-  // For now, return data URI (not recommended for production)
+  // CRITICAL WARNING: Data URIs are not standard for Pump.fun or Solana token metadata.
+  // Most indexers and wallets will fail to render the image or read properties.
+  // TODO: Implement proper IPFS upload using Pinata or Irys.
+  // Without this, token launches will likely look "broken" on explorers.
   return `data:application/json;base64,${Buffer.from(metadata).toString("base64")}`
 }
 

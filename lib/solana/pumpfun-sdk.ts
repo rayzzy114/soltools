@@ -222,12 +222,16 @@ export function isPumpFunAvailable(): boolean {
  * Note: microLamports are per compute unit. If you multiply SOL by a constant here,
  * you will massively overpay and can easily hit InsufficientFundsForFee.
  */
-function toMicroLamports(priorityFeeSol: number, computeUnits: number): number {
+export function toMicroLamports(priorityFeeSol: number, computeUnits: number): number {
   if (!Number.isFinite(priorityFeeSol) || priorityFeeSol <= 0) return 0
   if (!Number.isFinite(computeUnits) || computeUnits <= 0) return 0
-  const totalLamports = priorityFeeSol * Number(LAMPORTS_PER_SOL)
+
+  // Use Math.round to avoid floating point artifacts when converting input float to integer lamports
+  const totalLamports = Math.round(priorityFeeSol * Number(LAMPORTS_PER_SOL))
+
   // microLamports per CU = (total lamports / CU) * 1e6
-  const microLamports = Math.floor((totalLamports * 1_000_000) / computeUnits)
+  // Using BigInt for intermediate calculation to avoid overflow/precision loss
+  const microLamports = Number((BigInt(totalLamports) * BigInt(1_000_000)) / BigInt(computeUnits))
   return Math.max(0, microLamports)
 }
 
@@ -405,6 +409,7 @@ export async function buildBuyTransaction(
 
   // add buy instruction
   // solAmount -> maxSolCostLamports
+  // Precision fix: Use Math.floor on the result of multiplication, but ideally we should parse string input
   const maxSolCostLamports = BigInt(Math.floor(solAmount * Number(LAMPORTS_PER_SOL)))
   // We need to estimate tokens for the amount
   const bondingCurveData = await getBondingCurveData(mint)
@@ -569,9 +574,16 @@ export function invalidateBondingCurveCache(mint: PublicKey): void {
  * calculate current token price
  */
 export function calculateTokenPrice(bondingCurve: BondingCurveData): number {
-  const virtualSol = Number(bondingCurve.virtualSolReserves) / Number(LAMPORTS_PER_SOL)
-  const virtualTokens = Number(bondingCurve.virtualTokenReserves) / Number(TOKEN_DECIMALS_FACTOR) // 6 decimals
-  return virtualSol / virtualTokens
+  if (bondingCurve.virtualTokenReserves === 0n) return 0
+  // Convert to BigInt scaled values first to preserve precision, then divide
+  // Price = (vSOL / 1e9) / (vTokens / 1e6) = (vSOL * 1e6) / (vTokens * 1e9) = vSOL / (vTokens * 1000)
+  // However, we want to return a number for UI display.
+  // Using direct double division is acceptable for display prices, but care should be taken with very small values.
+  const virtualSol = Number(bondingCurve.virtualSolReserves)
+  const virtualTokens = Number(bondingCurve.virtualTokenReserves)
+  // Adjust for decimals: SOL (9), Token (6) -> factor 1000 difference
+  // Price in SOL per Token
+  return (virtualSol / Number(LAMPORTS_PER_SOL)) / (virtualTokens / Number(TOKEN_DECIMALS_FACTOR))
 }
 
 /**
@@ -585,13 +597,21 @@ export function calculateBuyAmount(
   if (solAmount <= 0 || !Number.isFinite(solAmount)) {
     return { tokensOut: BigInt(0), priceImpact: 0, feeAmount: 0 }
   }
-  // pump.fun takes 1% fee on buy
-  const feeAmount = includeFee ? solAmount * (PUMPFUN_BUY_FEE_BPS / 10000) : 0
-  const solAfterFee = solAmount - feeAmount
-  const solInLamports = BigInt(Math.floor(solAfterFee * Number(LAMPORTS_PER_SOL)))
   
+  // Calculate fee in lamports to maintain precision
+  // solAmount is user input (float), convert to lamports first
+  const solAmountLamports = BigInt(Math.floor(solAmount * Number(LAMPORTS_PER_SOL)))
+
+  // pump.fun takes 1% fee on buy (100 bps)
+  const feeBps = includeFee ? BigInt(PUMPFUN_BUY_FEE_BPS) : 0n
+  const feeAmountLamports = (solAmountLamports * feeBps) / 10000n
+  const solAfterFeeLamports = solAmountLamports - feeAmountLamports
+
+  // Back to float for return value (legacy interface)
+  const feeAmount = Number(feeAmountLamports) / Number(LAMPORTS_PER_SOL)
+
   const k = bondingCurve.virtualTokenReserves * bondingCurve.virtualSolReserves
-  const newSolReserves = bondingCurve.virtualSolReserves + solInLamports
+  const newSolReserves = bondingCurve.virtualSolReserves + solAfterFeeLamports
 
   // Prevent div by zero
   if (newSolReserves <= 0n) return { tokensOut: 0n, priceImpact: 0, feeAmount: 0 }
@@ -599,9 +619,15 @@ export function calculateBuyAmount(
   const newTokenReserves = k / newSolReserves
   const tokensOut = bondingCurve.virtualTokenReserves - newTokenReserves
 
+  // Price impact calculation using BigInt scaled math to avoid small number precision loss
+  // Price = Sol / Token
+  // Impact = (NewPrice - OldPrice) / OldPrice
+  // Impact = ((NewSol/NewToken) - (OldSol/OldToken)) / (OldSol/OldToken)
+  // Impact = ((NewSol * OldToken) - (OldSol * NewToken)) / (OldSol * NewToken)  <-- Simplified?
+  // Let's stick to float for percentage as it doesn't need perfect precision, but use BigInt inputs
   const oldPrice = Number(bondingCurve.virtualSolReserves) / Number(bondingCurve.virtualTokenReserves)
   const newPrice = Number(newSolReserves) / Number(newTokenReserves)
-  const priceImpact = ((newPrice - oldPrice) / oldPrice) * 100
+  const priceImpact = oldPrice > 0 ? ((newPrice - oldPrice) / oldPrice) * 100 : 0
 
   return { tokensOut, priceImpact, feeAmount }
 }
@@ -626,12 +652,15 @@ export function calculateSellAmount(
   const solOutBeforeFee = bondingCurve.virtualSolReserves - newSolReserves
   
   // pump.fun takes 1% fee on sell
-  const feeAmount = includeFee ? solOutBeforeFee * BigInt(PUMPFUN_SELL_FEE_BPS) / BigInt(10000) : BigInt(0)
+  const feeAmount = includeFee ? (solOutBeforeFee * BigInt(PUMPFUN_SELL_FEE_BPS)) / 10000n : 0n
   const solOut = solOutBeforeFee - feeAmount
 
   const oldPrice = Number(bondingCurve.virtualSolReserves) / Number(bondingCurve.virtualTokenReserves)
   const newPrice = Number(newSolReserves) / Number(newTokenReserves)
-  const priceImpact = ((oldPrice - newPrice) / oldPrice) * 100
+  // Sell price impact is usually defined as how much lower the execution price is compared to the spot price
+  // Price Impact = (SpotPrice - ExecutionPrice) / SpotPrice
+  // Here we use the price movement direction
+  const priceImpact = oldPrice > 0 ? ((oldPrice - newPrice) / oldPrice) * 100 : 0
 
   return { solOut, priceImpact, feeAmount }
 }

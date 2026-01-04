@@ -522,7 +522,7 @@ export default function DashboardPage() {
     const timestamp = new Date().toLocaleTimeString()
     const logMessage = `[${timestamp}] ${type.toUpperCase()}: ${message}`
     setSystemLogs(prev => [logMessage, ...prev.slice(0, 49)]) // Keep last 50 logs
-    console.log(logMessage)
+    // console.log(logMessage) // Removed to prevent console spam
     const mintForLogs =
       selectedToken?.mintAddress ||
       volumeBotConfig.mintAddress ||

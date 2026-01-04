@@ -1,0 +1,4 @@
+ WARN  Unsupported engine: wanted: {"node":">=23.0.0"} (current: {"node":"v22.21.1","pnpm":"10.20.0"})
+
+> my-v0-project@0.1.0 lint /app
+> eslint .
