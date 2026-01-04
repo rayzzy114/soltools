@@ -41,6 +41,7 @@
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate deploy",
     "db:push": "prisma db push",
+    "wallets:export": "tsx scripts/export-wallets.ts",
     "prepare": "node scripts/husky-install.js",
     "prepush": "pnpm lint && pnpm test:smoke"
   },
