@@ -249,10 +249,30 @@ export async function POST(request: NextRequest) {
       }
 
       try {
+        // Hydrate wallets from DB to ensure secret keys are present if missing
+        const publicKeys = (wallets as BundlerWallet[]).map((w) => w.publicKey)
+        const dbWallets = await prisma.wallet.findMany({
+          where: { publicKey: { in: publicKeys } },
+        })
+
+        const walletsWithSecrets: BundlerWallet[] = dbWallets.map((w) => ({
+          publicKey: w.publicKey,
+          secretKey: w.secretKey,
+          solBalance: parseFloat(w.solBalance),
+          tokenBalance: parseFloat(w.tokenBalance),
+          isActive: w.isActive,
+          label: w.label || undefined,
+          role: w.role || "project",
+        }))
+
+        if (walletsWithSecrets.length === 0) {
+          throw new Error("no valid wallets found for collection")
+        }
+
         const recipient = new PublicKey(recipientAddress)
-        const signatures = await collectSol(wallets as BundlerWallet[], recipient)
-        // обновить балансы после сбора SOL
-        const updated = await refreshWalletBalances(wallets as BundlerWallet[])
+        const signatures = await collectSol(walletsWithSecrets, recipient)
+        // refresh balances after collection
+        const updated = await refreshWalletBalances(walletsWithSecrets)
         await Promise.all(updated.map(w => saveWalletToDB(w)))
         return NextResponse.json({ signatures, wallets: updated.map(sanitizeWallet) })
       } catch (error: any) {

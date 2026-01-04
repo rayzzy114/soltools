@@ -469,8 +469,17 @@ export async function getOrCreateLUT(
   await connection.confirmTransaction({ signature: createSig, blockhash: createBlockhash, lastValidBlockHeight: createLvh })
 
   const minSlot = recentSlot + 1
-  while ((await connection.getSlot()) <= minSlot) {
+  let currentSlot = await connection.getSlot()
+  let attempts = 0
+  const maxAttempts = 30 // ~12-15s wait
+  while (currentSlot <= minSlot && attempts < maxAttempts) {
     await sleep(400)
+    currentSlot = await connection.getSlot()
+    attempts++
+  }
+  if (currentSlot <= minSlot) {
+    console.warn(`[bundler] LUT creation: slot didn't advance from ${recentSlot} (now ${currentSlot}) after ${attempts} attempts`)
+    // We continue anyway, hoping RPC is just slightly behind but tx landed
   }
 
   const extendChunks = chunkArray(uniqueAddresses, maxAddresses)
@@ -774,6 +783,7 @@ export interface BundleConfig {
     fee?: number
     minDelayMs?: number
     maxDelayMs?: number
+    failOnError?: boolean
   }
   // exit
   smartExit?: boolean
@@ -989,22 +999,59 @@ export async function fundWallets(
 }
 
 /**
- * collect SOL from wallets back to funder
+ * collect SOL from wallets back to funder using Jito bundles
  */
 export async function collectSol(
   wallets: BundlerWallet[],
-  recipient: PublicKey
+  recipient: PublicKey,
+  options: { jitoTip?: number; jitoRegion?: JitoRegion | "auto" } = {}
 ): Promise<string[]> {
+  const { jitoTip = 0.0001, jitoRegion = "frankfurt" } = options
   const signatures: string[] = []
 
-  for (const wallet of wallets) {
-    try {
+  // 1. Refresh balances efficiently
+  const refreshedWallets = await refreshWalletBalances(wallets)
+
+  // 2. Filter wallets with enough funds (> 5000 lamports fee)
+  const feeLamports = 5000
+  const tipLamports = Math.floor(jitoTip * LAMPORTS_PER_SOL)
+  const validWallets = refreshedWallets.filter(w => {
+    const bal = Math.floor(w.solBalance * LAMPORTS_PER_SOL)
+    return bal > feeLamports
+  })
+
+  // 3. Chunk into groups of 5 (Jito limit)
+  const chunks = chunkArray(validWallets, 5)
+
+  for (const chunk of chunks) {
+    // Sort chunk by balance ascending, so the richest wallet is last and pays the tip
+    const sortedChunk = [...chunk].sort((a, b) => a.solBalance - b.solBalance)
+
+    // Check if the richest wallet can afford fee + tip
+    const tipPayer = sortedChunk[sortedChunk.length - 1]
+    const tipPayerBal = Math.floor(tipPayer.solBalance * LAMPORTS_PER_SOL)
+    if (tipPayerBal <= feeLamports + tipLamports) {
+      console.warn(`[collect] skipping chunk, richest wallet ${tipPayer.publicKey} has insufficient SOL for tip`)
+      continue
+    }
+
+    const transactions: Transaction[] = []
+    const txSigners: Keypair[][] = []
+    const { blockhash } = await connection.getLatestBlockhash()
+
+    for (let i = 0; i < sortedChunk.length; i++) {
+      const wallet = sortedChunk[i]
+      const isTipPayer = i === sortedChunk.length - 1
       const keypair = getKeypair(wallet)
-      const balance = await connection.getBalance(keypair.publicKey)
 
-      // leave some for rent
-      const sendAmount = balance - 5000
+      const balance = Math.floor(wallet.solBalance * LAMPORTS_PER_SOL)
+      let sendAmount = balance - feeLamports
 
+      if (isTipPayer) {
+        sendAmount -= tipLamports
+      }
+
+      // Safety check (should be covered by sort check above, but good for robustness)
       if (sendAmount <= 0) continue
 
       const transaction = new Transaction()
@@ -1016,17 +1063,27 @@ export async function collectSol(
         })
       )
 
-      const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash()
       transaction.recentBlockhash = blockhash
-      transaction.lastValidBlockHeight = lastValidBlockHeight
       transaction.feePayer = keypair.publicKey
-
       transaction.sign(keypair)
 
-      const signature = await connection.sendRawTransaction(transaction.serialize())
-      signatures.push(signature)
+      transactions.push(transaction)
+      txSigners.push([keypair])
+    }
+
+    if (transactions.length === 0) continue
+
+    try {
+      const result = await sendBundleGroup(
+        transactions,
+        txSigners,
+        "collect",
+        jitoRegion,
+        jitoTip
+      )
+      signatures.push(...result.signatures)
     } catch (error) {
-      console.error(`error collecting from ${wallet.publicKey}:`, error)
+      console.error("Collect bundle failed:", error)
     }
   }
 
@@ -1159,18 +1216,32 @@ export async function createLaunchBundle(config: BundleConfig): Promise<BundleRe
     }
 
     if (config.cexFunding?.enabled) {
-      const okxClient = createOkxClient()
-      const sniperAddresses = activeWallets.map((w) => w.publicKey)
-      if (config.cexFunding.whitelist) {
-        await whitelistWithdrawalAddresses(okxClient, sniperAddresses)
+      try {
+        const okxClient = createOkxClient()
+        const sniperAddresses = activeWallets.map((w) => w.publicKey)
+        if (config.cexFunding.whitelist) {
+          await whitelistWithdrawalAddresses(okxClient, sniperAddresses)
+        }
+
+        // Generate a session ID for idempotency if not provided in config
+        const sessionId = Date.now().toString(36)
+
+        const fundingResult = await withdrawToSnipers(okxClient, sniperAddresses, {
+          minAmount: config.cexFunding.minAmount,
+          maxAmount: config.cexFunding.maxAmount,
+          fee: config.cexFunding.fee,
+          minDelayMs: config.cexFunding.minDelayMs,
+          maxDelayMs: config.cexFunding.maxDelayMs,
+          clientOrderIdPrefix: `launch-${sessionId}`
+        })
+
+        if (config.cexFunding.failOnError && fundingResult.failed.length > 0) {
+          throw new Error(`CEX Funding failed for ${fundingResult.failed.length} wallets: ${fundingResult.failed[0].error}`)
+        }
+      } catch (error: any) {
+        if (config.cexFunding.failOnError) throw error
+        console.error("CEX Funding failed but continuing launch (failOnError=false):", error)
       }
-      await withdrawToSnipers(okxClient, sniperAddresses, {
-        minAmount: config.cexFunding.minAmount,
-        maxAmount: config.cexFunding.maxAmount,
-        fee: config.cexFunding.fee,
-        minDelayMs: config.cexFunding.minDelayMs,
-        maxDelayMs: config.cexFunding.maxDelayMs,
-      })
     }
 
     const ghostMode = Boolean((config as any).ghostMode)
@@ -1685,6 +1756,7 @@ export async function createSellBundle(config: BundleConfig): Promise<BundleResu
  *   transaction signature, and the wallet index.
  * @returns An object with `signatures` — an array of submitted transaction signatures (in submission order),
  *   and `errors` — an array of error messages for wallets that failed to submit.
+ */
 export async function createStaggeredBuys(
   config: BundleConfig,
   onTransaction?: (wallet: string, signature: string, index: number) => void
@@ -1710,6 +1782,12 @@ export async function createStaggeredBuys(
   const errors: string[] = []
 
   const mint = new PublicKey(mintAddress)
+
+  // Ensure random delay is not faster than block time
+  const resolvedDelay = {
+    min: Math.max(400, staggerDelay.min),
+    max: Math.max(400, staggerDelay.max)
+  }
 
   for (let i = 0; i < activeWallets.length; i++) {
     const wallet = activeWallets[i]
@@ -1799,6 +1877,7 @@ export async function createStaggeredBuys(
  * @param config - BundleConfig that specifies wallets, `mintAddress`, sell percentages, delay settings (`staggerDelay` / `exitDelayMs`), priority fee overrides, `slippage`, Jito tip settings (`jitoTip`, `dynamicJitoTip`, `jitoRegion`, `exitJitoRegion`), and related sell options.
  * @param onTransaction - Optional callback invoked after a successful transaction with the wallet public key (string), the transaction signature, and the wallet index.
  * @returns An object containing `signatures`: an array of submitted transaction signatures, and `errors`: an array of per-wallet error messages describing failures.
+ */
 export async function createStaggeredSells(
   config: BundleConfig,
   onTransaction?: (wallet: string, signature: string, index: number) => void

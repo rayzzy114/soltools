@@ -1,57 +1,128 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest"
-import { withdrawToSnipers, __testing } from "@/lib/cex/okx-funding"
+import { withdrawToSnipers, createOkxClient } from "../../lib/cex/okx-funding"
+import { connection } from "../../lib/solana/config"
+import { Keypair, LAMPORTS_PER_SOL } from "@solana/web3.js"
 
-const { randomInRange } = __testing
+// Mock dependencies
+vi.mock("../../lib/solana/config", () => ({
+  connection: {
+    getBalance: vi.fn(),
+  },
+}))
 
-describe("randomInRange", () => {
-  it("returns min when max is less than or equal to min", () => {
-    expect(randomInRange(1, 1)).toBe(1)
-    expect(randomInRange(2, 1)).toBe(2)
-  })
+vi.mock("ccxt", () => {
+  const mockWithdraw = vi.fn()
+  const MockOkx = vi.fn(() => ({
+    withdraw: mockWithdraw,
+    fetch2: vi.fn(),
+  }))
+  return {
+    default: {
+      okx: MockOkx,
+    },
+    okx: MockOkx,
+  }
 })
 
 describe("withdrawToSnipers", () => {
+  let client: any
+  // Use valid base58 keys
+  const walletA = Keypair.generate().publicKey.toBase58()
+  const walletB = Keypair.generate().publicKey.toBase58()
+
   beforeEach(() => {
-    vi.useFakeTimers()
+    client = createOkxClient()
+    vi.clearAllMocks()
+    // Default mock implementation for getBalance to return 0 (needs funding)
+    ;(connection.getBalance as any).mockResolvedValue(0)
   })
 
-  afterEach(() => {
-    vi.useRealTimers()
-    vi.restoreAllMocks()
-  })
+  it("should withdraw funds to wallets with low balance", async () => {
+    const wallets = [walletA, walletB]
+    // Mock getBalance: WalletA has 0 SOL, WalletB has 0 SOL
+    ;(connection.getBalance as any).mockResolvedValue(0)
+    // Mock withdraw success
+    client.withdraw.mockResolvedValue({ id: "123" })
 
-  it("sends jittered withdrawals across wallets", async () => {
-    const client = { withdraw: vi.fn().mockResolvedValue({}) } as any
-    const mathSpy = vi.spyOn(Math, "random")
-    // amount1(min), delay1(min), amount2(mid), delay2(max)
-    mathSpy
-      .mockReturnValueOnce(0)
-      .mockReturnValueOnce(0)
-      .mockReturnValueOnce(0.5)
-      .mockReturnValueOnce(1)
-
-    const promise = withdrawToSnipers(client, ["wallet-1", "wallet-2"], {
-      minAmount: 0.3,
-      maxAmount: 0.5,
-      minDelayMs: 1000,
-      maxDelayMs: 1000,
-      fee: 0.02,
+    const result = await withdrawToSnipers(client, wallets, {
+      minAmount: 0.1,
+      maxAmount: 0.1,
+      minDelayMs: 0,
+      maxDelayMs: 0,
     })
 
-    await vi.runAllTimersAsync()
-    await promise
-
+    expect(result.success).toEqual(wallets)
+    expect(result.failed).toEqual([])
     expect(client.withdraw).toHaveBeenCalledTimes(2)
-    expect(client.withdraw).toHaveBeenNthCalledWith(1, "SOL", 0.3, "wallet-1", undefined, {
-      dest: "4",
-      fee: 0.02,
+    // Check that getBalance was called for each wallet
+    expect(connection.getBalance).toHaveBeenCalledTimes(2)
+  })
+
+  it("should skip wallets that are already funded (idempotency)", async () => {
+    const wallets = [walletA, walletB]
+
+    // Better mock approach for specific values
+    const getBalanceMock = connection.getBalance as any
+    getBalanceMock
+      .mockResolvedValueOnce(1 * LAMPORTS_PER_SOL) // WalletA
+      .mockResolvedValueOnce(0) // WalletB
+
+    client.withdraw.mockResolvedValue({ id: "123" })
+
+    const result = await withdrawToSnipers(client, wallets, {
+      minAmount: 0.1,
+      maxAmount: 0.1,
+      minDelayMs: 0,
+      maxDelayMs: 0,
     })
-    expect(client.withdraw).toHaveBeenNthCalledWith(2, "SOL", expect.any(Number), "wallet-2", undefined, {
-      dest: "4",
-      fee: 0.02,
+
+    expect(result.success).toEqual([walletA, walletB]) // Both successful (one skipped, one funded)
+    expect(client.withdraw).toHaveBeenCalledTimes(1) // Only one withdrawal call
+  })
+
+  it("should handle withdrawal errors gracefully and return failure report", async () => {
+    const wallets = [walletA, walletB]
+    ;(connection.getBalance as any).mockResolvedValue(0)
+
+    // First call fails, second succeeds
+    client.withdraw
+      .mockRejectedValueOnce(new Error("Network Error"))
+      .mockResolvedValueOnce({ id: "456" })
+
+    const result = await withdrawToSnipers(client, wallets, {
+      minAmount: 0.1,
+      maxAmount: 0.1,
+      minDelayMs: 0,
+      maxDelayMs: 0,
     })
-    const secondAmount = (client.withdraw as any).mock.calls[1][1]
-    expect(secondAmount).toBeGreaterThanOrEqual(0.3)
-    expect(secondAmount).toBeLessThanOrEqual(0.5)
+
+    expect(result.success).toEqual([walletB])
+    expect(result.failed).toHaveLength(1)
+    expect(result.failed[0].address).toBe(walletA)
+    expect(result.failed[0].error).toContain("Network Error")
+  })
+
+  it("should generate clientOrderId when prefix is provided", async () => {
+    const wallets = [walletA]
+    ;(connection.getBalance as any).mockResolvedValue(0)
+    client.withdraw.mockResolvedValue({ id: "123" })
+
+    await withdrawToSnipers(client, wallets, {
+      minAmount: 0.1,
+      maxAmount: 0.1,
+      minDelayMs: 0,
+      maxDelayMs: 0,
+      clientOrderIdPrefix: "test-session",
+    })
+
+    expect(client.withdraw).toHaveBeenCalledWith(
+      "SOL",
+      expect.any(Number),
+      walletA,
+      undefined,
+      expect.objectContaining({
+        clientId: expect.stringContaining("test-session"),
+      })
+    )
   })
 })
