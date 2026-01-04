@@ -437,6 +437,9 @@ export default function DashboardPage() {
         const message = data?.error || `failed to update wallet role (status ${res.status})`
         console.error("Failed to update wallet role:", message)
         toast.error(message)
+        if (res.status === 404) {
+          toast.error("Wallet not found. Import it before assigning a role.")
+        }
         return null
       }
 
