@@ -999,22 +999,59 @@ export async function fundWallets(
 }
 
 /**
- * collect SOL from wallets back to funder
+ * collect SOL from wallets back to funder using Jito bundles
  */
 export async function collectSol(
   wallets: BundlerWallet[],
-  recipient: PublicKey
+  recipient: PublicKey,
+  options: { jitoTip?: number; jitoRegion?: JitoRegion | "auto" } = {}
 ): Promise<string[]> {
+  const { jitoTip = 0.0001, jitoRegion = "frankfurt" } = options
   const signatures: string[] = []
 
-  for (const wallet of wallets) {
-    try {
+  // 1. Refresh balances efficiently
+  const refreshedWallets = await refreshWalletBalances(wallets)
+
+  // 2. Filter wallets with enough funds (> 5000 lamports fee)
+  const feeLamports = 5000
+  const tipLamports = Math.floor(jitoTip * LAMPORTS_PER_SOL)
+  const validWallets = refreshedWallets.filter(w => {
+    const bal = Math.floor(w.solBalance * LAMPORTS_PER_SOL)
+    return bal > feeLamports
+  })
+
+  // 3. Chunk into groups of 5 (Jito limit)
+  const chunks = chunkArray(validWallets, 5)
+
+  for (const chunk of chunks) {
+    // Sort chunk by balance ascending, so the richest wallet is last and pays the tip
+    const sortedChunk = [...chunk].sort((a, b) => a.solBalance - b.solBalance)
+
+    // Check if the richest wallet can afford fee + tip
+    const tipPayer = sortedChunk[sortedChunk.length - 1]
+    const tipPayerBal = Math.floor(tipPayer.solBalance * LAMPORTS_PER_SOL)
+    if (tipPayerBal <= feeLamports + tipLamports) {
+      console.warn(`[collect] skipping chunk, richest wallet ${tipPayer.publicKey} has insufficient SOL for tip`)
+      continue
+    }
+
+    const transactions: Transaction[] = []
+    const txSigners: Keypair[][] = []
+    const { blockhash } = await connection.getLatestBlockhash()
+
+    for (let i = 0; i < sortedChunk.length; i++) {
+      const wallet = sortedChunk[i]
+      const isTipPayer = i === sortedChunk.length - 1
       const keypair = getKeypair(wallet)
-      const balance = await connection.getBalance(keypair.publicKey)
 
-      // leave some for rent
-      const sendAmount = balance - 5000
+      const balance = Math.floor(wallet.solBalance * LAMPORTS_PER_SOL)
+      let sendAmount = balance - feeLamports
 
+      if (isTipPayer) {
+        sendAmount -= tipLamports
+      }
+
+      // Safety check (should be covered by sort check above, but good for robustness)
       if (sendAmount <= 0) continue
 
       const transaction = new Transaction()
@@ -1026,17 +1063,27 @@ export async function collectSol(
         })
       )
 
-      const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash()
       transaction.recentBlockhash = blockhash
-      transaction.lastValidBlockHeight = lastValidBlockHeight
       transaction.feePayer = keypair.publicKey
-
       transaction.sign(keypair)
 
-      const signature = await connection.sendRawTransaction(transaction.serialize())
-      signatures.push(signature)
+      transactions.push(transaction)
+      txSigners.push([keypair])
+    }
+
+    if (transactions.length === 0) continue
+
+    try {
+      const result = await sendBundleGroup(
+        transactions,
+        txSigners,
+        "collect",
+        jitoRegion,
+        jitoTip
+      )
+      signatures.push(...result.signatures)
     } catch (error) {
-      console.error(`error collecting from ${wallet.publicKey}:`, error)
+      console.error("Collect bundle failed:", error)
     }
   }
 

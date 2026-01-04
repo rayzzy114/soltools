@@ -1,15 +1,13 @@
 import { test, expect } from '@playwright/test';
 import bs58 from 'bs58';
 
-// Advanced features test: Panic Sell, Volume Bot Control, CEX Funding Failure
+// Advanced features test: Panic Sell, Volume Bot Control, CEX Funding Failure, Collect SOL
 // Uses strict network mocking to ensure no real blockchain interaction.
 
 test.describe('Advanced Dashboard Features', () => {
   test.beforeEach(async ({ page }) => {
     // 0. Setup LocalStorage with Funder Key
-    // Generate a valid 64-byte secret key encoded in bs58
     const mockSecretKey = bs58.encode(new Uint8Array(64).fill(1));
-
     await page.addInitScript((secret) => {
         window.localStorage.setItem('funderSecretKey', secret);
     }, mockSecretKey);
@@ -22,7 +20,7 @@ test.describe('Advanced Dashboard Features', () => {
     await page.route('**/api/pnl?type=tokens', async route => route.fulfill({ json: [] }));
     await page.route('**/api/pnl?type=trades*', async route => route.fulfill({ json: [] }));
 
-    // Mock Tokens - Need a selected token for Main Stage
+    // Mock Tokens
     await page.route('**/api/tokens', async route => route.fulfill({
       json: [{
         mintAddress: 'TokenMint123456789',
@@ -53,11 +51,9 @@ test.describe('Advanced Dashboard Features', () => {
       { publicKey: 'Buyer2', role: 'buyer', solBalance: 0.5, tokenBalance: 500, isActive: true, secretKey: 'mockSecret' }
     ];
 
-    // Mock Wallets - Need Dev and Buyers
+    // Mock Wallets
     await page.route('**/api/bundler/wallets?action=load-all', async route => route.fulfill({
-      json: {
-        wallets: mockWallets
-      }
+      json: { wallets: mockWallets }
     }));
 
     // Mock Wallet Actions (POST)
@@ -68,6 +64,9 @@ test.describe('Advanced Dashboard Features', () => {
                 await route.fulfill({ json: { success: true, signature: 'mockTx' } });
             } else if (body.action === 'refresh') {
                 await route.fulfill({ json: { success: true, wallets: mockWallets } });
+            } else if (body.action === 'collect') {
+                // Mock collect response
+                await route.fulfill({ json: { success: true, signatures: ['collectSig1', 'collectSig2'], wallets: mockWallets } });
             } else {
                 await route.fulfill({ json: { success: true, wallets: mockWallets } });
             }
@@ -93,12 +92,11 @@ test.describe('Advanced Dashboard Features', () => {
         await openMainStage.click();
     }
 
-    // Ensure "Test Token" is selected by clicking it explicitly
+    // Ensure "Test Token" is selected
     await page.getByText('TOKEN INFO').waitFor();
     const tokenRow = page.getByText('Test Token', { exact: true }).first();
     await tokenRow.waitFor();
     await tokenRow.click();
-    // Wait for finance data to load which enables buttons
     await page.waitForTimeout(500);
   });
 
@@ -106,19 +104,14 @@ test.describe('Advanced Dashboard Features', () => {
     let rugpullCalled = false;
     await page.route('**/api/bundler/rugpull', async route => {
       rugpullCalled = true;
-      await route.fulfill({
-        json: { success: true, signatures: ['sig1', 'sig2'] }
-      });
+      await route.fulfill({ json: { success: true, signatures: ['sig1', 'sig2'] } });
     });
 
     const dumpBtn = page.getByRole('button', { name: 'Dump from buyer' });
     await expect(dumpBtn).toBeVisible();
     await expect(dumpBtn).toBeEnabled({ timeout: 10000 });
 
-    page.on('dialog', async dialog => {
-      await dialog.accept();
-    });
-
+    page.on('dialog', async dialog => { await dialog.accept(); });
     await dumpBtn.click();
 
     await expect(page.getByText(/rugpull executed/i)).toBeVisible({ timeout: 10000 });
@@ -131,9 +124,7 @@ test.describe('Advanced Dashboard Features', () => {
       if (body.action === 'start') {
         await route.fulfill({ json: { success: true, pairId: 'pair123' } });
       } else if (body.action === 'status') {
-        await route.fulfill({
-            json: { status: 'running', totalTrades: 0, totalVolume: '0', solSpent: '0' }
-        });
+        await route.fulfill({ json: { status: 'running', totalTrades: 0, totalVolume: '0', solSpent: '0' } });
       } else {
         await route.continue();
       }
@@ -141,7 +132,6 @@ test.describe('Advanced Dashboard Features', () => {
 
     const startBtn = page.getByRole('button', { name: 'Start' });
     await expect(startBtn).toBeVisible();
-
     await startBtn.click();
 
     await expect(page.getByText('Volume bot started')).toBeVisible();
@@ -149,69 +139,51 @@ test.describe('Advanced Dashboard Features', () => {
   });
 
   test('CEX Funding Failure should be reported during Launch', async ({ page }) => {
-    // Switch to Launch Stage
     await page.getByText('Launch another token').click();
-
-    // 1. Mock Metadata Upload
     await page.route('**/api/tokens/upload-metadata', async route => {
         await route.fulfill({ json: { metadataUri: 'https://ipfs.io/ipfs/QmMock', metadata: { image: 'https://mock.image' } } });
     });
 
-    // 2. Fill Launch Form
     await page.getByPlaceholder('Token Name').fill('Fail Token');
     await page.getByPlaceholder('SYMBOL').fill('FAIL');
-
     const buffer = Buffer.from('fake image content');
-    await page.setInputFiles('input[type="file"]', {
-        name: 'token.png',
-        mimeType: 'image/png',
-        buffer
-    });
-
+    await page.setInputFiles('input[type="file"]', { name: 'token.png', mimeType: 'image/png', buffer });
     await page.getByText('Upload to IPFS').click();
     await expect(page.getByText('Metadata: https://ipfs.io/ipfs/QmMock')).toBeVisible();
 
-    // 3. Select Dev Wallet
-    const devSelectContainer = page.locator('div')
-        .filter({ has: page.locator('label', { hasText: 'Dev address' }) })
-        .filter({ has: page.getByRole('combobox') })
-        .last();
-
+    const devSelectContainer = page.locator('div').filter({ has: page.locator('label', { hasText: 'Dev address' }) }).last();
     const devSelect = devSelectContainer.getByRole('combobox').first();
-
     await page.waitForTimeout(1000);
-
     const selectedText = await devSelect.textContent();
-
     if (!selectedText?.includes('DevWallet123')) {
         await devSelect.click();
         await expect(page.getByRole('option').first()).toBeVisible();
         const option = page.getByRole('option').filter({ hasText: 'DevWallet123' }).first();
-        if (await option.count() > 0) {
-            await option.click();
-        } else {
-             await page.getByRole('option').first().click();
-        }
+        if (await option.count() > 0) await option.click();
+        else await page.getByRole('option').first().click();
     }
 
-    // 4. Add Buyer Wallet
     await page.getByText('Add wallet').click();
-
-    // 5. Click Launch
     const launchBtn = page.getByRole('button', { name: 'LAUNCH TOKEN + BUNDLE' });
     await expect(launchBtn).toBeEnabled({ timeout: 5000 });
 
-    // 6. Mock Launch Failure (CEX error)
     await page.route('**/api/bundler/launch', async route => {
-        await route.fulfill({
-            json: { error: 'CEX Funding failed for Buyer1: Insufficient funds' }
-        });
+        await route.fulfill({ json: { error: 'CEX Funding failed for Buyer1: Insufficient funds' } });
     });
 
     await launchBtn.click();
-
-    // 7. Verify Error Feedback
     const toast = page.locator('li[data-sonner-toast]').filter({ hasText: /CEX Funding failed/ });
     await expect(toast).toBeVisible({ timeout: 10000 });
+  });
+
+  test('Collect SOL should trigger API and show success', async ({ page }) => {
+    const collectBtn = page.getByRole('button', { name: 'Collect all → dev' });
+    await expect(collectBtn).toBeVisible();
+    await expect(collectBtn).toBeEnabled();
+
+    page.on('dialog', async dialog => { await dialog.accept(); });
+    await collectBtn.click();
+
+    await expect(page.getByText(/Collected SOL from 2 wallets/i)).toBeVisible({ timeout: 10000 });
   });
 });
