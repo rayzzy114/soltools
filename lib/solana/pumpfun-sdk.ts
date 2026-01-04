@@ -324,7 +324,7 @@ export async function createCreateTokenInstruction(
   symbol: string,
   uri: string
 ): Promise<TransactionInstruction> {
-  return createPumpFunCreateInstruction(creator, mint, { name, symbol, imageUrl: uri, description: "" })
+  return createPumpFunCreateInstruction(creator, mint, { name, symbol, uri })
 }
 
 /**
@@ -347,7 +347,7 @@ export async function buildCreateTokenTransaction(
   const createIx = createPumpFunCreateInstruction(
     creator,
     mint.publicKey,
-    { name, symbol, imageUrl: metadataUri, description: "" }
+    { name, symbol, uri: metadataUri }
   )
   transaction.add(createIx)
 
