@@ -2781,8 +2781,9 @@ export default function DashboardPage() {
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
                 <div className="space-y-1">
-                  <Label className="text-[10px] text-black">Name</Label>
+                  <Label htmlFor="token-name" className="text-[10px] text-black">Name</Label>
                   <Input
+                    id="token-name"
                     value={tokenName}
                     onChange={(e) => setTokenName(e.target.value)}
                     placeholder="Token Name"
@@ -2790,8 +2791,9 @@ export default function DashboardPage() {
                   />
                 </div>
                 <div className="space-y-1">
-                  <Label className="text-[10px] text-black">Symbol</Label>
+                  <Label htmlFor="token-symbol" className="text-[10px] text-black">Symbol</Label>
                   <Input
+                    id="token-symbol"
                     value={tokenSymbol}
                     onChange={(e) => setTokenSymbol(e.target.value.toUpperCase())}
                     placeholder="SYMBOL"
@@ -2802,8 +2804,9 @@ export default function DashboardPage() {
               </div>
 
               <div className="space-y-1">
-                <Label className="text-[10px] text-black">Description</Label>
+                <Label htmlFor="token-description" className="text-[10px] text-black">Description</Label>
                 <Textarea
+                  id="token-description"
                   value={tokenDescription}
                   onChange={(e) => setTokenDescription(e.target.value)}
                   placeholder="Token description..."
@@ -2814,8 +2817,9 @@ export default function DashboardPage() {
 
               <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
                 <div className="space-y-1">
-                  <Label className="text-[10px] text-black">Website</Label>
+                  <Label htmlFor="token-website" className="text-[10px] text-black">Website</Label>
                   <Input
+                    id="token-website"
                     value={tokenWebsite}
                     onChange={(e) => setTokenWebsite(e.target.value)}
                     placeholder="https://example.com"
@@ -2823,8 +2827,9 @@ export default function DashboardPage() {
                   />
                 </div>
                 <div className="space-y-1">
-                  <Label className="text-[10px] text-black">Twitter</Label>
+                  <Label htmlFor="token-twitter" className="text-[10px] text-black">Twitter</Label>
                   <Input
+                    id="token-twitter"
                     value={tokenTwitter}
                     onChange={(e) => setTokenTwitter(e.target.value)}
                     placeholder="https://x.com/..."
@@ -2832,8 +2837,9 @@ export default function DashboardPage() {
                   />
                 </div>
                 <div className="space-y-1">
-                  <Label className="text-[10px] text-black">Telegram</Label>
+                  <Label htmlFor="token-telegram" className="text-[10px] text-black">Telegram</Label>
                   <Input
+                    id="token-telegram"
                     value={tokenTelegram}
                     onChange={(e) => setTokenTelegram(e.target.value)}
                     placeholder="https://t.me/..."
@@ -2844,8 +2850,9 @@ export default function DashboardPage() {
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-2 items-start">
                 <div className="space-y-1">
-                  <Label className="text-[10px] text-black">Image</Label>
+                  <Label htmlFor="token-image" className="text-[10px] text-black">Image</Label>
                   <Input
+                    id="token-image"
                     type="file"
                     accept="image/*"
                     onChange={(e) => handleTokenImageChange(e.target.files?.[0] || null)}
@@ -3129,8 +3136,9 @@ export default function DashboardPage() {
             <CardContent className="space-y-2 px-2 pb-2">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
                 <div className="space-y-1">
-                  <Label className="text-[10px] text-black">Dev buy (SOL)</Label>
+                  <Label htmlFor="dev-buy-amount" className="text-[10px] text-black">Dev buy (SOL)</Label>
                   <Input
+                    id="dev-buy-amount"
                     type="number"
                     step="0.001"
                     value={devBuyAmount}
@@ -3139,8 +3147,9 @@ export default function DashboardPage() {
                   />
                 </div>
                 <div className="space-y-1">
-                  <Label className="text-[10px] text-black">Default buyer (SOL)</Label>
+                  <Label htmlFor="buyer-amount-default" className="text-[10px] text-black">Default buyer (SOL)</Label>
                   <Input
+                    id="buyer-amount-default"
                     type="number"
                     step="0.001"
                     value={buyAmountPerWallet}
