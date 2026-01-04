@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
-import { Wallet, Zap, Package, Plus, Trash2, Key, User, RefreshCw, Briefcase } from "lucide-react"
+import { Wallet, Zap, Package, Plus, Trash2, Key, User, RefreshCw, Briefcase, ArrowDownToLine } from "lucide-react"
 import { toast } from "sonner"
 import { useWallet } from "@solana/wallet-adapter-react"
 import { LAMPORTS_PER_SOL, PublicKey, SystemProgram, Transaction, Keypair } from "@solana/web3.js"
@@ -63,6 +63,7 @@ export default function WalletToolsPage() {
   const [gasAmount, setGasAmount] = useState("0.003")
   const [gasLoading, setGasLoading] = useState(false)
   const [ataLoading, setAtaLoading] = useState(false)
+  const [collectingSol, setCollectingSol] = useState(false)
   const [clearingWallets, setClearingWallets] = useState(false)
   const [funderWalletRecord, setFunderWalletRecord] = useState<FunderWalletRecord | null>(null)
   const [funderWalletInput, setFunderWalletInput] = useState("")
@@ -395,6 +396,99 @@ export default function WalletToolsPage() {
       setClearingWallets(false)
     }
   }, [bundlerWallets, loadSavedWallets])
+
+  const handleCollectSol = useCallback(async () => {
+    if (!publicKey) {
+      toast.error("connect wallet first")
+      return
+    }
+    const active = bundlerWallets.filter(w => w.isActive)
+    if (active.length === 0) {
+      toast.error("no active wallets")
+      return
+    }
+
+    setCollectingSol(true)
+    try {
+      // 1. Refresh balances first to get accurate amount
+      toast.info("checking wallet balances...")
+      const refreshRes = await fetch("/api/bundler/wallets", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "refresh", wallets: active }),
+      })
+      const refreshData = await refreshRes.json()
+      const currentWallets: BundlerWallet[] = refreshData.wallets || active
+
+      // 2. Calculate total withdrawals
+      // collectSol leaves ~5000 lamports (0.000005 SOL)
+      const FEE_BUFFER = 0.000005
+      let totalToCollect = 0
+      const walletsWithFunds = currentWallets.filter(w => {
+        const available = w.solBalance - FEE_BUFFER
+        if (available > 0) {
+          totalToCollect += available
+          return true
+        }
+        return false
+      })
+
+      if (walletsWithFunds.length === 0) {
+        toast.info("no wallets have enough SOL to collect")
+        setCollectingSol(false)
+        return
+      }
+
+      // 3. Confirm
+      const confirmed = window.confirm(
+        `Are you sure you want to withdraw ~${totalToCollect.toFixed(4)} SOL from ${walletsWithFunds.length} wallets to your connected wallet (${publicKey.toBase58().slice(0, 4)}...)?`
+      )
+
+      if (!confirmed) {
+        setCollectingSol(false)
+        return
+      }
+
+      toast.info(`Collecting SOL from ${walletsWithFunds.length} wallets...`)
+
+      const res = await fetch("/api/bundler/wallets", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "collect",
+          wallets: walletsWithFunds,
+          recipientAddress: publicKey.toBase58(),
+        }),
+      })
+
+      const data = await res.json()
+      if (data.error) {
+        throw new Error(data.error)
+      }
+
+      toast.success(`Successfully collected funds! txs: ${data.signatures?.length || 0}`)
+      addSystemLog(`Collected SOL from ${walletsWithFunds.length} wallets`, "success")
+
+      // Refresh UI
+      if (data.wallets) {
+        setBundlerWallets(prev => {
+           // Merge updates
+           const map = new Map(prev.map(w => [w.publicKey, w]))
+           data.wallets.forEach((w: BundlerWallet) => map.set(w.publicKey, w))
+           return Array.from(map.values())
+        })
+      } else {
+        loadSavedWallets()
+      }
+
+    } catch (error: any) {
+      console.error("collect sol error:", error)
+      toast.error(error.message || "failed to collect sol")
+      addSystemLog(`Collect SOL failed: ${error.message}`, "error")
+    } finally {
+      setCollectingSol(false)
+    }
+  }, [bundlerWallets, publicKey, addSystemLog, loadSavedWallets])
 
   const distributeGas = useCallback(async () => {
     const active = bundlerWallets.filter(w => w.isActive)
@@ -769,6 +863,21 @@ export default function WalletToolsPage() {
                 title="Generate wallets"
               >
                 <Plus className="w-3 h-3" />
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={handleCollectSol}
+                disabled={collectingSol || !publicKey || activeWallets.length === 0}
+                className="h-6 px-2 border-neutral-700 disabled:opacity-50 hover:bg-green-900/20 hover:text-green-400"
+                aria-label="Collect SOL to connected wallet"
+                title="Collect SOL from wallets"
+              >
+                {collectingSol ? (
+                  <div className="w-3 h-3 border border-current border-t-transparent rounded-full animate-spin" />
+                ) : (
+                  <ArrowDownToLine className="w-3 h-3" />
+                )}
               </Button>
               <Button
                 size="sm"
