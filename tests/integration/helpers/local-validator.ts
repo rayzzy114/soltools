@@ -67,6 +67,15 @@ class MockBankrunConnection {
   }
 }
 
+/**
+ * Prepare a test-local validator environment and provide a mock Solana connection with a no-op stopper.
+ *
+ * This function ensures test-related environment variables (RPC, ANCHOR_PROVIDER_URL, TEST_BANKRUN) are set to a local mock RPC URL, constructs a mock Connection suitable for integration tests, and returns a stop function that performs no operation.
+ *
+ * @returns An object with:
+ *  - `connection` — a mock `Connection` instance that simulates a local validator for tests.
+ *  - `stop` — an async no-op function to satisfy lifecycle APIs.
+ */
 export async function ensureLocalValidator(): Promise<{
   connection: Connection
   stop: () => Promise<void>
