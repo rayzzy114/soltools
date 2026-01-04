@@ -65,11 +65,21 @@ export async function POST(request: NextRequest) {
     const expandedBuyAmounts = activeWallets.map((_, i) => rawBuyAmounts[i] ?? fallbackAmount)
 
     const combined = activeWallets.map((w, i) => ({ w, amt: expandedBuyAmounts[i] }))
-    combined.sort((a, b) => {
-      if (a.w.role === "dev") return -1
-      if (b.w.role === "dev") return 1
-      return 0
-    })
+
+    // Explicitly find Dev wallet
+    const devIndex = combined.findIndex(x => x.w.role?.toLowerCase() === 'dev')
+    if (devIndex > 0) {
+      const [devItem] = combined.splice(devIndex, 1)
+      combined.unshift(devItem)
+    } else {
+        combined.sort((a, b) => {
+          const aIsDev = a.w.role?.toLowerCase() === 'dev'
+          const bIsDev = b.w.role?.toLowerCase() === 'dev'
+          if (aIsDev) return -1
+          if (bIsDev) return 1
+          return 0
+        })
+    }
 
     activeWallets = combined.map((x) => x.w)
     const sortedBuyAmounts = combined.map((x) => x.amt)

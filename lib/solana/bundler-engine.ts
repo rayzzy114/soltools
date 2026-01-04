@@ -1223,11 +1223,22 @@ export async function createLaunchBundle(config: BundleConfig): Promise<BundleRe
   const expandedBuyAmounts = activeWallets.map((_, i) => rawBuyAmounts[i] ?? fallbackAmount)
 
   const combined = activeWallets.map((w, i) => ({ w, amt: expandedBuyAmounts[i] }))
-  combined.sort((a, b) => {
-    if (a.w.role === "dev") return -1
-    if (b.w.role === "dev") return 1
-    return 0
-  })
+
+  // Explicitly find Dev wallet
+  const devIndex = combined.findIndex(x => x.w.role?.toLowerCase() === 'dev')
+  if (devIndex > 0) {
+    const [devItem] = combined.splice(devIndex, 1)
+    combined.unshift(devItem)
+  } else {
+      // Fallback sort if not found or already at 0 (robustness)
+      combined.sort((a, b) => {
+        const aIsDev = a.w.role?.toLowerCase() === 'dev'
+        const bIsDev = b.w.role?.toLowerCase() === 'dev'
+        if (aIsDev) return -1
+        if (bIsDev) return 1
+        return 0
+      })
+  }
 
   activeWallets = combined.map((x) => x.w)
   const sortedBuyAmounts = combined.map((x) => x.amt)
@@ -1236,6 +1247,7 @@ export async function createLaunchBundle(config: BundleConfig): Promise<BundleRe
     const mintKeypair = Keypair.generate()
     const mint = mintKeypair.publicKey
 
+    // Force dev wallet to be the one we found/sorted to top
     const devWallet = activeWallets[0]
     const devKeypair = getKeypair(devWallet)
     const safeSlippage = Math.min(Math.max(Math.floor(slippage), 0), 99)
