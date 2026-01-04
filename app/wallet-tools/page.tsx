@@ -47,17 +47,11 @@ const WALLET_SELECTION_STORAGE_KEY = "dashboardSelectedWallets"
 const FUNDER_SECRET_KEY = "funderSecretKey"
 
 /**
- * Dashboard UI for managing bundler wallets, funding, gas distribution, ATA creation, and token selection.
+ * Render the WalletToolsPage dashboard for managing bundler wallets, funding, gas distribution, ATA creation, token selection, and system logs.
  *
- * Provides controls and displays for:
- * - loading and selecting tokens,
- * - generating, clearing and listing bundler wallets,
- * - configuring and saving a funder wallet (including top-ups),
- * - distributing SOL gas to active wallets from the configured funder wallet (topped up via connected wallet),
- * - creating associated token accounts (ATAs) for active wallets,
- * - persisting and displaying system logs.
+ * Provides UI controls and state for token selection, generating/clearing/listing bundler wallets, configuring and topping up a funder wallet, distributing SOL gas to active wallets, creating associated token accounts (ATAs) in batches, and persisting/displaying system logs.
  *
- * @returns The rendered WalletToolsPage React component tree.
+ * @returns The WalletToolsPage React component tree
  */
 export default function WalletToolsPage() {
   const { publicKey, sendTransaction, connected } = useWallet()
@@ -169,27 +163,28 @@ export default function WalletToolsPage() {
         return
       }
       if (data.wallets && Array.isArray(data.wallets)) {
-        // Optimistic update
-        setBundlerWallets(data.wallets)
+        let walletsToUse = data.wallets
 
-        // Refresh in background
-        if (data.wallets.length > 0) {
-          fetch("/api/bundler/wallets", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              action: "refresh",
-              wallets: data.wallets,
-            }),
-          })
-          .then(res => res.json())
-          .then(refreshData => {
-            if (refreshData.wallets && Array.isArray(refreshData.wallets)) {
-              setBundlerWallets(refreshData.wallets)
+        if (walletsToUse.length > 0) {
+          try {
+            const refreshRes = await fetch("/api/bundler/wallets", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                action: "refresh",
+                wallets: walletsToUse,
+              }),
+            })
+            const refreshData = await refreshRes.json()
+            if (refreshRes.ok && refreshData.wallets && Array.isArray(refreshData.wallets)) {
+              walletsToUse = refreshData.wallets
             }
-          })
-          .catch(err => console.error("background wallet refresh failed", err))
+          } catch (err) {
+            console.error("wallet refresh failed", err)
+          }
         }
+
+        setBundlerWallets(walletsToUse)
       }
     } catch (error: any) {
       console.error("failed to load saved wallets:", error)

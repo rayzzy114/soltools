@@ -139,6 +139,15 @@ const WalletRow = memo(({ wallet, index, onSelect }: { wallet: BundlerWallet, in
 })
 WalletRow.displayName = "WalletRow"
 
+/**
+ * Renders the dashboard UI for launching tokens, managing bundler wallets, running the volume bot, and viewing token/market data.
+ *
+ * The component provides launch-stage flows (token metadata, dev/buyer wallet selection, funding and launch)
+ * and main-stage features (token info, rugpull tools, volume-bot controls, holders, live trades, and system logs).
+ * It manages state, periodic data fetching, wallet operations, bot control, and system logging.
+ *
+ * @returns The Dashboard page as a React element containing the full launch and main-stage UI and related controls.
+ */
 export default function DashboardPage() {
   const [stats, setStats] = useState<DashboardStats>({
     activeTokens: 0,
@@ -443,49 +452,50 @@ export default function DashboardPage() {
         return
       }
 
-        if (data.wallets && Array.isArray(data.wallets)) {
-          // Optimistic update: show cached wallets immediately
-          setBundlerWallets(data.wallets)
+      if (data.wallets && Array.isArray(data.wallets)) {
+        let walletsToUse = data.wallets
 
-          // Refresh in background
-          if (data.wallets.length > 0) {
-            fetch("/api/bundler/wallets", {
+        if (walletsToUse.length > 0) {
+          try {
+            const refreshRes = await fetch("/api/bundler/wallets", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
                 action: "refresh",
-                wallets: data.wallets,
+                wallets: walletsToUse,
               }),
             })
-            .then(res => res.json())
-            .then(refreshData => {
-              if (refreshData.wallets && Array.isArray(refreshData.wallets)) {
-                setBundlerWallets(refreshData.wallets)
-              }
-            })
-            .catch(err => console.error("background wallet refresh failed", err))
+            const refreshData = await refreshRes.json()
+            if (refreshRes.ok && refreshData.wallets && Array.isArray(refreshData.wallets)) {
+              walletsToUse = refreshData.wallets
+            }
+          } catch (err) {
+            console.error("background wallet refresh failed", err)
           }
-
-          const nextWallets = data.wallets
-          // Restore selections from roles
-          const dev = nextWallets.find((w: any) => w.role === 'dev')
-          if (dev) {
-            setLaunchDevWallet(dev.publicKey)
-          }
-
-          const buyers = nextWallets.filter((w: any) => w.role === 'buyer')
-          if (buyers.length > 0) {
-            setBuyerWallets(prev => {
-              const existingKeys = new Set(prev.map(b => b.publicKey))
-              const newBuyers = buyers
-                .filter((b: any) => !existingKeys.has(b.publicKey))
-                .map((b: any) => ({ publicKey: b.publicKey, amount: buyAmountPerWallet || "0.01" }))
-
-              return [...prev, ...newBuyers]
-            })
-          }
-          // no toast: avoid noisy "loaded X saved wallets" popup
         }
+
+        setBundlerWallets(walletsToUse)
+
+        const nextWallets = walletsToUse
+        // Restore selections from roles
+        const dev = nextWallets.find((w: any) => w.role === 'dev')
+        if (dev) {
+          setLaunchDevWallet(dev.publicKey)
+        }
+
+        const buyers = nextWallets.filter((w: any) => w.role === 'buyer')
+        if (buyers.length > 0) {
+          setBuyerWallets(prev => {
+            const existingKeys = new Set(prev.map(b => b.publicKey))
+            const newBuyers = buyers
+              .filter((b: any) => !existingKeys.has(b.publicKey))
+              .map((b: any) => ({ publicKey: b.publicKey, amount: buyAmountPerWallet || "0.01" }))
+
+            return [...prev, ...newBuyers]
+          })
+        }
+        // no toast: avoid noisy "loaded X saved wallets" popup
+      }
     } catch (error: any) {
       console.error("failed to load saved wallets:", error)
       toast.error(`failed to load wallets: ${error.message || "unknown error"}`)
@@ -3378,6 +3388,5 @@ export default function DashboardPage() {
     </div>
   )
 }
-
 
 
