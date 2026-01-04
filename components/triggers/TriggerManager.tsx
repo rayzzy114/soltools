@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useCallback } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -95,13 +95,7 @@ export function TriggerManager({
   const [sellPercent, setSellPercent] = useState("100")
   const [slippage, setSlippage] = useState("10")
 
-  useEffect(() => {
-    fetchTriggers()
-    const interval = setInterval(fetchTriggers, 5000)
-    return () => clearInterval(interval)
-  }, [mintAddress])
-
-  const fetchTriggers = async () => {
+  const fetchTriggers = useCallback(async () => {
     try {
       const res = await fetch(`/api/triggers?mint=${mintAddress}`)
       const data = await res.json()
@@ -110,7 +104,13 @@ export function TriggerManager({
     } catch (error) {
       // silent fail
     }
-  }
+  }, [mintAddress])
+
+  useEffect(() => {
+    fetchTriggers()
+    const interval = setInterval(fetchTriggers, 5000)
+    return () => clearInterval(interval)
+  }, [fetchTriggers])
 
   const createTrigger = async () => {
     setLoading(true)
