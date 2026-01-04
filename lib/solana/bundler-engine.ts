@@ -469,8 +469,17 @@ export async function getOrCreateLUT(
   await connection.confirmTransaction({ signature: createSig, blockhash: createBlockhash, lastValidBlockHeight: createLvh })
 
   const minSlot = recentSlot + 1
-  while ((await connection.getSlot()) <= minSlot) {
+  let currentSlot = await connection.getSlot()
+  let attempts = 0
+  const maxAttempts = 30 // ~12-15s wait
+  while (currentSlot <= minSlot && attempts < maxAttempts) {
     await sleep(400)
+    currentSlot = await connection.getSlot()
+    attempts++
+  }
+  if (currentSlot <= minSlot) {
+    console.warn(`[bundler] LUT creation: slot didn't advance from ${recentSlot} (now ${currentSlot}) after ${attempts} attempts`)
+    // We continue anyway, hoping RPC is just slightly behind but tx landed
   }
 
   const extendChunks = chunkArray(uniqueAddresses, maxAddresses)
@@ -774,6 +783,7 @@ export interface BundleConfig {
     fee?: number
     minDelayMs?: number
     maxDelayMs?: number
+    failOnError?: boolean
   }
   // exit
   smartExit?: boolean
@@ -1159,18 +1169,32 @@ export async function createLaunchBundle(config: BundleConfig): Promise<BundleRe
     }
 
     if (config.cexFunding?.enabled) {
-      const okxClient = createOkxClient()
-      const sniperAddresses = activeWallets.map((w) => w.publicKey)
-      if (config.cexFunding.whitelist) {
-        await whitelistWithdrawalAddresses(okxClient, sniperAddresses)
+      try {
+        const okxClient = createOkxClient()
+        const sniperAddresses = activeWallets.map((w) => w.publicKey)
+        if (config.cexFunding.whitelist) {
+          await whitelistWithdrawalAddresses(okxClient, sniperAddresses)
+        }
+
+        // Generate a session ID for idempotency if not provided in config
+        const sessionId = Date.now().toString(36)
+
+        const fundingResult = await withdrawToSnipers(okxClient, sniperAddresses, {
+          minAmount: config.cexFunding.minAmount,
+          maxAmount: config.cexFunding.maxAmount,
+          fee: config.cexFunding.fee,
+          minDelayMs: config.cexFunding.minDelayMs,
+          maxDelayMs: config.cexFunding.maxDelayMs,
+          clientOrderIdPrefix: `launch-${sessionId}`
+        })
+
+        if (config.cexFunding.failOnError && fundingResult.failed.length > 0) {
+          throw new Error(`CEX Funding failed for ${fundingResult.failed.length} wallets: ${fundingResult.failed[0].error}`)
+        }
+      } catch (error: any) {
+        if (config.cexFunding.failOnError) throw error
+        console.error("CEX Funding failed but continuing launch (failOnError=false):", error)
       }
-      await withdrawToSnipers(okxClient, sniperAddresses, {
-        minAmount: config.cexFunding.minAmount,
-        maxAmount: config.cexFunding.maxAmount,
-        fee: config.cexFunding.fee,
-        minDelayMs: config.cexFunding.minDelayMs,
-        maxDelayMs: config.cexFunding.maxDelayMs,
-      })
     }
 
     const ghostMode = Boolean((config as any).ghostMode)
@@ -1685,6 +1709,7 @@ export async function createSellBundle(config: BundleConfig): Promise<BundleResu
  *   transaction signature, and the wallet index.
  * @returns An object with `signatures` — an array of submitted transaction signatures (in submission order),
  *   and `errors` — an array of error messages for wallets that failed to submit.
+ */
 export async function createStaggeredBuys(
   config: BundleConfig,
   onTransaction?: (wallet: string, signature: string, index: number) => void
@@ -1710,6 +1735,12 @@ export async function createStaggeredBuys(
   const errors: string[] = []
 
   const mint = new PublicKey(mintAddress)
+
+  // Ensure random delay is not faster than block time
+  const resolvedDelay = {
+    min: Math.max(400, staggerDelay.min),
+    max: Math.max(400, staggerDelay.max)
+  }
 
   for (let i = 0; i < activeWallets.length; i++) {
     const wallet = activeWallets[i]
@@ -1799,6 +1830,7 @@ export async function createStaggeredBuys(
  * @param config - BundleConfig that specifies wallets, `mintAddress`, sell percentages, delay settings (`staggerDelay` / `exitDelayMs`), priority fee overrides, `slippage`, Jito tip settings (`jitoTip`, `dynamicJitoTip`, `jitoRegion`, `exitJitoRegion`), and related sell options.
  * @param onTransaction - Optional callback invoked after a successful transaction with the wallet public key (string), the transaction signature, and the wallet index.
  * @returns An object containing `signatures`: an array of submitted transaction signatures, and `errors`: an array of per-wallet error messages describing failures.
+ */
 export async function createStaggeredSells(
   config: BundleConfig,
   onTransaction?: (wallet: string, signature: string, index: number) => void

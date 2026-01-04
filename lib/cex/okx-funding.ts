@@ -1,4 +1,6 @@
 import ccxt, { okx } from "ccxt"
+import { PublicKey, LAMPORTS_PER_SOL } from "@solana/web3.js"
+import { connection } from "../solana/config"
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
@@ -15,6 +17,7 @@ export interface WithdrawOptions {
   fee?: number
   minDelayMs?: number
   maxDelayMs?: number
+  clientOrderIdPrefix?: string
 }
 
 const DEFAULT_MIN_DELAY_MS = 30_000
@@ -59,12 +62,16 @@ export async function whitelistWithdrawalAddresses(
 ): Promise<void> {
   const pwd = password ?? (client as any).password ?? process.env.OKX_PASSWORD
   for (const address of addresses) {
-    await client.fetch2("asset/withdrawal/white-list", "private", "POST", {
-      addr: address,
-      ccy: "SOL",
-      chain,
-      pwd,
-    })
+    try {
+      await client.fetch2("asset/withdrawal/white-list", "private", "POST", {
+        addr: address,
+        ccy: "SOL",
+        chain,
+        pwd,
+      })
+    } catch (error: any) {
+      console.error(`[whitelist] failed to whitelist ${address}: ${error?.message || error}`)
+    }
   }
 }
 
@@ -89,6 +96,7 @@ function randomInRange(min: number, max: number): number {
  *   - minAmount / maxAmount: lower and upper bounds for the randomized withdrawal amount (defaults 0.3 / 0.5)
  *   - fee: withdrawal fee in SOL units (default 0.01)
  *   - minDelayMs / maxDelayMs: minimum and maximum delay in milliseconds between successive withdrawals (defaults 30000 / 300000)
+ *   - clientOrderIdPrefix: optional prefix for idempotent client order IDs (e.g. session/batch ID)
  */
 export async function withdrawToSnipers(
   client: okx,
@@ -102,26 +110,52 @@ export async function withdrawToSnipers(
     fee = DEFAULT_FEE,
     minDelayMs = DEFAULT_MIN_DELAY_MS,
     maxDelayMs = DEFAULT_MAX_DELAY_MS,
+    clientOrderIdPrefix,
   } = options
 
   const success: string[] = []
   const failed: Array<{ address: string; error: string }> = []
 
-  for (const address of wallets) {
-    const amount = randomInRange(minAmount, maxAmount)
+  for (let i = 0; i < wallets.length; i++) {
+    const address = wallets[i]
     try {
-      await client.withdraw("SOL", amount, address, undefined, {
+      // 1. Check current balance before withdrawal (On-chain check)
+      const pubkey = new PublicKey(address)
+      const balance = await connection.getBalance(pubkey)
+      const targetLamports = BigInt(Math.floor(minAmount * LAMPORTS_PER_SOL))
+
+      if (BigInt(balance) >= targetLamports) {
+        console.log(`[withdraw] skipping ${address}, already funded (${balance / LAMPORTS_PER_SOL} SOL)`)
+        success.push(address)
+        continue
+      }
+
+      const amount = randomInRange(minAmount, maxAmount)
+
+      // 2. Generate Client Order ID for idempotency if prefix is provided
+      const clientOrderId = clientOrderIdPrefix
+        ? `${clientOrderIdPrefix}-${i}-${address.slice(0, 8)}`
+        : undefined
+
+      const params = {
         dest: chain,
         fee,
-      })
+        ...(clientOrderId ? { clientId: clientOrderId } : {})
+      }
+
+      await client.withdraw("SOL", amount, address, undefined, params)
       success.push(address)
     } catch (error: any) {
+      console.error(`[withdraw] failed for ${address}:`, error)
       failed.push({ address, error: error?.message || String(error) })
     }
 
-    const delay = randomInRange(minDelayMs, maxDelayMs)
-    if (delay > 0) {
-      await sleep(delay)
+    // Delay between processing (skip delay for last item)
+    if (i < wallets.length - 1) {
+      const delay = randomInRange(minDelayMs, maxDelayMs)
+      if (delay > 0) {
+        await sleep(delay)
+      }
     }
   }
   return { success, failed }

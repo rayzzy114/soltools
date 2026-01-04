@@ -106,8 +106,18 @@ export async function estimateDynamicJitoTip(
       .map((f) => f.prioritizationFee)
       .filter((v) => Number.isFinite(v) && v > 0)
       .sort((a, b) => a - b)
-    const pickIndex = Math.min(sorted.length - 1, Math.floor(sorted.length * 0.75))
-    const p75 = sorted[pickIndex] ?? 0
+
+    let p75 = 0
+    if (sorted.length === 0) {
+      p75 = 0
+    } else if (sorted.length === 1) {
+      p75 = sorted[0]
+    } else {
+      const pickIndex = Math.floor(sorted.length * 0.75)
+      const safeIndex = Math.min(sorted.length - 1, pickIndex)
+      p75 = sorted[safeIndex]
+    }
+
     const lamports = Math.min(
       ceilingLamports,
       Math.max(floorLamports, Math.floor(p75 * computeUnits * multiplier))
