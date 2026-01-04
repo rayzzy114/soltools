@@ -139,6 +139,15 @@ const WalletRow = memo(({ wallet, index, onSelect }: { wallet: BundlerWallet, in
 })
 WalletRow.displayName = "WalletRow"
 
+/**
+ * Renders the dashboard UI for launching tokens, managing bundler wallets, running the volume bot, and viewing token/market data.
+ *
+ * The component provides launch-stage flows (token metadata, dev/buyer wallet selection, funding and launch)
+ * and main-stage features (token info, rugpull tools, volume-bot controls, holders, live trades, and system logs).
+ * It manages state, periodic data fetching, wallet operations, bot control, and system logging.
+ *
+ * @returns The Dashboard page as a React element containing the full launch and main-stage UI and related controls.
+ */
 export default function DashboardPage() {
   const [stats, setStats] = useState<DashboardStats>({
     activeTokens: 0,
@@ -3379,6 +3388,5 @@ export default function DashboardPage() {
     </div>
   )
 }
-
 
 

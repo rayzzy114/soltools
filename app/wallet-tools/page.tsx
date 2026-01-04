@@ -47,17 +47,11 @@ const WALLET_SELECTION_STORAGE_KEY = "dashboardSelectedWallets"
 const FUNDER_SECRET_KEY = "funderSecretKey"
 
 /**
- * Dashboard UI for managing bundler wallets, funding, gas distribution, ATA creation, and token selection.
+ * Render the WalletToolsPage dashboard for managing bundler wallets, funding, gas distribution, ATA creation, token selection, and system logs.
  *
- * Provides controls and displays for:
- * - loading and selecting tokens,
- * - generating, clearing and listing bundler wallets,
- * - configuring and saving a funder wallet (including top-ups),
- * - distributing SOL gas to active wallets from the configured funder wallet (topped up via connected wallet),
- * - creating associated token accounts (ATAs) for active wallets,
- * - persisting and displaying system logs.
+ * Provides UI controls and state for token selection, generating/clearing/listing bundler wallets, configuring and topping up a funder wallet, distributing SOL gas to active wallets, creating associated token accounts (ATAs) in batches, and persisting/displaying system logs.
  *
- * @returns The rendered WalletToolsPage React component tree.
+ * @returns The WalletToolsPage React component tree
  */
 export default function WalletToolsPage() {
   const { publicKey, sendTransaction, connected } = useWallet()
