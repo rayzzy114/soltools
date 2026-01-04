@@ -1,0 +1,51 @@
+diff --git a/dist/node.js b/dist/node.js
+index 513168c89e387668a79b6beb109587b3eb41a7d0..cc78b5dce30197be9d430707431dde64c85344ad 100644
+--- a/dist/node.js
++++ b/dist/node.js
+@@ -3,11 +3,16 @@
+ Object.defineProperty(exports, "__esModule", { value: true });
+ let converter;
+ {
+-    try {
+-        converter = require('bindings')('bigint_buffer');
+-    }
+-    catch (e) {
+-        console.warn('bigint: Failed to load bindings, pure JS will be used (try npm run rebuild?)');
++    const disableNative = process.env.BIGINT_BUFFER_DISABLE_NATIVE === '1';
++    if (!disableNative) {
++        try {
++            converter = require('bindings')('bigint_buffer');
++        }
++        catch (e) {
++            // Fall back to the pure JS implementation without noisy warnings in environments
++            // where native compilation is not available (e.g., Windows without build tools).
++            converter = undefined;
++        }
+     }
+ }
+ /**
+diff --git a/src/index.ts b/src/index.ts
+index 3c78463c2fac414612aa49a9fd27d529a2041ec0..c43dc487e0ca0a0f3fa8d2290a8444d933ae725f 100644
+--- a/src/index.ts
++++ b/src/index.ts
+@@ -9,11 +9,15 @@ declare var process: {browser: boolean;};
+ let converter: ConverterInterface;
+ 
+ if (!process.browser) {
+-  try {
+-    converter = require('bindings')('bigint_buffer');
+-  } catch (e) {
+-    console.warn(
+-        'bigint: Failed to load bindings, pure JS will be used (try npm run rebuild?)');
++  const disableNative = process.env.BIGINT_BUFFER_DISABLE_NATIVE === '1';
++  if (!disableNative) {
++    try {
++      converter = require('bindings')('bigint_buffer');
++    } catch (e) {
++      // Fall back to the pure JS implementation without noisy warnings in environments
++      // where native compilation is not available (e.g., Windows without build tools).
++      converter = undefined;
++    }
+   }
+ }
+ 
