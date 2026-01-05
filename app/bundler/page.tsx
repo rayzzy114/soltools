@@ -1659,24 +1659,25 @@ export default function BundlerPage() {
                       </Button>
                     </div>
                   </div>
-                )}
-                <div className="space-y-2">
-                  <Input
-                    placeholder="funder wallet address..."
-                    value={funderWalletInput}
-                    onChange={(e) => setFunderWalletInput(e.target.value)}
-                    className="bg-neutral-800 border-neutral-700 text-white"
-                  />
-                  <div className="flex gap-2">
-                    <Button onClick={() => updateWalletRole(funderWalletInput, "funder")} className="flex-1 bg-green-600 hover:bg-green-700">
-                      <Plus className="w-4 h-4 mr-1" />
-                      Set Funder
-                    </Button>
-                    <Button onClick={() => generateRoleWallet("funder")} variant="outline" className="border-neutral-700">
-                      Generate
-                    </Button>
+                ) : (
+                  <div className="space-y-2">
+                    <Input
+                      placeholder="funder wallet address..."
+                      value={funderWalletInput}
+                      onChange={(e) => setFunderWalletInput(e.target.value)}
+                      className="bg-neutral-800 border-neutral-700 text-white"
+                    />
+                    <div className="flex gap-2">
+                      <Button onClick={() => updateWalletRole(funderWalletInput, "funder")} className="flex-1 bg-green-600 hover:bg-green-700">
+                        <Plus className="w-4 h-4 mr-1" />
+                        Set Funder
+                      </Button>
+                      <Button onClick={() => generateRoleWallet("funder")} variant="outline" className="border-neutral-700">
+                        Generate
+                      </Button>
+                    </div>
                   </div>
-                </div>
+                )}
               </CardContent>
             </Card>
           </div>
