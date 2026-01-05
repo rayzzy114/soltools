@@ -7,6 +7,14 @@ export default defineConfig({
   use: {
     baseURL: process.env.PLAYWRIGHT_BASE_URL || "http://localhost:3000",
     headless: true,
+    ...(process.env.BASIC_AUTH_USER && process.env.BASIC_AUTH_PASS
+      ? {
+          httpCredentials: {
+            username: process.env.BASIC_AUTH_USER,
+            password: process.env.BASIC_AUTH_PASS,
+          },
+        }
+      : {}),
   },
   projects: [
     {

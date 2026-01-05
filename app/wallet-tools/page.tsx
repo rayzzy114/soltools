@@ -9,10 +9,10 @@ import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import { Checkbox } from "@/components/ui/checkbox"
-import { Wallet, Zap, Package, Plus, Trash2, RefreshCw, ArrowDownToLine, Download, Copy, Key } from "lucide-react"
+import { Wallet, Zap, Package, Plus, Trash2, RefreshCw, ArrowDownToLine, Download, Copy } from "lucide-react"
 import { toast } from "sonner"
 import { useWallet } from "@solana/wallet-adapter-react"
-import { LAMPORTS_PER_SOL, PublicKey, SystemProgram, Transaction, Keypair } from "@solana/web3.js"
+import { LAMPORTS_PER_SOL, PublicKey, SystemProgram, TransactionMessage, VersionedTransaction, Keypair } from "@solana/web3.js"
 import bs58 from "bs58"
 import { getResilientConnection } from "@/lib/solana/config"
 
@@ -44,7 +44,6 @@ interface FunderWalletRecord {
 }
 
 const LAST_TOKEN_STORAGE_KEY = "dashboardLastTokenMint"
-const FUNDER_SECRET_KEY = "funderSecretKey"
 const GAS_AMOUNT_KEY = "walletToolsGasAmount"
 
 /**
@@ -60,7 +59,6 @@ export default function WalletToolsPage() {
   const [selectedToken, setSelectedToken] = useState<Token | null>(null)
   const [bundlerWallets, setBundlerWallets] = useState<BundlerWallet[]>([])
   const [walletCount, setWalletCount] = useState("5")
-  const [funderKey, setFunderKey] = useState("")
   const [gasAmount, setGasAmount] = useState("0.003")
   const [gasLoading, setGasLoading] = useState(false)
   const [ataLoading, setAtaLoading] = useState(false)
@@ -79,6 +77,15 @@ export default function WalletToolsPage() {
   const [selectedWallets, setSelectedWallets] = useState<Set<string>>(new Set())
 
   const activeWallets = useMemo(() => bundlerWallets.filter(w => w.isActive), [bundlerWallets])
+  const devWalletRecord = useMemo(
+    () => bundlerWallets.find((wallet) => wallet.role === "dev") || null,
+    [bundlerWallets]
+  )
+  const funderWalletDb = useMemo(
+    () => bundlerWallets.find((wallet) => wallet.role === "funder") || null,
+    [bundlerWallets]
+  )
+  const recipientWallet = funderWalletDb || devWalletRecord
   const selectedTokenValue = selectedToken?.mintAddress || ""
 
   const normalizeTokenList = useCallback((data: any[]): Token[] => {
@@ -177,7 +184,7 @@ export default function WalletToolsPage() {
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
                 action: "refresh",
-                wallets: walletsToUse,
+                walletPublicKeys: walletsToUse.map((wallet: BundlerWallet) => wallet.publicKey),
               }),
             })
             const refreshData = await refreshRes.json()
@@ -265,8 +272,8 @@ export default function WalletToolsPage() {
     }
   }, [])
 
-  const saveFunderWallet = useCallback(async (overridePublicKey?: string) => {
-    const trimmed = overridePublicKey || funderWalletInput.trim()
+  const saveFunderWallet = useCallback(async (options?: { publicKey?: string; secretKey?: string }) => {
+    const trimmed = options?.publicKey || funderWalletInput.trim()
     if (!trimmed) {
       toast.error("enter funder wallet address")
       return
@@ -279,6 +286,30 @@ export default function WalletToolsPage() {
     }
     setFunderSaving(true)
     try {
+      if (options?.secretKey) {
+        const importRes = await fetch("/api/bundler/wallets", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "import", secretKey: options.secretKey, label: "Funder" }),
+        })
+        const importData = await importRes.json().catch(() => ({}))
+        if (!importRes.ok || importData?.error) {
+          toast.error(importData?.error || "failed to import funder wallet into database")
+          return
+        }
+      }
+
+      const roleRes = await fetch("/api/bundler/wallets", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "update", publicKey: trimmed, role: "funder" }),
+      })
+      const roleData = await roleRes.json().catch(() => ({}))
+      if (!roleRes.ok || roleData?.error) {
+        toast.error(roleData?.error || "funder wallet not found in database")
+        return
+      }
+
       const res = await fetch("/api/funder", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -292,12 +323,13 @@ export default function WalletToolsPage() {
       setFunderWalletRecord(data.funderWallet)
       refreshFunderBalance(data.funderWallet.publicKey)
       toast.success("funder wallet saved")
+      loadSavedWallets({ silent: true })
     } catch (error: any) {
       toast.error(error?.message || "failed to save funder wallet")
     } finally {
       setFunderSaving(false)
     }
-  }, [funderWalletInput, refreshFunderBalance])
+  }, [funderWalletInput, loadSavedWallets, refreshFunderBalance])
 
   const deleteFunderWallet = useCallback(async () => {
     if (!funderWalletRecord) return
@@ -325,10 +357,6 @@ export default function WalletToolsPage() {
   }, [funderWalletRecord])
 
   const topupFunderWallet = useCallback(async () => {
-    if (!publicKey) {
-      toast.error("connect wallet first")
-      return
-    }
     if (!funderWalletRecord?.publicKey) {
       toast.error("set funder wallet first")
       return
@@ -346,13 +374,19 @@ export default function WalletToolsPage() {
     setFunderToppingUp(true)
     try {
       const connection = await getResilientConnection()
-      const tx = new Transaction().add(SystemProgram.transfer({
-        fromPubkey: publicKey,
-        toPubkey: new PublicKey(funderWalletRecord.publicKey),
-        lamports,
-      }))
+      const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash()
+      const message = new TransactionMessage({
+        payerKey: publicKey,
+        recentBlockhash: blockhash,
+        instructions: [SystemProgram.transfer({
+          fromPubkey: publicKey,
+          toPubkey: new PublicKey(funderWalletRecord.publicKey),
+          lamports,
+        })],
+      }).compileToV0Message()
+      const tx = new VersionedTransaction(message)
       const signature = await sendTransaction(tx, connection)
-      await connection.confirmTransaction(signature, "confirmed")
+      await connection.confirmTransaction({ signature, blockhash, lastValidBlockHeight }, "confirmed")
       await fetch("/api/funder/topup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -462,7 +496,7 @@ export default function WalletToolsPage() {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
                 action: "refresh",
-                wallets: [wallet],
+                walletPublicKeys: [wallet.publicKey],
             }),
         })
         const data = await res.json()
@@ -483,8 +517,8 @@ export default function WalletToolsPage() {
   }, [])
 
   const handleCollectSol = useCallback(async () => {
-    if (!publicKey) {
-      toast.error("connect wallet first")
+    if (!recipientWallet) {
+      toast.error("configure funder or dev wallet first")
       return
     }
     const active = bundlerWallets.filter(w => w.isActive)
@@ -500,7 +534,7 @@ export default function WalletToolsPage() {
       const refreshRes = await fetch("/api/bundler/wallets", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "refresh", wallets: active }),
+        body: JSON.stringify({ action: "refresh", walletPublicKeys: active.map((wallet) => wallet.publicKey) }),
       })
       const refreshData = await refreshRes.json()
       const currentWallets: BundlerWallet[] = refreshData.wallets || active
@@ -526,7 +560,7 @@ export default function WalletToolsPage() {
 
       // 3. Confirm
       const confirmed = window.confirm(
-        `Are you sure you want to withdraw ~${totalToCollect.toFixed(4)} SOL from ${walletsWithFunds.length} wallets to your connected wallet (${publicKey.toBase58().slice(0, 4)}...)?`
+        `Are you sure you want to withdraw ~${totalToCollect.toFixed(4)} SOL from ${walletsWithFunds.length} wallets to ${recipientWallet.publicKey.slice(0, 4)}...?`
       )
 
       if (!confirmed) {
@@ -541,8 +575,8 @@ export default function WalletToolsPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           action: "collect",
-          wallets: walletsWithFunds,
-          recipientAddress: publicKey.toBase58(),
+          walletPublicKeys: walletsWithFunds.map((wallet) => wallet.publicKey),
+          recipientAddress: recipientWallet.publicKey,
         }),
       })
 
@@ -573,7 +607,7 @@ export default function WalletToolsPage() {
     } finally {
       setCollectingSol(false)
     }
-  }, [bundlerWallets, publicKey, addSystemLog, loadSavedWallets])
+  }, [bundlerWallets, recipientWallet, addSystemLog, loadSavedWallets])
 
   // Handle Gas Amount Change with Persistence
   const handleGasAmountChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -606,14 +640,14 @@ export default function WalletToolsPage() {
       const amountPerWallet = (!isNaN(parsedAmount) && parsedAmount > 0) ? parsedAmount : 0.003
 
       const totalSolNeeded = (amountPerWallet * active.length) + 0.01
-      if (!funderWalletRecord) {
-        const error = "Funder wallet not selected"
+      if (!funderWalletDb) {
+        const error = "Funder wallet not configured in database"
         addSystemLog(error, "error")
         toast.error(error)
         return
       }
 
-      const funderPubkey = new PublicKey(funderWalletRecord.publicKey)
+      const funderPubkey = new PublicKey(funderWalletDb.publicKey)
 
       const balanceRes = await fetch(`/api/solana/balance?publicKey=${funderPubkey.toBase58()}`)
       const balanceData = await balanceRes.json()
@@ -632,8 +666,8 @@ export default function WalletToolsPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           action: "fund",
-          funderAddress: funderWalletRecord.publicKey,
-          wallets: active,
+          funderAddress: funderWalletDb.publicKey,
+          walletPublicKeys: active.map((wallet) => wallet.publicKey),
           amounts: active.map(() => amountPerWallet),
         }),
       })
@@ -666,7 +700,7 @@ export default function WalletToolsPage() {
     } finally {
       setGasLoading(false)
     }
-  }, [addSystemLog, bundlerWallets, funderKey, gasAmount, loadSavedWallets, refreshFunderBalance])
+  }, [addSystemLog, bundlerWallets, funderWalletDb, gasAmount, loadSavedWallets, refreshFunderBalance])
 
   const createATAs = useCallback(async () => {
     if (!selectedToken || activeWallets.length === 0) return
@@ -691,7 +725,7 @@ export default function WalletToolsPage() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             action: "create-atas",
-            wallets: batch,
+            walletPublicKeys: batch.map((wallet) => wallet.publicKey),
             mintAddress: selectedToken.mintAddress
           })
         })
@@ -781,9 +815,6 @@ export default function WalletToolsPage() {
   useEffect(() => {
     loadFunderWallet()
     if (typeof window !== "undefined") {
-      const stored = window.localStorage.getItem(FUNDER_SECRET_KEY)
-      if (stored) setFunderKey(stored)
-
       const savedGas = window.localStorage.getItem(GAS_AMOUNT_KEY)
       if (savedGas) setGasAmount(savedGas)
     }
@@ -831,8 +862,7 @@ export default function WalletToolsPage() {
               <div className="flex gap-2">
                 <Button
                   size="sm"
-                  onClick={() => {
-                     // Check if input is a private key
+                  onClick={async () => {
                      let pubkey = funderWalletInput.trim()
                      let secretKey = ""
                      try {
@@ -842,16 +872,11 @@ export default function WalletToolsPage() {
                             pubkey = pair.publicKey.toBase58()
                             secretKey = bs58.encode(pair.secretKey)
                             setFunderWalletInput(pubkey)
-                            if (typeof window !== "undefined") {
-                                window.localStorage.setItem(FUNDER_SECRET_KEY, secretKey)
-                                setFunderKey(secretKey)
-                            }
                         }
                      } catch {
                         // Not a private key, treat as pubkey
                      }
-                     // Pass the derived pubkey explicitly to avoid race condition with state
-                     saveFunderWallet(pubkey)
+                     await saveFunderWallet({ publicKey: pubkey, secretKey: secretKey || undefined })
                   }}
                   disabled={funderSaving}
                   className="h-7 px-2 text-[10px] bg-blue-600 hover:bg-blue-700"
@@ -863,29 +888,15 @@ export default function WalletToolsPage() {
                   variant="outline"
                   onClick={async () => {
                      try {
-                        const keypair = Keypair.generate()
-                        const pubkey = keypair.publicKey.toBase58()
-                        const secretKey = bs58.encode(keypair.secretKey)
-                        setFunderWalletInput(pubkey)
-                        if (typeof window !== "undefined") {
-                            window.localStorage.setItem(FUNDER_SECRET_KEY, secretKey)
-                            setFunderKey(secretKey)
-                        }
-                        // Auto-save logic
-                        setFunderSaving(true)
-                        const res = await fetch("/api/funder", {
-                          method: "POST",
-                          headers: { "Content-Type": "application/json" },
-                          body: JSON.stringify({ publicKey: pubkey }),
-                        })
+                        const res = await fetch("/api/bundler/wallets?action=generate&label=Funder")
                         const data = await res.json()
-                        if (!res.ok || data?.error) {
-                          toast.error(data?.error || "failed to save funder wallet")
-                          setFunderSaving(false)
+                        if (!res.ok || data?.error || !data?.wallet?.publicKey) {
+                          toast.error(data?.error || "failed to generate funder wallet")
                           return
                         }
-                        setFunderWalletRecord(data.funderWallet)
-                        setFunderSaving(false)
+                        const pubkey = data.wallet.publicKey
+                        setFunderWalletInput(pubkey)
+                        await saveFunderWallet({ publicKey: pubkey })
                         toast.success("Generated & saved new funder wallet")
                      } catch (e: any) {
                          toast.error("Failed to generate: " + e.message)
@@ -900,10 +911,6 @@ export default function WalletToolsPage() {
                   variant="outline"
                   onClick={() => {
                       deleteFunderWallet()
-                      if (typeof window !== "undefined") {
-                          window.localStorage.removeItem(FUNDER_SECRET_KEY)
-                          setFunderKey("")
-                      }
                   }}
                   disabled={funderSaving || !funderWalletRecord}
                   className="h-7 px-2 text-[10px] border-neutral-700"
@@ -956,9 +963,9 @@ export default function WalletToolsPage() {
             <div className="space-y-1">
               <Label className="text-[10px] text-slate-600">Funder Wallet</Label>
               <Input
-                type="password"
-                placeholder="funder wallet private key"
-                value={funderKey}
+                type="text"
+                placeholder="funder wallet address"
+                value={funderWalletDb?.publicKey || "not set"}
                 readOnly
                 className="h-7 bg-neutral-950/50 border-border text-xs text-slate-500 cursor-not-allowed"
               />
@@ -1003,15 +1010,15 @@ export default function WalletToolsPage() {
               >
                 <Plus className="w-3 h-3" />
               </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={handleCollectSol}
-                disabled={collectingSol || !publicKey || activeWallets.length === 0}
-                className="h-6 px-2 border-neutral-700 disabled:opacity-50 hover:bg-green-900/20 hover:text-green-400"
-                aria-label="Collect SOL to connected wallet"
-                title="Collect SOL from wallets"
-              >
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={handleCollectSol}
+                  disabled={collectingSol || !recipientWallet || activeWallets.length === 0}
+                  className="h-6 px-2 border-neutral-700 disabled:opacity-50 hover:bg-green-900/20 hover:text-green-400"
+                  aria-label="Collect SOL to funder/dev wallet"
+                  title="Collect SOL from wallets"
+                >
                 {collectingSol ? (
                   <div className="w-3 h-3 border border-current border-t-transparent rounded-full animate-spin" />
                 ) : (
@@ -1061,7 +1068,7 @@ export default function WalletToolsPage() {
                     <Button
                       size="sm"
                       onClick={distributeGas}
-                      disabled={activeWallets.length === 0 || gasLoading || !funderKey}
+                      disabled={activeWallets.length === 0 || gasLoading || !funderWalletDb}
                       className="h-6 px-2 bg-blue-600 hover:bg-blue-700 text-xs disabled:opacity-50"
                       aria-label="Distribute gas"
                     >

@@ -126,14 +126,12 @@ BuyerWalletList.displayName = "BuyerWalletList"
 
 interface DevWalletSelectProps {
   launchDevWallet: string
-  connectedWalletKey: string
   devWalletOptions: BundlerWallet[]
   onSelect: (value: string) => void
 }
 
 export const DevWalletSelect = memo(({
   launchDevWallet,
-  connectedWalletKey,
   devWalletOptions,
   onSelect
 }: DevWalletSelectProps) => {
@@ -147,9 +145,6 @@ export const DevWalletSelect = memo(({
       </SelectTrigger>
       <SelectContent>
         {devWalletOptions.map((wallet, index) => {
-          const isConnectedWallet = connectedWalletKey.length > 0 && wallet.publicKey === connectedWalletKey
-          const labelPrefix = isConnectedWallet ? "Connected" : "Balance"
-
           let roleColor = "text-slate-400"
           let roleLabel = ""
           if (wallet.role === 'dev') { roleColor = "text-purple-400"; roleLabel = "DEV" }
@@ -162,7 +157,7 @@ export const DevWalletSelect = memo(({
             <SelectItem key={wallet.publicKey} value={wallet.publicKey}>
               <div className="flex items-center gap-2">
                 <span className="text-neutral-600 font-bold font-mono text-[10px]">#{index + 1}</span>
-                <span className="text-neutral-800 font-medium">{labelPrefix}: {wallet.solBalance.toFixed(4)} SOL</span>
+                <span className="text-neutral-800 font-medium">Balance: {wallet.solBalance.toFixed(4)} SOL</span>
                 <span className="text-neutral-400">-</span>
                 <span className="font-mono text-neutral-900 font-semibold">{wallet.publicKey.slice(0, 6)}...{wallet.publicKey.slice(-4)}</span>
                 {roleLabel && (

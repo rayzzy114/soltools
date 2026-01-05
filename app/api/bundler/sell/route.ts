@@ -78,7 +78,7 @@ export async function POST(request: NextRequest) {
 
     const body = await request.json()
     const {
-      wallets,
+      walletPublicKeys,
       mintAddress,
       sellPercentages = [], // 100 = sell all
       mode = "bundle", // "bundle" or "stagger"
@@ -90,19 +90,38 @@ export async function POST(request: NextRequest) {
     } = body
 
     // validation
-    if (!wallets || !Array.isArray(wallets) || wallets.length === 0) {
-      return NextResponse.json({ error: "wallets array required" }, { status: 400 })
+    if (!walletPublicKeys || !Array.isArray(walletPublicKeys) || walletPublicKeys.length === 0) {
+      return NextResponse.json({ error: "walletPublicKeys array required" }, { status: 400 })
     }
 
     if (!mintAddress) {
       return NextResponse.json({ error: "mintAddress required" }, { status: 400 })
     }
 
-    const activeWallets = (wallets as BundlerWallet[])
-      .filter((w) => w.isActive && (w.tokenBalance ?? 0) > 0)
+    const dbWallets = await prisma.wallet.findMany({
+      where: { publicKey: { in: walletPublicKeys } },
+    })
+    const walletByKey = new Map(dbWallets.map((w) => [w.publicKey, w]))
+    const activeWallets = (walletPublicKeys as string[])
+      .map((key) => walletByKey.get(key))
+      .filter((wallet): wallet is (typeof dbWallets)[number] => Boolean(wallet))
+      .map((w) => ({
+        publicKey: w.publicKey,
+        secretKey: w.secretKey,
+        solBalance: parseFloat(w.solBalance),
+        tokenBalance: parseFloat(w.tokenBalance),
+        isActive: w.isActive,
+        label: w.label || undefined,
+        role: w.role || "project",
+      })) as BundlerWallet[]
     const targetWallets = activeWallets
+      .filter((w) => w.isActive && (w.tokenBalance ?? 0) > 0)
     if (targetWallets.length === 0) {
       return NextResponse.json({ error: "no wallets with token balance" }, { status: 400 })
+    }
+    const missingSecrets = targetWallets.filter((w) => !w.secretKey)
+    if (missingSecrets.length > 0) {
+      return NextResponse.json({ error: "wallet secret key missing in database" }, { status: 400 })
     }
 
     for (let i = 0; i < targetWallets.length; i++) {

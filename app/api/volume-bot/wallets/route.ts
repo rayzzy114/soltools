@@ -1,10 +1,8 @@
 import { NextRequest, NextResponse } from "next/server"
-import { Keypair, PublicKey } from "@solana/web3.js"
 import { prisma } from "@/lib/prisma"
 import { generateWallet, importWallet, refreshWalletBalances, type VolumeWallet } from "@/lib/solana/volume-bot-engine"
 import { SOLANA_NETWORK } from "@/lib/solana/config"
 import { isPumpFunAvailable } from "@/lib/solana/pumpfun-sdk"
-import bs58 from "bs58"
 
 const EXPOSE_WALLET_SECRETS = process.env.EXPOSE_WALLET_SECRETS !== "false"
 
@@ -97,8 +95,27 @@ export async function POST(request: NextRequest) {
     }
 
     if (action === "refresh") {
-      const { wallets, mintAddress } = body
-      if (!wallets) return NextResponse.json({ error: "wallets required" }, { status: 400 })
+      const { walletPublicKeys, mintAddress } = body
+      if (!Array.isArray(walletPublicKeys) || walletPublicKeys.length === 0) {
+        return NextResponse.json({ error: "walletPublicKeys required" }, { status: 400 })
+      }
+      const rows = await prisma.wallet.findMany({
+        where: { publicKey: { in: walletPublicKeys } },
+      })
+      const byKey = new Map(rows.map((w) => [w.publicKey, w]))
+      const wallets = walletPublicKeys
+        .map((key) => byKey.get(key))
+        .filter((wallet): wallet is typeof rows[number] => Boolean(wallet))
+        .map((w) => ({
+          publicKey: w.publicKey,
+          secretKey: w.secretKey,
+          solBalance: parseFloat(w.solBalance),
+          tokenBalance: parseFloat(w.tokenBalance),
+          isActive: w.isActive,
+        }))
+      if (wallets.length === 0) {
+        return NextResponse.json({ error: "wallets not found in database" }, { status: 404 })
+      }
       const updated = await refreshWalletBalances(wallets as VolumeWallet[], mintAddress || undefined)
       await Promise.all(updated.map((w) => saveWallet(w)))
       return NextResponse.json({ wallets: updated.map(sanitize) })
@@ -136,21 +153,8 @@ export async function POST(request: NextRequest) {
       })
     }
 
-    // fund via secret key (optional fallback)
     if (action === "fund") {
-      const { funderSecretKey, recipients, amountLamports } = body
-      if (!funderSecretKey || !recipients || !amountLamports) {
-        return NextResponse.json({ error: "funderSecretKey, recipients, amountLamports required" }, { status: 400 })
-      }
-      const funder = Keypair.fromSecretKey(bs58.decode(funderSecretKey))
-      const ix = recipients.map((r: string) => {
-        return {
-          to: new PublicKey(r),
-          lamports: Number(amountLamports),
-        }
-      })
-      // simple client responsibility: we only validate inputs
-      return NextResponse.json({ message: "build transfer client-side", recipients: ix.length })
+      return NextResponse.json({ error: "use /api/volume-bot/fund for backend-only funding" }, { status: 400 })
     }
 
     return NextResponse.json({ error: "invalid action" }, { status: 400 })

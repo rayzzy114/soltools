@@ -32,7 +32,8 @@ export async function POST(request: NextRequest) {
 
     const body = await request.json()
     const {
-      wallets,
+      walletPublicKeys,
+      devPublicKey,
       tokenMetadata,
       devBuyAmount = 0.1,
       buyAmounts = [],
@@ -43,8 +44,11 @@ export async function POST(request: NextRequest) {
     } = body
 
     // validation
-    if (!wallets || !Array.isArray(wallets) || wallets.length === 0) {
-      return NextResponse.json({ error: "wallets array required" }, { status: 400 })
+    if (!walletPublicKeys || !Array.isArray(walletPublicKeys) || walletPublicKeys.length === 0) {
+      return NextResponse.json({ error: "walletPublicKeys array required" }, { status: 400 })
+    }
+    if (!devPublicKey || typeof devPublicKey !== "string") {
+      return NextResponse.json({ error: "devPublicKey required" }, { status: 400 })
     }
 
     if (!tokenMetadata || !tokenMetadata.name || !tokenMetadata.symbol || !tokenMetadata.metadataUri) {
@@ -54,9 +58,33 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    let activeWallets = (wallets as BundlerWallet[]).filter((w) => w.isActive)
+    const dbWallets = await prisma.wallet.findMany({
+      where: { publicKey: { in: walletPublicKeys } },
+    })
+    const walletByKey = new Map(dbWallets.map((w) => [w.publicKey, w]))
+    let activeWallets = (walletPublicKeys as string[])
+      .map((key) => walletByKey.get(key))
+      .filter((wallet): wallet is (typeof dbWallets)[number] => Boolean(wallet))
+      .map((w) => ({
+        publicKey: w.publicKey,
+        secretKey: w.secretKey,
+        solBalance: parseFloat(w.solBalance),
+        tokenBalance: parseFloat(w.tokenBalance),
+        isActive: w.isActive,
+        label: w.label || undefined,
+        role: w.publicKey === devPublicKey ? "dev" : "buyer",
+      })) as BundlerWallet[]
+
+    activeWallets = activeWallets.filter((w) => w.isActive)
     if (activeWallets.length === 0) {
       return NextResponse.json({ error: "no active wallets" }, { status: 400 })
+    }
+    if (!activeWallets.some((w) => w.publicKey === devPublicKey)) {
+      return NextResponse.json({ error: "devPublicKey not found in walletPublicKeys" }, { status: 400 })
+    }
+    const missingSecrets = activeWallets.filter((w) => !w.secretKey)
+    if (missingSecrets.length > 0) {
+      return NextResponse.json({ error: "wallet secret key missing in database" }, { status: 400 })
     }
 
     // Ensure "Dev" wallet is at index 0 and sync buyAmounts

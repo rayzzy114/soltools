@@ -4,7 +4,9 @@ import path from 'path';
 
 test('Verify Dev Wallet Visible in Volume Bot List', async ({ page }) => {
   // Go to the dashboard
-  await page.goto('http://localhost:3000');
+  await page.goto('/');
+
+  await page.getByText('DASHBOARD FLOW').waitFor();
 
   // We need to switch to "Main Stage" first if we are in "Launch Stage"
   const openMainStageButton = page.locator('button:has-text("Open main stage")');
@@ -51,3 +53,4 @@ test('Verify Dev Wallet Visible in Volume Bot List', async ({ page }) => {
   // Taking a screenshot is robust enough for visual verification.
   await page.screenshot({ path: path.join(process.cwd(), 'verification', 'volume_bot_list_with_dev.png') });
 });
+

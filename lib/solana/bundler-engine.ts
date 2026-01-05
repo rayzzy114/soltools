@@ -49,6 +49,7 @@ import {
   JITO_ENDPOINTS,
   getJitoTipFloor,
   MIN_JITO_TIP_LAMPORTS,
+  getTipLamports,
 } from "./jito"
 import bs58 from "bs58"
 import {
@@ -583,31 +584,21 @@ async function sendBundleGroup(
   tipPayer?: Keypair
 ): Promise<{ bundleId: string; signatures: string[] }> {
   if (jitoTip > 0) {
-    if (tipPayer) {
-      const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash()
-      const tipTx = new Transaction()
-      tipTx.add(createTipInstruction(tipPayer.publicKey, jitoTip))
-      tipTx.recentBlockhash = blockhash
-      tipTx.lastValidBlockHeight = lastValidBlockHeight
-      tipTx.feePayer = tipPayer.publicKey
-      tipTx.sign(tipPayer)
+    const tipSigner = tipPayer ?? txSigners[txSigners.length - 1]?.[0]
+    if (tipSigner) {
+      const { blockhash } = await connection.getLatestBlockhash()
+      const tipMessage = new TransactionMessage({
+        payerKey: tipSigner.publicKey,
+        recentBlockhash: blockhash,
+        instructions: [createTipInstruction(tipSigner.publicKey, jitoTip)],
+      }).compileToV0Message()
+      const tipTx = new VersionedTransaction(tipMessage)
+      tipTx.sign([tipSigner])
 
       transactions.push(tipTx)
-      txSigners.push([tipPayer])
-    } else if (transactions.length > 0) {
-      const lastIdx = transactions.length - 1
-      const lastTx = transactions[lastIdx]
-      if (lastTx instanceof Transaction) {
-        const lastSigner = txSigners[lastIdx]?.[0]
-        if (lastSigner) {
-          lastTx.add(createTipInstruction(lastSigner.publicKey, jitoTip))
-          lastTx.sign(...txSigners[lastIdx])
-        } else {
-          console.warn("[bundler] missing signer for last tx (tip not added)")
-        }
-      } else {
-        console.warn("[bundler] tip must be embedded in versioned transactions; skipping auto-tip")
-      }
+      txSigners.push([tipSigner])
+    } else {
+      console.warn("[bundler] missing signer for tip transaction")
     }
   }
 
@@ -1049,7 +1040,7 @@ export async function collectSol(
 
   // 2. Filter wallets with enough funds (> 5000 lamports fee)
   const feeLamports = 5000
-  const tipLamports = Math.floor(jitoTip * LAMPORTS_PER_SOL)
+  const tipLamports = getTipLamports(jitoTip)
   const validWallets = refreshedWallets.filter(w => {
     const bal = Math.floor(w.solBalance * LAMPORTS_PER_SOL)
     return bal > feeLamports
@@ -1070,7 +1061,7 @@ export async function collectSol(
       continue
     }
 
-    const transactions: Transaction[] = []
+    const transactions: VersionedTransaction[] = []
     const txSigners: Keypair[][] = []
     const { blockhash } = await connection.getLatestBlockhash()
 
@@ -1089,18 +1080,24 @@ export async function collectSol(
       // Safety check (should be covered by sort check above, but good for robustness)
       if (sendAmount <= 0) continue
 
-      const transaction = new Transaction()
-      transaction.add(
+      const instructions = [
         SystemProgram.transfer({
           fromPubkey: keypair.publicKey,
           toPubkey: recipient,
           lamports: sendAmount,
-        })
-      )
+        }),
+      ]
+      if (isTipPayer && jitoTip > 0) {
+        instructions.push(createTipInstruction(keypair.publicKey, jitoTip, jitoRegion as JitoRegion))
+      }
 
-      transaction.recentBlockhash = blockhash
-      transaction.feePayer = keypair.publicKey
-      transaction.sign(keypair)
+      const message = new TransactionMessage({
+        payerKey: keypair.publicKey,
+        recentBlockhash: blockhash,
+        instructions,
+      }).compileToV0Message()
+      const transaction = new VersionedTransaction(message)
+      transaction.sign([keypair])
 
       transactions.push(transaction)
       txSigners.push([keypair])
@@ -1114,7 +1111,7 @@ export async function collectSol(
         txSigners,
         "collect",
         jitoRegion,
-        jitoTip
+        0
       )
       signatures.push(...result.signatures)
     } catch (error) {
@@ -1762,7 +1759,7 @@ export async function createBuyBundle(config: BundleConfig): Promise<BundleResul
         }
       }
 
-      const transactions: Transaction[] = []
+      const transactions: VersionedTransaction[] = []
       const txSigners: Keypair[][] = []
       const { blockhash } = await connection.getLatestBlockhash()
 
@@ -1796,11 +1793,13 @@ export async function createBuyBundle(config: BundleConfig): Promise<BundleResul
         instructions.push(buyIx)
 
         const prioritized = addPriorityFeeInstructions(instructions, priorityFee)
-        const buyTx = new Transaction()
-        buyTx.add(...prioritized)
-        buyTx.recentBlockhash = blockhash
-        buyTx.feePayer = keypair.publicKey
-        buyTx.sign(keypair)
+        const message = new TransactionMessage({
+          payerKey: keypair.publicKey,
+          recentBlockhash: blockhash,
+          instructions: prioritized,
+        }).compileToV0Message()
+        const buyTx = new VersionedTransaction(message)
+        buyTx.sign([keypair])
         transactions.push(buyTx)
         txSigners.push([keypair])
       }
@@ -1919,7 +1918,7 @@ export async function createSellBundle(config: BundleConfig): Promise<BundleResu
     const chunks = chunkArray(activeWallets, MAX_BUNDLE_WALLETS)
     for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex++) {
       const walletsChunk = chunks[chunkIndex]
-      const transactions: Transaction[] = []
+      const transactions: VersionedTransaction[] = []
       const txSigners: Keypair[][] = []
       const { blockhash } = await connection.getLatestBlockhash()
 
@@ -1946,11 +1945,14 @@ export async function createSellBundle(config: BundleConfig): Promise<BundleResu
           "auto"
         )
 
-        plan.transaction.recentBlockhash = blockhash
-        plan.transaction.feePayer = keypair.publicKey
-
-        plan.transaction.sign(keypair)
-        transactions.push(plan.transaction)
+        const message = new TransactionMessage({
+          payerKey: keypair.publicKey,
+          recentBlockhash: blockhash,
+          instructions: plan.transaction.instructions,
+        }).compileToV0Message()
+        const sellTx = new VersionedTransaction(message)
+        sellTx.sign([keypair])
+        transactions.push(sellTx)
         txSigners.push([keypair])
       }
 
@@ -2089,14 +2091,15 @@ export async function createStaggeredBuys(
         instructions.push(buyIx)
 
         const prioritized = addPriorityFeeInstructions(instructions, priorityFee)
-        const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash()
+        const { blockhash } = await connection.getLatestBlockhash()
 
-        const buyTx = new Transaction()
-        buyTx.add(...prioritized)
-        buyTx.recentBlockhash = blockhash
-        buyTx.lastValidBlockHeight = lastValidBlockHeight
-        buyTx.feePayer = keypair.publicKey
-        buyTx.sign(keypair)
+        const message = new TransactionMessage({
+          payerKey: keypair.publicKey,
+          recentBlockhash: blockhash,
+          instructions: prioritized,
+        }).compileToV0Message()
+        const buyTx = new VersionedTransaction(message)
+        buyTx.sign([keypair])
 
         const signature = await connection.sendRawTransaction(buyTx.serialize())
         signatures.push(signature)
@@ -2202,7 +2205,7 @@ export async function createStaggeredSells(
 
         // calculate min SOL out
         let minSolOut = BigInt(0)
-        let sellTx: Transaction
+        let instructions: TransactionInstruction[] = []
 
         if (bondingCurve.complete) {
           const poolData = await getPumpswapPoolData(mint)
@@ -2212,31 +2215,34 @@ export async function createStaggeredSells(
           }
           const swap = calculatePumpswapSwapAmount(poolData, tokenAmountRaw, true)
           minSolOut = (swap.solOut * BigInt(100 - slippage)) / BigInt(100)
-          sellTx = await buildPumpswapSwapTransaction(
+          const swapTx = await buildPumpswapSwapTransaction(
             keypair.publicKey,
             mint,
             tokenAmountRaw,
             minSolOut,
             resolvedPriorityFee
           )
+          instructions = swapTx.instructions
         } else {
           const { solOut } = calculateSellAmount(bondingCurve, tokenAmountRaw)
           minSolOut = (solOut * BigInt(100 - slippage)) / BigInt(100)
-          sellTx = new Transaction()
           const sellIx = await createSellInstruction(keypair.publicKey, mint, tokenAmountRaw, minSolOut)
-          const instructions = addPriorityFeeInstructions([sellIx], resolvedPriorityFee, computeUnits)
-          if (resolvedTip > 0) {
-            instructions.push(createTipInstruction(keypair.publicKey, resolvedTip, resolvedRegion as any))
-          }
-          sellTx.add(...instructions)
+          instructions = addPriorityFeeInstructions([sellIx], resolvedPriorityFee, computeUnits)
         }
 
-        const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash()
-        sellTx.recentBlockhash = blockhash
-        sellTx.lastValidBlockHeight = lastValidBlockHeight
-        sellTx.feePayer = keypair.publicKey
+        if (resolvedTip > 0) {
+          instructions.push(createTipInstruction(keypair.publicKey, resolvedTip, resolvedRegion as any))
+        }
 
-        sellTx.sign(keypair)
+        const { blockhash } = await connection.getLatestBlockhash()
+        const message = new TransactionMessage({
+          payerKey: keypair.publicKey,
+          recentBlockhash: blockhash,
+          instructions,
+        }).compileToV0Message()
+
+        const sellTx = new VersionedTransaction(message)
+        sellTx.sign([keypair])
 
         const signature = await connection.sendRawTransaction(sellTx.serialize())
         signatures.push(signature)
@@ -2425,7 +2431,7 @@ export async function createRugpullBundle(config: BundleConfig): Promise<BundleR
 
     const chunks = chunkArray(walletBalances, MAX_BUNDLE_WALLETS)
     for (const chunk of chunks) {
-      const transactions: Transaction[] = []
+      const transactions: VersionedTransaction[] = []
       const txSigners: Keypair[][] = []
       const { blockhash } = await connection.getLatestBlockhash()
 
@@ -2441,11 +2447,14 @@ export async function createRugpullBundle(config: BundleConfig): Promise<BundleR
             "auto"
           )
 
-          plan.transaction.recentBlockhash = blockhash
-          plan.transaction.feePayer = keypair.publicKey
-
-          plan.transaction.sign(keypair)
-          transactions.push(plan.transaction)
+          const message = new TransactionMessage({
+            payerKey: keypair.publicKey,
+            recentBlockhash: blockhash,
+            instructions: plan.transaction.instructions,
+          }).compileToV0Message()
+          const sellTx = new VersionedTransaction(message)
+          sellTx.sign([keypair])
+          transactions.push(sellTx)
           txSigners.push([keypair])
         } catch {
           continue

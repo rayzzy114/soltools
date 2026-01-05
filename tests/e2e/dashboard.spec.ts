@@ -14,7 +14,8 @@ test.describe('Dashboard Functionality', () => {
         await route.fulfill({ json: { funderWallet: null } });
     });
 
-    await page.goto('http://localhost:3000/wallet-tools');
+    await page.goto('/wallet-tools');
+    await page.getByText('WALLETS', { exact: true }).first().waitFor();
 
     await page.route('/api/bundler/wallets?action=generate-multiple&count=5', async route => {
       await route.fulfill({
@@ -50,7 +51,7 @@ test.describe('Dashboard Functionality', () => {
   });
 
   test('should navigate between Wallet Tools and Dashboard', async ({ page }) => {
-    await page.goto('http://localhost:3000/dashboard');
+    await page.goto('/');
     const walletToolsLink = page.locator('a[href="/wallet-tools"]');
     if (await walletToolsLink.isVisible()) {
         await walletToolsLink.click();
@@ -72,9 +73,10 @@ test.describe('Dashboard Functionality', () => {
       });
     });
 
-    await page.goto('http://localhost:3000/wallet-tools');
+    await page.goto('/wallet-tools');
+    await page.getByText('WALLETS', { exact: true }).first().waitFor();
 
-    const tokenTrigger = page.locator('button[role="combobox"]');
+    const tokenTrigger = page.locator('div', { has: page.getByText('Token') }).locator('button[role="combobox"]');
     await expect(tokenTrigger).toBeVisible();
 
     await tokenTrigger.click();
@@ -86,3 +88,4 @@ test.describe('Dashboard Functionality', () => {
     await expect(tokenTrigger).toContainText('TEST');
   });
 });
+

@@ -1,12 +1,10 @@
 "use client"
 import dynamic from "next/dynamic"
-import { useState, useEffect, useCallback } from "react"
-import { ChevronRight, LayoutDashboard, RefreshCw, Wallet, X, Loader2 } from "lucide-react"
+import { useState } from "react"
+import { ChevronRight, LayoutDashboard, RefreshCw, Wallet } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import { useWallet } from "@solana/wallet-adapter-react"
 import DashboardPage from "./dashboard/page"
 import WalletToolsPage from "./wallet-tools/page"
-import { toast } from "sonner"
 
 const WalletMultiButton = dynamic(
   () => import("@solana/wallet-adapter-react-ui").then((mod) => mod.WalletMultiButton),
@@ -16,52 +14,6 @@ const WalletMultiButton = dynamic(
 export default function CryptoDashboard() {
   const [activeSection, setActiveSection] = useState("dashboard")
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
-  const { publicKey, connected, disconnect, wallet } = useWallet()
-  const [balance, setBalance] = useState<number>(0)
-  const [isRefreshing, setIsRefreshing] = useState(false)
-
-  const handleDisconnect = async () => {
-    try {
-      await disconnect()
-    } catch {
-      try {
-        await wallet?.adapter.disconnect()
-      } catch {
-        // ignore
-      }
-    } finally {
-      setBalance(0)
-    }
-  }
-
-  const fetchBalance = useCallback(async () => {
-    if (!connected || !publicKey) {
-      setBalance(0)
-      return
-    }
-
-    setIsRefreshing(true)
-    try {
-      const res = await fetch(`/api/solana/balance?publicKey=${publicKey.toBase58()}`)
-      if (!res.ok) {
-        throw new Error(`Failed to fetch balance: ${res.statusText}`)
-      }
-      const data = await res.json()
-      if (data && Number.isFinite(data.sol)) {
-        setBalance(data.sol)
-      }
-    } catch (error) {
-      console.error("Balance fetch error:", error)
-      toast.error("Failed to fetch wallet balance")
-      // Don't reset balance to 0 on transient errors if we already have a value
-    } finally {
-      setIsRefreshing(false)
-    }
-  }, [connected, publicKey])
-
-  useEffect(() => {
-    fetchBalance()
-  }, [fetchBalance])
 
   return (
     <div className="flex h-screen">
@@ -109,50 +61,15 @@ export default function CryptoDashboard() {
 
           {!sidebarCollapsed && (
             <div className="mt-8 space-y-2">
-              {connected && publicKey ? (
-                <div className="p-4 bg-neutral-800 border border-cyan-500/30 rounded">
-              <div className="flex items-center justify-between mb-2">
-                <div className="flex items-center gap-2">
-                  <Wallet className="w-4 h-4 text-cyan-400" />
-                  <span className="text-xs text-cyan-400">WALLET CONNECTED</span>
+              <div className="p-4">
+                <div className="relative">
+                  <WalletMultiButton className="!bg-cyan-500 hover:!bg-cyan-600 !text-black !rounded !w-full !justify-center !pl-12" />
+                  <Wallet className="absolute left-3 top-1/2 -translate-y-1/2 text-black/70 pointer-events-none" />
                 </div>
-                <div className="flex gap-1">
-                  <button
-                    type="button"
-                    onClick={() => fetchBalance()}
-                    disabled={isRefreshing}
-                    className={`text-neutral-400 hover:text-cyan-300 ${isRefreshing ? "animate-spin" : ""}`}
-                    aria-label="Refresh balance"
-                    title="Refresh Balance"
-                  >
-                    {isRefreshing ? <Loader2 className="w-3 h-3" /> : <RefreshCw className="w-3 h-3" />}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void handleDisconnect()}
-                    className="text-neutral-400 hover:text-cyan-300"
-                    aria-label="Disconnect wallet"
-                    title="Disconnect"
-                  >
-                    <X className="w-3 h-3" />
-                  </button>
+                <div className="mt-2 text-[10px] text-neutral-500">
+                  Connect only to top up the funding wallet.
                 </div>
               </div>
-              <div className="text-xs text-neutral-500 font-mono">
-                    <div className="flex items-center gap-2">
-                      SOL: {balance.toFixed(3)}
-                    </div>
-                    <div className="truncate">{publicKey.toBase58().slice(0, 6)}...{publicKey.toBase58().slice(-6)}</div>
-                  </div>
-                </div>
-              ) : (
-                <div className="p-4">
-                  <div className="relative">
-                    <WalletMultiButton className="!bg-cyan-500 hover:!bg-cyan-600 !text-black !rounded !w-full !justify-center !pl-12" />
-                    <Wallet className="absolute left-3 top-1/2 -translate-y-1/2 text-black/70 pointer-events-none" />
-                  </div>
-                </div>
-              )}
             </div>
           )}
         </div>

@@ -1,4 +1,4 @@
-import { Connection, Keypair, PublicKey, Transaction, LAMPORTS_PER_SOL } from "@solana/web3.js"
+import { Connection, Keypair, PublicKey, Transaction, LAMPORTS_PER_SOL, TransactionMessage, VersionedTransaction } from "@solana/web3.js"
 import {
   getAssociatedTokenAddress,
   createAssociatedTokenAccountIdempotentInstruction,
@@ -119,6 +119,25 @@ function getCachedKeypair(secretKey: string): Keypair {
   const keypair = Keypair.fromSecretKey(bs58.decode(secretKey))
   keypairCache.set(secretKey, keypair)
   return keypair
+}
+
+function buildVersionedTransaction(transaction: Transaction, signers: Keypair[]): VersionedTransaction {
+  const payerKey = transaction.feePayer || signers[0]?.publicKey
+  if (!payerKey) {
+    throw new Error("transaction fee payer missing")
+  }
+  const recentBlockhash = transaction.recentBlockhash
+  if (!recentBlockhash) {
+    throw new Error("transaction blockhash missing")
+  }
+  const message = new TransactionMessage({
+    payerKey,
+    recentBlockhash,
+    instructions: transaction.instructions,
+  }).compileToV0Message()
+  const vtx = new VersionedTransaction(message)
+  vtx.sign(signers)
+  return vtx
 }
 
 function toRawTokenAmount(value: number, decimals: number = TOKEN_DECIMALS): bigint {
@@ -421,13 +440,12 @@ export async function executeBuy(
       }
       
       // sign (after all mutations like tip)
-      transaction.sign(keypair)
+      const versionedTx = buildVersionedTransaction(transaction, [keypair])
 
       // Evidence-first: simulate the exact signed transaction we are about to send.
       // This tells us whether the tx is inherently invalid (ATA missing, compute, account locks, etc.)
       try {
-        // Note: for legacy Transaction overload in our web3.js version, config is not supported.
-        const sim = await connection.simulateTransaction(transaction)
+        const sim = await connection.simulateTransaction(versionedTx)
         const simLogs = sim?.value?.logs ?? []
         const logsHead = simLogs.slice(0, 25)
         const logsTail = simLogs.slice(Math.max(0, simLogs.length - 25))
@@ -446,9 +464,9 @@ export async function executeBuy(
       try {
         if (useJito) {
           const sentAt = Date.now()
-          const { bundleId, region: usedRegion } = await sendBundle([transaction], jitoRegion as JitoRegion)
+          const { bundleId, region: usedRegion } = await sendBundle([versionedTx], jitoRegion as JitoRegion)
 
-          const sig = transaction.signatures?.[0]?.signature
+          const sig = versionedTx.signatures?.[0]
           const signature = bs58.encode(sig || new Uint8Array(64))
           tx.signature = signature
 
@@ -539,7 +557,7 @@ export async function executeBuy(
           }
           return tx
         } else {
-          const rawTx = transaction.serialize()
+          const rawTx = versionedTx.serialize()
 
           // send initial
           const signature = await connection.sendRawTransaction(rawTx, {
@@ -548,7 +566,7 @@ export async function executeBuy(
             preflightCommitment: "confirmed",
           })
           
-          const expireHeight = (transaction as any).lastValidBlockHeight ?? blockhashWithExpiry.lastValidBlockHeight
+          const expireHeight = blockhashWithExpiry.lastValidBlockHeight
           const sendStart = Date.now()
           let confirmed = false
           let statusSlot: number | null = null
@@ -784,11 +802,11 @@ export async function executeSell(
 
 
     // sign (after all mutations like tip)
-    transaction.sign(keypair)
+    const versionedTx = buildVersionedTransaction(transaction, [keypair])
 
     // Evidence-first: simulate the exact signed transaction we are about to send.
     try {
-      const sim = await connection.simulateTransaction(transaction)
+      const sim = await connection.simulateTransaction(versionedTx)
       const simLogs = sim?.value?.logs ?? []
       const logsHead = simLogs.slice(0, 25)
       const logsTail = simLogs.slice(Math.max(0, simLogs.length - 25))
@@ -804,7 +822,7 @@ export async function executeSell(
     }
 
     if (opts.simulate) {
-      const raw = transaction.serialize()
+      const raw = versionedTx.serialize()
       tx.transaction = bs58.encode(raw)
       tx.status = "success"
       return tx
@@ -812,9 +830,9 @@ export async function executeSell(
 
     if (useJito) {
       const sentAt = Date.now()
-      const { bundleId, region: usedRegion } = await sendBundle([transaction], jitoRegion as JitoRegion)
+      const { bundleId, region: usedRegion } = await sendBundle([versionedTx], jitoRegion as JitoRegion)
 
-      const sig = transaction.signatures?.[0]?.signature
+      const sig = versionedTx.signatures?.[0]
       const signature = bs58.encode(sig || new Uint8Array(64))
       tx.signature = signature
 
@@ -898,7 +916,7 @@ export async function executeSell(
     }
 
     // non-jito send
-    const signature = await connection.sendRawTransaction(transaction.serialize(), {
+    const signature = await connection.sendRawTransaction(versionedTx.serialize(), {
       skipPreflight: false,
       maxRetries: 20,
       preflightCommitment: "confirmed",
@@ -1523,7 +1541,7 @@ export class VolumeBotPairEngine {
       console.log("ATA:", ata.toBase58())
 
       // Sign before simulation and bundle
-      transaction.sign(walletKeypair)
+      const versionedTx = buildVersionedTransaction(transaction, [walletKeypair])
 
       console.log("Tx object status:", !!transaction)
       for (let i = 0; i < transaction.instructions.length; i++) {
@@ -1532,7 +1550,7 @@ export class VolumeBotPairEngine {
       }
 
       // Pre-flight simulation
-      const sim = await this.connection!.simulateTransaction(transaction)
+      const sim = await this.connection!.simulateTransaction(versionedTx)
       if (sim?.value?.err) {
         const simError = JSON.stringify(sim.value.err)
         const simLogs = sim.value.logs?.slice(-8).join(" | ")
@@ -1554,8 +1572,8 @@ export class VolumeBotPairEngine {
         return
       }
 
-      const { bundleId } = await sendBundle([transaction], region)
-      const sig = transaction.signatures?.[0]?.signature
+      const { bundleId } = await sendBundle([versionedTx], region)
+      const sig = versionedTx.signatures?.[0]
       const signature = bs58.encode(sig || new Uint8Array(64))
 
       let status: "confirmed" | "failed" | "pending" = "pending"

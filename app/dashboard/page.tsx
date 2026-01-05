@@ -18,9 +18,7 @@ import { TrendingUp, TrendingDown, Coins, Activity, Users, Play, Pause, Settings
 import { PnLSummaryCard, MiniPnLCard } from "@/components/pnl/PnLCard"
 import type { PnLSummary, TokenPnL, Trade } from "@/lib/pnl/types"
 import { toast } from "sonner"
-import { useWallet } from "@solana/wallet-adapter-react"
-import { LAMPORTS_PER_SOL, PublicKey, Keypair, SystemProgram, Transaction, VersionedTransaction } from "@solana/web3.js"
-import bs58 from "bs58"
+import { LAMPORTS_PER_SOL, PublicKey } from "@solana/web3.js"
 import { getResilientConnection } from "@/lib/solana/config"
 import { getBondingCurveAddress } from "@/lib/solana/pumpfun-sdk"
 import { TokenHolderTracker, type HolderRow } from "@/lib/solana/holder-tracker"
@@ -90,7 +88,6 @@ interface RugpullEstimate {
 
 const PRIORITY_FEE_COMPUTE_UNITS = 400000
 const PRICE_SERIES_MAX_POINTS = 60
-const FUNDER_SECRET_KEY = "funderSecretKey"
 
 // Optimized Wallet Row Component
 const WalletRow = memo(({ wallet, index, onSelect }: { wallet: BundlerWallet, index: number, onSelect: (w: BundlerWallet) => void }) => {
@@ -171,7 +168,6 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true)
   const [dashboardStage, setDashboardStage] = useState<"launch" | "main">("launch")
   const [settingsOpen, setSettingsOpen] = useState(false)
-  const { publicKey, sendTransaction, connected } = useWallet()
 
   // New states for enhanced dashboard
   const [selectedToken, setSelectedToken] = useState<Token | null>(null)
@@ -200,7 +196,6 @@ export default function DashboardPage() {
   const [launchLoading, setLaunchLoading] = useState(false)
   const [autoFundEnabled] = useState(true)
   const [autoCreateAtaEnabled] = useState(true)
-  const [funderKey, setFunderKey] = useState("")
   const [funderAmountPerWallet] = useState("0.003")
   const [launchDevWallet, setLaunchDevWallet] = useState("")
   const [buyerWallets, setBuyerWallets] = useState<BuyerWalletSelection[]>([])
@@ -268,18 +263,18 @@ export default function DashboardPage() {
     () => activeWallets.filter((wallet) => wallet.role !== 'buyer'),
     [activeWallets]
   )
-  const connectedWalletKey = publicKey?.toBase58() || ""
-  const connectedDevWallet = useMemo(() => {
-    if (!connectedWalletKey) return null
-    return bundlerWallets.find((wallet) => wallet.publicKey === connectedWalletKey) || null
-  }, [bundlerWallets, connectedWalletKey])
-  const devWalletOptions = useMemo(() => {
-    if (!connectedDevWallet) return activeWallets
-    if (activeWallets.some((wallet) => wallet.publicKey === connectedDevWallet.publicKey)) {
-      return activeWallets
-    }
-    return [connectedDevWallet, ...activeWallets]
-  }, [activeWallets, connectedDevWallet])
+  const devWalletRecord = useMemo(() => {
+    return (
+      bundlerWallets.find((wallet) => wallet.publicKey === launchDevWallet) ||
+      bundlerWallets.find((wallet) => wallet.role === "dev") ||
+      null
+    )
+  }, [bundlerWallets, launchDevWallet])
+  const funderWalletRecord = useMemo(
+    () => bundlerWallets.find((wallet) => wallet.role === "funder") || null,
+    [bundlerWallets]
+  )
+  const devWalletOptions = useMemo(() => activeWallets, [activeWallets])
   useEffect(() => {
     if (quickTradeWallet && (quickTradeWallet.role === 'buyer')) {
       setQuickTradeWallet(null)
@@ -342,13 +337,6 @@ export default function DashboardPage() {
   const isMainnet = network === "mainnet-beta"
   const isLaunchStage = dashboardStage === "launch"
   const canOpenMainStage = Boolean(selectedToken?.mintAddress)
-
-  useEffect(() => {
-    if (typeof window !== "undefined") {
-      const storedKey = window.localStorage.getItem(FUNDER_SECRET_KEY)
-      if (storedKey) setFunderKey(storedKey)
-    }
-  }, [])
 
   useEffect(() => {
     if (devWalletOptions.length === 0) {
@@ -486,7 +474,7 @@ export default function DashboardPage() {
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
                 action: "refresh",
-                wallets: walletsToUse,
+                walletPublicKeys: walletsToUse.map((wallet: BundlerWallet) => wallet.publicKey),
               }),
             })
             const refreshData = await refreshRes.json()
@@ -895,11 +883,6 @@ export default function DashboardPage() {
       toast.error("dev wallet not found")
       return
     }
-    if (!devWallet.secretKey) {
-      toast.error("dev wallet secret key missing")
-      return
-    }
-
     const buyersResolved = buyerWallets.map((buyer) => ({
       buyer,
       wallet: bundlerWallets.find((wallet) => wallet.publicKey === buyer.publicKey) || null,
@@ -909,12 +892,6 @@ export default function DashboardPage() {
       toast.error("buyer wallet not found")
       return
     }
-    const missingSecret = buyersResolved.find((entry) => !entry.wallet?.secretKey)
-    if (missingSecret) {
-      toast.error("buyer wallet secret key missing")
-      return
-    }
-
     const parsedDevBuy = Math.max(0, parseSol(devBuyAmount))
     const buyerAmounts = buyerWallets.map((buyer) => parseSol(buyer.amount))
     if (buyerAmounts.some((amount) => amount <= 0)) {
@@ -929,6 +906,7 @@ export default function DashboardPage() {
         { ...devWallet, isActive: true },
         ...buyersResolved.map((entry) => ({ ...entry.wallet!, isActive: true })),
       ]
+      const launchWalletPublicKeys = launchWallets.map((wallet) => wallet.publicKey)
       const buyAmounts = [parsedDevBuy, ...buyerAmounts]
       const funderAmount = parseSol(funderAmountPerWallet)
 
@@ -938,15 +916,20 @@ export default function DashboardPage() {
             return
           }
 
-          addSystemLog(`Auto-funding ${launchWallets.length} wallets using Dev wallet`, "info")
+          if (!funderWalletRecord?.publicKey) {
+            toast.error("Set funder wallet in database first")
+            return
+          }
+
+          addSystemLog(`Auto-funding ${launchWallets.length} wallets using Funder wallet`, "info")
 
           const fundRes = await fetch("/api/bundler/wallets", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               action: "fund",
-              funderAddress: launchDevWallet, // Use selected Dev wallet address as funder
-              wallets: launchWallets,
+              funderAddress: funderWalletRecord.publicKey,
+              walletPublicKeys: launchWalletPublicKeys,
               amounts: launchWallets.map(() => funderAmount),
             }),
           })
@@ -964,7 +947,8 @@ export default function DashboardPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          wallets: launchWallets,
+          walletPublicKeys: launchWalletPublicKeys,
+          devPublicKey: devWallet.publicKey,
           tokenMetadata: {
             name: tokenName.trim(),
             symbol: tokenSymbol.trim().toUpperCase(),
@@ -1022,7 +1006,7 @@ export default function DashboardPage() {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               action: "create-atas",
-              wallets: launchWallets,
+              walletPublicKeys: launchWalletPublicKeys,
               mintAddress: data.mintAddress,
             }),
           })
@@ -1268,7 +1252,7 @@ export default function DashboardPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          wallets: buyerWallets,
+          walletPublicKeys: buyerWallets.map((wallet) => wallet.publicKey),
           mintAddress: selectedToken.mintAddress,
           jitoTip: parseFloat(jitoTipSol),
           priorityFee: parseFloat(priorityFeeSol),
@@ -1294,13 +1278,7 @@ export default function DashboardPage() {
   const rugpullDevWallet = useCallback(async () => {
     if (!selectedToken) return
 
-    let resolvedDevKey = ""
-    // Find dev wallet from active selection (launchDevWallet) or fallback to role='dev'
-    let devWalletObj = bundlerWallets.find(w => w.publicKey === launchDevWallet)
-    if (!devWalletObj) {
-      devWalletObj = bundlerWallets.find(w => w.role === 'dev')
-    }
-
+    const devWalletObj = devWalletRecord
     if (!devWalletObj) {
       const msg = "No dev wallet selected (from launch or role='dev')"
       addSystemLog(msg, "error")
@@ -1308,30 +1286,12 @@ export default function DashboardPage() {
       return
     }
 
-    if (!devWalletObj.secretKey) {
-      const msg = "Selected dev wallet missing secret key"
-      addSystemLog(msg, "error")
-      toast.error(msg)
-      return
-    }
-
-    resolvedDevKey = devWalletObj.secretKey
-
     try {
-      const bs58 = await import("bs58")
-      const devWallet = Keypair.fromSecretKey(bs58.default.decode(resolvedDevKey))
-
       const res = await fetch("/api/bundler/rugpull", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          wallets: [{
-            publicKey: devWallet.publicKey.toBase58(),
-            secretKey: bs58.default.encode(devWallet.secretKey),
-            solBalance: 0,
-            tokenBalance: 100,
-            isActive: true
-          }],
+          walletPublicKeys: [devWalletObj.publicKey],
           mintAddress: selectedToken.mintAddress,
           jitoTip: parseFloat(jitoTipSol),
           priorityFee: parseFloat(priorityFeeSol),
@@ -1352,8 +1312,7 @@ export default function DashboardPage() {
     }
   }, [
     selectedToken,
-    launchDevWallet,
-    bundlerWallets,
+    devWalletRecord,
     jitoTipSol,
     priorityFeeSol,
     jitoRegion,
@@ -1394,7 +1353,7 @@ export default function DashboardPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           action: "collect",
-          wallets: sourceWallets,
+          walletPublicKeys: sourceWallets.map((wallet) => wallet.publicKey),
           recipientAddress: targetDevWallet
         })
       })
@@ -1415,50 +1374,34 @@ export default function DashboardPage() {
 
   // Withdraw Dev to Connected
   const withdrawDevToFunder = useCallback(async () => {
-    const trimmedFunderKey = funderKey.trim()
-    if (!trimmedFunderKey) {
-      toast.error("enter funder key first")
+    if (!funderWalletRecord?.publicKey) {
+      toast.error("Set funder wallet in database first")
       return
     }
 
-    let funderAddress = ""
-    try {
-      const decoded = bs58.decode(trimmedFunderKey)
-      funderAddress = Keypair.fromSecretKey(decoded).publicKey.toBase58()
-    } catch (error: any) {
-      toast.error(`invalid funder key: ${error?.message || error}`)
+    const devWalletObj = devWalletRecord
+    if (!devWalletObj) {
+      toast.error("Dev wallet not found or selected")
       return
     }
 
-    let devWalletObj: BundlerWallet | undefined = bundlerWallets.find(w => w.publicKey === launchDevWallet)
-
-    // fallback to searching by role
-    if (!devWalletObj) {
-        devWalletObj = bundlerWallets.find(w => w.role === 'dev')
+    if (devWalletObj.publicKey === funderWalletRecord.publicKey) {
+      toast.error("Dev wallet already matches funder wallet")
+      return
     }
 
-    if (!devWalletObj) {
-        toast.error("Dev wallet not found or selected")
-        return
-    }
-
-    if (devWalletObj.publicKey === funderAddress) {
-        toast.error("Dev wallet already matches funder wallet")
-        return
-    }
-
-    if (!confirm(`Withdraw SOL from Dev Wallet (${devWalletObj.publicKey.slice(0,6)}...) to Funder (${funderAddress.slice(0,6)}...)?`)) {
-        return
+    if (!confirm(`Withdraw SOL from Dev Wallet (${devWalletObj.publicKey.slice(0,6)}...) to Funder (${funderWalletRecord.publicKey.slice(0,6)}...)?`)) {
+      return
     }
 
     try {
-       const res = await fetch("/api/bundler/wallets", {
+      const res = await fetch("/api/bundler/wallets", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           action: "collect",
-          wallets: [devWalletObj],
-          recipientAddress: funderAddress
+          walletPublicKeys: [devWalletObj.publicKey],
+          recipientAddress: funderWalletRecord.publicKey
         })
       })
 
@@ -1471,11 +1414,10 @@ export default function DashboardPage() {
         await loadSavedWallets()
       }
     } catch (error: any) {
-         console.error("withdraw error:", error)
-         toast.error("Failed to withdraw")
+      console.error("withdraw error:", error)
+      toast.error("Failed to withdraw")
     }
-
-  }, [funderKey, launchDevWallet, bundlerWallets, loadSavedWallets, addSystemLog])
+  }, [addSystemLog, devWalletRecord, funderWalletRecord, loadSavedWallets])
 
   // Execute wallet trade (buy/sell individual)
   const executeWalletTrade = useCallback(async (
@@ -1488,12 +1430,6 @@ export default function DashboardPage() {
       toast.error("Select a token first")
       return
     }
-    if (!wallet.secretKey) {
-      addSystemLog(`Wallet secret key missing for ${wallet.publicKey}`, "error")
-      toast.error("Wallet secret key missing")
-      return
-    }
-
     const parsedBuy = overrides?.buyAmount ?? Number.parseFloat(manualBuyAmount)
     const buyAmount = Number.isFinite(parsedBuy) && parsedBuy > 0 ? parsedBuy : 0
     const parsedSellPct = overrides?.sellPercent ?? Number.parseFloat(manualSellPercent)
@@ -1510,7 +1446,7 @@ export default function DashboardPage() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             action: "refresh",
-            wallets: [wallet],
+            walletPublicKeys: [wallet.publicKey],
             mintAddress: selectedToken.mintAddress,
           }),
         })
@@ -1558,14 +1494,7 @@ export default function DashboardPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          wallet: {
-            publicKey: effectiveWallet.publicKey,
-            secretKey: effectiveWallet.secretKey,
-            solBalance: effectiveWallet.solBalance,
-            tokenBalance: effectiveWallet.tokenBalance,
-            isActive: effectiveWallet.isActive,
-            ataExists: effectiveWallet.ataExists,
-          },
+          walletAddress: effectiveWallet.publicKey,
           mintAddress: selectedToken.mintAddress,
           type: action,
           amount,
@@ -1618,8 +1547,8 @@ export default function DashboardPage() {
   ])
 
   const runStealthFunding = useCallback(async () => {
-    if (!connected || !connectedWalletKey) {
-      toast.error("Connect funder wallet")
+    if (!funderWalletRecord?.publicKey) {
+      toast.error("Set funder wallet in database first")
       return
     }
 
@@ -1638,15 +1567,16 @@ export default function DashboardPage() {
     addSystemLog(`Stealth funding ${activeWallets.length} wallets`, "info")
 
     try {
-      const recipients = activeWallets.map((w) => ({
-        to: w.publicKey,
-        lamports: lamportsPerWallet,
-      }))
+      const recipients = activeWallets.map((w) => w.publicKey)
 
       const res = await fetch("/api/volume-bot/fund", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ fromPubkey: connectedWalletKey, recipients }),
+        body: JSON.stringify({
+          funderAddress: funderWalletRecord.publicKey,
+          recipients,
+          lamports: lamportsPerWallet,
+        }),
       })
 
       const data = await res.json().catch(() => ({}))
@@ -1657,21 +1587,7 @@ export default function DashboardPage() {
         return
       }
 
-      const connection = await getResilientConnection()
-      const signatures: string[] = []
-
-      for (const raw of data.transactions || []) {
-        try {
-          const tx = VersionedTransaction.deserialize(Buffer.from(raw, "base64"))
-          const sig = await sendTransaction(tx, connection, { skipPreflight: true })
-          signatures.push(sig)
-          await connection.confirmTransaction(sig, "confirmed")
-        } catch (error: any) {
-          console.error("stealth fund tx failed", error)
-          addSystemLog(`Stealth fund tx failed: ${error?.message || error}`, "error")
-        }
-      }
-
+      const signatures = Array.isArray(data?.signatures) ? data.signatures : []
       if (signatures.length > 0) {
         addSystemLog(`Stealth fund sent: ${signatures[0].slice(0, 8)}...`, "success")
         toast.success(`Funded ${signatures.length} txs`)
@@ -1688,10 +1604,8 @@ export default function DashboardPage() {
   }, [
     activeWallets,
     addSystemLog,
-    connected,
-    connectedWalletKey,
     funderAmountPerWallet,
-    sendTransaction,
+    funderWalletRecord,
   ])
 
   const warmupVolumeWallets = useCallback(async () => {
@@ -1700,15 +1614,15 @@ export default function DashboardPage() {
       return
     }
 
-    const secretKeys = activeWallets.map((w) => w.secretKey).filter(Boolean)
-    if (secretKeys.length === 0) {
-      toast.error("Wallet secret keys required for warmup")
+    const walletPublicKeys = activeWallets.map((w) => w.publicKey).filter(Boolean)
+    if (walletPublicKeys.length === 0) {
+      toast.error("No wallets available for warmup")
       return
     }
 
     setWarmupLoading(true)
     setWarmupProgress(0)
-    addSystemLog(`Warming ${secretKeys.length} wallets`, "info")
+    addSystemLog(`Warming ${walletPublicKeys.length} wallets`, "info")
 
     try {
       const safeTip = Number.isFinite(Number.parseFloat(jitoTipSol))
@@ -1720,7 +1634,7 @@ export default function DashboardPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           action: "warmup_batch",
-          walletSecretKeys: secretKeys,
+          walletPublicKeys,
           jitoTip: safeTip,
           jitoRegion,
           transferSol: 0.000001,
@@ -1736,8 +1650,8 @@ export default function DashboardPage() {
       }
 
       setWarmupProgress(100)
-      addSystemLog(`Warmup complete for ${secretKeys.length} wallets`, "success")
-      toast.success(`Warmed ${secretKeys.length} wallets`)
+      addSystemLog(`Warmup complete for ${walletPublicKeys.length} wallets`, "success")
+      toast.success(`Warmed ${walletPublicKeys.length} wallets`)
     } catch (error: any) {
       console.error("warmup error", error)
       addSystemLog(`Warmup error: ${error?.message || error}`, "error")
@@ -2061,59 +1975,6 @@ export default function DashboardPage() {
     return "now"
   }
 
-  const generateFunderWallet = async () => {
-    try {
-      const { Keypair } = await import("@solana/web3.js")
-      const bs58 = (await import("bs58")).default
-      const keypair = Keypair.generate()
-      setFunderKey(bs58.encode(keypair.secretKey))
-      toast.success("generated new funder wallet")
-    } catch (error: any) {
-      toast.error("failed to generate funder")
-    }
-  }
-
-  const topUpFunder = async () => {
-    if (!funderKey) {
-      toast.error("enter funder key first")
-      return
-    }
-    if (!connected || !publicKey) {
-      toast.error("connect wallet first")
-      return
-    }
-
-    try {
-      const { Keypair } = await import("@solana/web3.js")
-      const bs58 = (await import("bs58")).default
-      const funderPubkey = Keypair.fromSecretKey(bs58.decode(funderKey)).publicKey
-
-      const amountStr = prompt("Enter amount to top up (SOL):", "1")
-      if (!amountStr) return
-      const amount = parseFloat(amountStr)
-      if (!amount || amount <= 0) return
-
-      const connection = await getResilientConnection()
-      const tx = new Transaction().add(
-        SystemProgram.transfer({
-          fromPubkey: publicKey,
-          toPubkey: funderPubkey,
-          lamports: amount * LAMPORTS_PER_SOL
-        })
-      )
-
-      const sig = await sendTransaction(tx, connection)
-      if (!sig) {
-        throw new Error("transaction signature not received")
-      }
-
-      await connection.confirmTransaction(sig, "confirmed")
-      toast.success(`top up sent: ${sig.slice(0, 8)}...`)
-    } catch (error: any) {
-      toast.error(`top up failed: ${error.message}`)
-    }
-  }
-
   return (
     <div className="p-1 space-y-1">
       <div className="flex flex-wrap items-center justify-between gap-2 rounded border border-neutral-800 bg-neutral-900/70 px-2 py-1">
@@ -2408,7 +2269,7 @@ export default function DashboardPage() {
                   </Button>
                   <Button
                     onClick={rugpullDevWallet}
-                    disabled={!selectedToken || !launchDevWallet}
+                    disabled={!selectedToken || !devWalletRecord}
                     className="h-6 bg-red-600 hover:bg-red-700 text-[10px]"
                   >
                     <Flame className="w-3 h-3 mr-1" />
@@ -2428,7 +2289,7 @@ export default function DashboardPage() {
                         </Button>
                         <Button
                             onClick={withdrawDevToFunder}
-                            disabled={!funderKey}
+                            disabled={!funderWalletRecord?.publicKey}
                             className="h-6 bg-green-600 hover:bg-green-700 text-[10px]"
                         >
                             <Download className="w-3 h-3 mr-1" />
@@ -2501,7 +2362,7 @@ export default function DashboardPage() {
                 <div className="flex flex-wrap items-center gap-2 text-[11px] text-neutral-300">
                   <Button
                     onClick={runStealthFunding}
-                    disabled={stealthFunding || activeWallets.length === 0 || !connected}
+                    disabled={stealthFunding || activeWallets.length === 0 || !funderWalletRecord?.publicKey}
                     className="h-8 text-xs font-semibold bg-emerald-500 hover:bg-emerald-400 text-black shadow-sm disabled:opacity-50 disabled:cursor-not-allowed disabled:bg-emerald-600/60"
                   >
                     <ShieldCheck className="w-3 h-3 mr-2" />
@@ -2945,35 +2806,9 @@ export default function DashboardPage() {
             </CardHeader>
             <CardContent className="space-y-2 px-2 pb-2">
               <div className="space-y-1">
-                <div className="flex justify-between items-center">
-                    <Label className="text-[10px] text-black">Dev address</Label>
-                    <Button
-                        size="sm"
-                        variant="outline"
-                        className="h-5 px-2 text-[9px] border-blue-500/50 text-blue-400 hover:bg-blue-500/10"
-                        onClick={() => {
-                            if (connectedWalletKey) {
-                                const isRegistered = bundlerWallets.some((wallet) => wallet.publicKey === connectedWalletKey)
-                                if (!isRegistered) {
-                                  toast.error("Connected wallet not imported yet. Import it before selection.")
-                                  console.warn("Attempted to use unregistered connected wallet", connectedWalletKey)
-                                  return
-                                }
-                                if (launchDevWallet) updateWalletRole(launchDevWallet, 'project')
-                                updateWalletRole(connectedWalletKey, 'dev')
-                                setLaunchDevWallet(connectedWalletKey)
-                                setBuyerWallets((prev) => prev.filter((wallet) => wallet.publicKey !== connectedWalletKey))
-                            } else {
-                                toast.error("Connect wallet first")
-                            }
-                        }}
-                    >
-                        Use Connected
-                    </Button>
-                </div>
+                <Label className="text-[10px] text-black">Dev address</Label>
                   <DevWalletSelect
                     launchDevWallet={launchDevWallet}
-                    connectedWalletKey={connectedWalletKey}
                     devWalletOptions={devWalletOptions}
                     onSelect={(value) => {
                     if (launchDevWallet) {

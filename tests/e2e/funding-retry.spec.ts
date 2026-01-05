@@ -11,7 +11,7 @@ test.describe('Funding Retry Scenario', () => {
 
   test('should not double-fund wallets on retry', async ({ page }) => {
     // 1. Navigate to dashboard
-    await page.goto('http://localhost:3000/dashboard'); // Adjust URL if needed
+    await page.goto('/'); // Adjust URL if needed
 
     // 2. Select/Create a bundle (assuming flow exists)
     // await page.getByText('Create Bundle').click();
@@ -42,3 +42,4 @@ test.describe('Funding Retry Scenario', () => {
     }
   });
 });
+

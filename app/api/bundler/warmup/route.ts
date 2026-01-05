@@ -4,10 +4,11 @@ import {
   getWalletsWarmupStatus,
   DEFAULT_WARMUP_CONFIG,
 } from "@/lib/solana/warmup"
-import { Keypair, Transaction, SystemProgram, LAMPORTS_PER_SOL } from "@solana/web3.js"
+import { Keypair, PublicKey, SystemProgram, LAMPORTS_PER_SOL, TransactionMessage, VersionedTransaction } from "@solana/web3.js"
 import bs58 from "bs58"
 import { connection } from "@/lib/solana/config"
 import { createTipInstruction, sendBundle, type JitoRegion } from "@/lib/solana/jito"
+import { prisma } from "@/lib/prisma"
 
 const MAX_BUNDLE_TXS = 5
 
@@ -34,16 +35,31 @@ async function confirmSignatures(signatures: string[], timeoutMs: number = 60_00
   return signatures.map((sig) => ({ signature: sig, ...(statusBySig.get(sig) || { status: "pending" }) }))
 }
 
+async function getFunderKeypair() {
+  const funderWallet = await prisma.wallet.findFirst({
+    where: { role: "funder" },
+  })
+  if (!funderWallet?.secretKey) {
+    return null
+  }
+  return Keypair.fromSecretKey(bs58.decode(funderWallet.secretKey))
+}
+
 // POST - warmup wallets
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
-    const { action, walletSecretKeys, walletSecretKey } = body
+    const { action, walletPublicKeys, walletPublicKey } = body
 
     switch (action) {
       case "warmup_single": {
-        if (!walletSecretKey) {
-          return NextResponse.json({ error: "walletSecretKey required" }, { status: 400 })
+        if (!walletPublicKey) {
+          return NextResponse.json({ error: "walletPublicKey required" }, { status: 400 })
+        }
+
+        const funderKeypair = await getFunderKeypair()
+        if (!funderKeypair) {
+          return NextResponse.json({ error: "funder wallet not found in database" }, { status: 404 })
         }
 
         const region = (body.jitoRegion || "frankfurt") as JitoRegion
@@ -53,23 +69,34 @@ export async function POST(request: NextRequest) {
         const transferSol = Number.isFinite(rawTransfer) ? Math.max(0, rawTransfer) : 0.000001
         const transferLamports = Math.max(1, Math.floor(transferSol * LAMPORTS_PER_SOL))
 
-        const keypair = Keypair.fromSecretKey(bs58.decode(walletSecretKey))
+        let recipient: PublicKey
+        try {
+          recipient = new PublicKey(walletPublicKey)
+        } catch {
+          return NextResponse.json({ error: "invalid walletPublicKey" }, { status: 400 })
+        }
+
         const { blockhash } = await connection.getLatestBlockhash()
-        const tx = new Transaction()
-        tx.add(
+        const instructions = [
           SystemProgram.transfer({
-            fromPubkey: keypair.publicKey,
-            toPubkey: keypair.publicKey,
+            fromPubkey: funderKeypair.publicKey,
+            toPubkey: recipient,
             lamports: transferLamports,
-          })
-        )
-        tx.add(createTipInstruction(keypair.publicKey, tip, region))
-        tx.recentBlockhash = blockhash
-        tx.feePayer = keypair.publicKey
-        tx.sign(keypair)
+          }),
+        ]
+        if (tip > 0) {
+          instructions.push(createTipInstruction(funderKeypair.publicKey, tip, region))
+        }
+        const message = new TransactionMessage({
+          payerKey: funderKeypair.publicKey,
+          recentBlockhash: blockhash,
+          instructions,
+        }).compileToV0Message()
+        const tx = new VersionedTransaction(message)
+        tx.sign([funderKeypair])
 
         const { bundleId } = await sendBundle([tx], region)
-        const signatures = [bs58.encode(tx.signatures?.[0]?.signature || new Uint8Array(64))]
+        const signatures = [bs58.encode(tx.signatures?.[0] || new Uint8Array(64))]
         const statuses = await confirmSignatures(signatures)
 
         return NextResponse.json({
@@ -81,16 +108,21 @@ export async function POST(request: NextRequest) {
       }
 
       case "warmup_batch": {
-        if (!walletSecretKeys || !Array.isArray(walletSecretKeys)) {
-          return NextResponse.json({ error: "walletSecretKeys array required" }, { status: 400 })
+        if (!walletPublicKeys || !Array.isArray(walletPublicKeys)) {
+          return NextResponse.json({ error: "walletPublicKeys array required" }, { status: 400 })
         }
 
-        if (walletSecretKeys.length === 0) {
+        if (walletPublicKeys.length === 0) {
           return NextResponse.json({ error: "no wallets provided" }, { status: 400 })
         }
 
-        if (walletSecretKeys.length > 20) {
+        if (walletPublicKeys.length > 20) {
           return NextResponse.json({ error: "max 20 wallets per batch" }, { status: 400 })
+        }
+
+        const funderKeypair = await getFunderKeypair()
+        if (!funderKeypair) {
+          return NextResponse.json({ error: "funder wallet not found in database" }, { status: 404 })
         }
 
         const region = (body.jitoRegion || "frankfurt") as JitoRegion
@@ -103,32 +135,52 @@ export async function POST(request: NextRequest) {
         const bundles: Array<{ bundleId: string; signatures: string[] }> = []
         const allSignatures: string[] = []
 
-        for (let i = 0; i < walletSecretKeys.length; i += MAX_BUNDLE_TXS) {
-          const batch = walletSecretKeys.slice(i, i + MAX_BUNDLE_TXS)
-          const { blockhash } = await connection.getLatestBlockhash()
-          const txs: Transaction[] = []
+        const orderedWallets = walletPublicKeys
+          .map((key) => key)
+          .filter((key): key is string => typeof key === "string" && key.length > 0)
 
-          batch.forEach((secretKey, idx) => {
-            const keypair = Keypair.fromSecretKey(bs58.decode(secretKey))
-            const tx = new Transaction()
-            tx.add(
-              SystemProgram.transfer({
-                fromPubkey: keypair.publicKey,
-                toPubkey: keypair.publicKey,
-                lamports: transferLamports,
-              })
-            )
-            if (idx === 0) {
-              tx.add(createTipInstruction(keypair.publicKey, tip, region))
+        if (orderedWallets.length === 0) {
+          return NextResponse.json({ error: "wallets not found in database" }, { status: 404 })
+        }
+
+        for (let i = 0; i < orderedWallets.length; i += MAX_BUNDLE_TXS) {
+          const batch = orderedWallets.slice(i, i + MAX_BUNDLE_TXS)
+          const { blockhash } = await connection.getLatestBlockhash()
+          const txs: VersionedTransaction[] = []
+
+          batch.forEach((walletPublicKey, idx) => {
+            let recipient: PublicKey
+            try {
+              recipient = new PublicKey(walletPublicKey)
+            } catch {
+              return
             }
-            tx.recentBlockhash = blockhash
-            tx.feePayer = keypair.publicKey
-            tx.sign(keypair)
+            const instructions = [
+              SystemProgram.transfer({
+                fromPubkey: funderKeypair.publicKey,
+                toPubkey: recipient,
+                lamports: transferLamports,
+              }),
+            ]
+            if (idx === 0 && tip > 0) {
+              instructions.push(createTipInstruction(funderKeypair.publicKey, tip, region))
+            }
+            const message = new TransactionMessage({
+              payerKey: funderKeypair.publicKey,
+              recentBlockhash: blockhash,
+              instructions,
+            }).compileToV0Message()
+            const tx = new VersionedTransaction(message)
+            tx.sign([funderKeypair])
             txs.push(tx)
           })
 
+          if (txs.length === 0) {
+            continue
+          }
+
           const { bundleId } = await sendBundle(txs, region)
-          const signatures = txs.map((tx) => bs58.encode(tx.signatures?.[0]?.signature || new Uint8Array(64)))
+          const signatures = txs.map((tx) => bs58.encode(tx.signatures?.[0] || new Uint8Array(64)))
           bundles.push({ bundleId, signatures })
           allSignatures.push(...signatures)
         }

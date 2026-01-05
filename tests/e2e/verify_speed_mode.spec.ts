@@ -4,7 +4,9 @@ import path from 'path';
 
 test('Verify Speed Mode Inputs', async ({ page }) => {
   // Go to the dashboard
-  await page.goto('http://localhost:3000');
+  await page.goto('/');
+
+  await page.getByText('DASHBOARD FLOW').waitFor();
 
   // We need to switch to "Main Stage" first if we are in "Launch Stage"
   const openMainStageButton = page.locator('button:has-text("Open main stage")');
@@ -57,3 +59,4 @@ test('Verify Speed Mode Inputs', async ({ page }) => {
   // Take a screenshot of the new settings modal
   await page.screenshot({ path: path.join(process.cwd(), 'verification', 'speed_mode_settings.png') });
 });
+

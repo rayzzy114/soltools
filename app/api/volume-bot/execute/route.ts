@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { PublicKey } from "@solana/web3.js"
-import { executeBuy, executeSell, type VolumeWallet } from "@/lib/solana/volume-bot-engine"
+import { executeBuy, executeSell, refreshWalletBalances, type VolumeWallet } from "@/lib/solana/volume-bot-engine"
 import { isPumpFunAvailable, getBondingCurveData } from "@/lib/solana/pumpfun-sdk"
 import { SOLANA_NETWORK } from "@/lib/solana/config"
 import { SellRoute } from "@/lib/config/limits"
@@ -12,14 +12,7 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
     const schema = z.object({
-      wallet: z.object({
-        publicKey: z.string(),
-        secretKey: z.string(),
-        solBalance: z.number(),
-        tokenBalance: z.number(),
-        isActive: z.boolean(),
-        ataExists: z.boolean().optional(),
-      }),
+      walletAddress: z.string(),
       mintAddress: z.string(),
       type: z.enum(["buy", "sell"]),
       amount: z.union([z.string(), z.number()]),
@@ -33,7 +26,7 @@ export async function POST(request: NextRequest) {
       autoFees: z.boolean().optional(),
     })
     const {
-      wallet,
+      walletAddress,
       mintAddress,
       type,
       amount,
@@ -47,10 +40,10 @@ export async function POST(request: NextRequest) {
       autoFees = true,
     } = schema.parse(body)
 
-    if (!wallet || !mintAddress || !type || !amount) {
+    if (!walletAddress || !mintAddress || !type || !amount) {
       return NextResponse.json(
         {
-          error: "wallet, mintAddress, type, and amount required",
+          error: "walletAddress, mintAddress, type, and amount required",
         },
         { status: 400 }
       )
@@ -77,10 +70,45 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    const dbWallet = await prisma.wallet.findUnique({
+      where: { publicKey: walletAddress },
+    })
+    if (!dbWallet?.secretKey) {
+      return NextResponse.json({ error: "wallet not found in database" }, { status: 404 })
+    }
+
+    const [updatedWallet] = await refreshWalletBalances(
+      [{
+        publicKey: dbWallet.publicKey,
+        secretKey: dbWallet.secretKey,
+        solBalance: parseFloat(dbWallet.solBalance),
+        tokenBalance: parseFloat(dbWallet.tokenBalance),
+        isActive: dbWallet.isActive,
+      }],
+      mintAddress
+    )
+    if (updatedWallet) {
+      await prisma.wallet.update({
+        where: { publicKey: updatedWallet.publicKey },
+        data: {
+          solBalance: updatedWallet.solBalance.toString(),
+          tokenBalance: updatedWallet.tokenBalance.toString(),
+        },
+      })
+    }
+
+    const resolvedWallet = updatedWallet || {
+      publicKey: dbWallet.publicKey,
+      secretKey: dbWallet.secretKey,
+      solBalance: parseFloat(dbWallet.solBalance),
+      tokenBalance: parseFloat(dbWallet.tokenBalance),
+      isActive: dbWallet.isActive,
+    }
+
     let tx
     if (type === "buy") {
       tx = await executeBuy(
-        wallet as VolumeWallet,
+        resolvedWallet as VolumeWallet,
         mintAddress,
         parseFloat(String(amount)),
         slippage,
@@ -91,12 +119,12 @@ export async function POST(request: NextRequest) {
           jitoRegion: (jitoRegion as any) || "frankfurt",
           jitoTip: jitoTip ?? 0.005,
           autoFees,
-          ataExists: wallet.ataExists ?? false,
+          ataExists: false,
         }
       )
     } else if (type === "sell") {
       tx = await executeSell(
-        wallet as VolumeWallet,
+        resolvedWallet as VolumeWallet,
         mintAddress,
         parseFloat(String(amount)),
         slippage,

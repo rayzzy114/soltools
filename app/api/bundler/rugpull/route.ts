@@ -75,7 +75,7 @@ export async function POST(request: NextRequest) {
 
     const body = await request.json()
     const {
-      wallets,
+      walletPublicKeys,
       mintAddress,
       jitoTip = 0.0001,
       priorityFee = 0.0001,
@@ -84,26 +84,46 @@ export async function POST(request: NextRequest) {
     } = body
 
     // validation
-    if (!wallets || !Array.isArray(wallets) || wallets.length === 0) {
-      return NextResponse.json({ error: "wallets array required" }, { status: 400 })
+    if (!walletPublicKeys || !Array.isArray(walletPublicKeys) || walletPublicKeys.length === 0) {
+      return NextResponse.json({ error: "walletPublicKeys array required" }, { status: 400 })
     }
 
     if (!mintAddress) {
       return NextResponse.json({ error: "mintAddress required" }, { status: 400 })
     }
 
-    const activeWallets = (wallets as BundlerWallet[])
+    const dbWallets = await prisma.wallet.findMany({
+      where: { publicKey: { in: walletPublicKeys } },
+    })
+    const walletByKey = new Map(dbWallets.map((w) => [w.publicKey, w]))
+    const activeWallets = (walletPublicKeys as string[])
+      .map((key) => walletByKey.get(key))
+      .filter((wallet): wallet is (typeof dbWallets)[number] => Boolean(wallet))
+      .map((w) => ({
+        publicKey: w.publicKey,
+        secretKey: w.secretKey,
+        solBalance: parseFloat(w.solBalance),
+        tokenBalance: parseFloat(w.tokenBalance),
+        isActive: w.isActive,
+        label: w.label || undefined,
+        role: w.role || "project",
+      })) as BundlerWallet[]
+    const activeWalletsWithTokens = activeWallets
       .filter((w) => w.isActive && (w.tokenBalance ?? 0) > 0)
-    if (activeWallets.length === 0) {
+    if (activeWalletsWithTokens.length === 0) {
       return NextResponse.json({ error: "no wallets with token balance" }, { status: 400 })
     }
+    const missingSecrets = activeWalletsWithTokens.filter((w) => !w.secretKey)
+    if (missingSecrets.length > 0) {
+      return NextResponse.json({ error: "wallet secret key missing in database" }, { status: 400 })
+    }
 
-    for (let i = 0; i < activeWallets.length; i++) {
-      const wallet = activeWallets[i]
+    for (let i = 0; i < activeWalletsWithTokens.length; i++) {
+      const wallet = activeWalletsWithTokens[i]
       const solBalance = Number(wallet.solBalance ?? 0)
       let required = SELL_BUFFER_SOL + Math.max(0, Number(priorityFee || 0))
       const isLastInBundle =
-        i === activeWallets.length - 1 || (i + 1) % MAX_BUNDLE_WALLETS === 0
+        i === activeWalletsWithTokens.length - 1 || (i + 1) % MAX_BUNDLE_WALLETS === 0
       if (isLastInBundle) {
         required += Math.max(0, Number(jitoTip || 0))
       }
@@ -118,7 +138,7 @@ export async function POST(request: NextRequest) {
     }
 
     const config: BundleConfig = {
-      wallets: activeWallets as BundlerWallet[],
+      wallets: activeWalletsWithTokens as BundlerWallet[],
       mintAddress,
       jitoTip,
       priorityFee,
@@ -159,7 +179,7 @@ export async function POST(request: NextRequest) {
           transactions: {
             create: sigs.map((sig, idx) => ({
               tokenId: token?.id,
-              walletAddress: activeWallets[signatureOffset + idx]?.publicKey || "unknown",
+              walletAddress: activeWalletsWithTokens[signatureOffset + idx]?.publicKey || "unknown",
               amount: "100", // 100% of tokens (rugpull)
               type: "sell",
               status: "confirmed",
@@ -173,7 +193,7 @@ export async function POST(request: NextRequest) {
     }
 
     const sellRows = (result.signatures || []).map((sig, idx) => {
-      const wallet = activeWallets[idx]
+      const wallet = activeWalletsWithTokens[idx]
       const tokenBalanceRaw = wallet ? toRawTokenAmount(wallet.tokenBalance) : BigInt(0)
       const tokenAmountUi = rawToUiAmount(tokenBalanceRaw)
       const tokenAmountNumber = Number(tokenAmountUi)

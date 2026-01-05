@@ -84,7 +84,7 @@ test.describe('Advanced Dashboard Features', () => {
     await page.route('**/api/logs*', async route => route.fulfill({ json: { logs: [] } }));
 
     // Load page
-    await page.goto('http://localhost:3000/dashboard');
+    await page.goto('/');
 
     // Switch to Main Stage if needed
     const openMainStage = page.getByText('Open main stage');
@@ -94,10 +94,10 @@ test.describe('Advanced Dashboard Features', () => {
 
     // Ensure "Test Token" is selected
     await page.getByText('TOKEN INFO').waitFor();
-    const tokenRow = page.getByText('Test Token', { exact: true }).first();
-    await tokenRow.waitFor();
-    await tokenRow.click();
-    await page.waitForTimeout(500);
+    const tokenSelect = page.locator('button[role="combobox"]').first();
+    await tokenSelect.click();
+    await page.getByRole('option', { name: /TEST/ }).click();
+    await expect(tokenSelect).toContainText('TEST');
   });
 
   test('Panic Sell (Dump from buyer) should trigger API and show success', async ({ page }) => {
@@ -151,17 +151,11 @@ test.describe('Advanced Dashboard Features', () => {
     await page.getByText('Upload to IPFS').click();
     await expect(page.getByText('Metadata: https://ipfs.io/ipfs/QmMock')).toBeVisible();
 
-    const devSelectContainer = page.locator('div').filter({ has: page.locator('label', { hasText: 'Dev address' }) }).last();
-    const devSelect = devSelectContainer.getByRole('combobox').first();
-    await page.waitForTimeout(1000);
-    const selectedText = await devSelect.textContent();
-    if (!selectedText?.includes('DevWallet123')) {
-        await devSelect.click();
-        await expect(page.getByRole('option').first()).toBeVisible();
-        const option = page.getByRole('option').filter({ hasText: 'DevWallet123' }).first();
-        if (await option.count() > 0) await option.click();
-        else await page.getByRole('option').first().click();
-    }
+    const devKey = 'DevWallet123';
+    const devSelect = page.locator('button[role="combobox"]').first();
+    await devSelect.click();
+    const optionPattern = new RegExp(`${devKey.slice(0, 6)}.*${devKey.slice(-4)}`);
+    await page.getByRole('option', { name: optionPattern }).click();
 
     await page.getByText('Add wallet').click();
     const launchBtn = page.getByRole('button', { name: 'LAUNCH TOKEN + BUNDLE' });
@@ -177,7 +171,7 @@ test.describe('Advanced Dashboard Features', () => {
   });
 
   test('Collect SOL should trigger API and show success', async ({ page }) => {
-    const collectBtn = page.getByRole('button', { name: 'Collect all → dev' });
+    const collectBtn = page.getByRole('button', { name: /collect all/i });
     await expect(collectBtn).toBeVisible();
     await expect(collectBtn).toBeEnabled();
 
@@ -187,3 +181,4 @@ test.describe('Advanced Dashboard Features', () => {
     await expect(page.getByText(/Collected SOL from 2 wallets/i)).toBeVisible({ timeout: 10000 });
   });
 });
+

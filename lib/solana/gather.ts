@@ -1,12 +1,11 @@
 import {
-  Connection,
   Keypair,
   PublicKey,
   ComputeBudgetProgram,
   SystemProgram,
-  Transaction,
   TransactionInstruction,
-  sendAndConfirmTransaction,
+  TransactionMessage,
+  VersionedTransaction,
 } from "@solana/web3.js"
 import {
   TOKEN_PROGRAM_ID,
@@ -17,12 +16,12 @@ import {
   AccountLayout,
 } from "@solana/spl-token"
 import bs58 from "bs58"
-import { connection, RPC_ENDPOINT, RPC_WEBSOCKET_ENDPOINT } from "./config"
+import { connection } from "./config"
 import { prisma } from "../prisma"
 
 type GatherConfig = {
-  mainSecret?: string
-  buyerSecret?: string
+  mainAddress?: string
+  buyerAddress?: string
   walletIds?: string[]
   groupIds?: string[]
   priorityFeeMicroLamports?: number
@@ -32,11 +31,6 @@ type TokenAccountDecoded = {
   pubkey: PublicKey
   accountInfo: ReturnType<typeof AccountLayout.decode>
 }
-
-const solanaConnection = new Connection(RPC_ENDPOINT, {
-  wsEndpoint: RPC_WEBSOCKET_ENDPOINT,
-  commitment: "processed",
-})
 
 export async function executeGather(config: GatherConfig = {}): Promise<{ signatures: string[] }> {
   const signatures: string[] = []
@@ -67,12 +61,33 @@ export async function executeGather(config: GatherConfig = {}): Promise<{ signat
   })
   if (!wallets.length) throw new Error("no wallets provided")
 
-  const mainSecret = config.mainSecret || process.env.GATHER_MAIN_SECRET
-  if (!mainSecret) throw new Error("main secret missing")
-  const mainKp = Keypair.fromSecretKey(bs58.decode(mainSecret))
+  const mainAddress = config.mainAddress || process.env.GATHER_MAIN_ADDRESS
+  let mainKp: Keypair
+  if (mainAddress) {
+    const mainWallet = await prisma.wallet.findUnique({
+      where: { publicKey: mainAddress },
+      select: { publicKey: true, secretKey: true },
+    })
+    if (!mainWallet?.secretKey) throw new Error("main wallet missing secret key")
+    mainKp = Keypair.fromSecretKey(bs58.decode(mainWallet.secretKey))
+  } else if (process.env.GATHER_MAIN_SECRET) {
+    mainKp = Keypair.fromSecretKey(bs58.decode(process.env.GATHER_MAIN_SECRET))
+  } else {
+    throw new Error("main wallet not configured")
+  }
 
-  const buyerSecret = config.buyerSecret || process.env.GATHER_BUYER_SECRET
-  const buyerKp = buyerSecret ? Keypair.fromSecretKey(bs58.decode(buyerSecret)) : null
+  const buyerAddress = config.buyerAddress || process.env.GATHER_BUYER_ADDRESS
+  let buyerKp: Keypair | null = null
+  if (buyerAddress) {
+    const buyerWallet = await prisma.wallet.findUnique({
+      where: { publicKey: buyerAddress },
+      select: { publicKey: true, secretKey: true },
+    })
+    if (!buyerWallet?.secretKey) throw new Error("buyer wallet missing secret key")
+    buyerKp = Keypair.fromSecretKey(bs58.decode(buyerWallet.secretKey))
+  } else if (process.env.GATHER_BUYER_SECRET) {
+    buyerKp = Keypair.fromSecretKey(bs58.decode(process.env.GATHER_BUYER_SECRET))
+  }
 
   const walletKeypairs = wallets.map((w) => Keypair.fromSecretKey(bs58.decode(w.secretKey)))
   if (buyerKp) walletKeypairs.push(buyerKp)
@@ -127,15 +142,21 @@ export async function executeGather(config: GatherConfig = {}): Promise<{ signat
     }
 
     if (ixs.length) {
-      const tx = new Transaction().add(
-        ComputeBudgetProgram.setComputeUnitPrice({ microLamports: config.priorityFeeMicroLamports ?? 220_000 }),
-        ComputeBudgetProgram.setComputeUnitLimit({ units: 350_000 }),
-        ...ixs,
-      )
-      tx.feePayer = mainKp.publicKey
-      tx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash
+      const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash()
+      const message = new TransactionMessage({
+        payerKey: mainKp.publicKey,
+        recentBlockhash: blockhash,
+        instructions: [
+          ComputeBudgetProgram.setComputeUnitPrice({ microLamports: config.priorityFeeMicroLamports ?? 220_000 }),
+          ComputeBudgetProgram.setComputeUnitLimit({ units: 350_000 }),
+          ...ixs,
+        ],
+      }).compileToV0Message()
+      const tx = new VersionedTransaction(message)
+      tx.sign([mainKp, kp])
 
-      const sig = await sendAndConfirmTransaction(connection, tx, [mainKp, kp], { commitment: "confirmed" })
+      const sig = await connection.sendRawTransaction(tx.serialize(), { skipPreflight: false })
+      await connection.confirmTransaction({ signature: sig, blockhash, lastValidBlockHeight }, "confirmed")
       signatures.push(sig)
     }
   }

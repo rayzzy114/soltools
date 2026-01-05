@@ -34,9 +34,8 @@ import {
 } from "lucide-react"
 import { useQuery } from "@tanstack/react-query"
 import { useWallet } from "@solana/wallet-adapter-react"
-import { SystemProgram, Transaction, PublicKey } from "@solana/web3.js"
-import { getResilientConnection, RPC_ENDPOINT, connection } from "@/lib/solana/config"
-import { ensureTransactionSignature } from "@/lib/solana/send-helpers"
+import { SystemProgram, PublicKey, TransactionMessage, VersionedTransaction } from "@solana/web3.js"
+import { RPC_ENDPOINT, connection } from "@/lib/solana/config"
 
 interface BundlerWallet {
   publicKey: string
@@ -48,18 +47,7 @@ interface BundlerWallet {
   buyAmount?: number
   sellPercentage?: number
   ataExists?: boolean
-}
-
-interface DevWallet {
-  publicKey: string
-  secretKey: string
-  solBalance: number
-}
-
-interface FunderWallet {
-  publicKey: string
-  secretKey: string
-  solBalance: number
+  role?: string
 }
 
 interface BundleLog {
@@ -101,18 +89,13 @@ export default function BundlerPage() {
   }])
   const [activeBundleId, setActiveBundleId] = useState("")
 
-  // Dev & Funder wallets (like Infinity)
-  const [devWallet, setDevWallet] = useState<DevWallet | null>(null)
-  const [funderWallet, setFunderWallet] = useState<FunderWallet | null>(null)
-  // prefill test wallet for mainnet checks (user-provided)
-  const defaultTestSecret = "2bo29pzBW6iBKZpMzPNKuGf9nHQ6mUQ3Cu4GdhWArbbyRfKNprCKnCyWz7FAWJfeZq7qKBdfbA7UrVAx1USnuRNm"
-  const [devWalletKey, setDevWalletKey] = useState(defaultTestSecret)
-  const [funderWalletKey, setFunderWalletKey] = useState(defaultTestSecret)
+  // Dev & Funder wallets (DB-backed)
+  const [devWalletInput, setDevWalletInput] = useState("")
+  const [funderWalletInput, setFunderWalletInput] = useState("")
 
   // wallet management
   const [importKey, setImportKey] = useState("")
   const [walletCount, setWalletCount] = useState("5")
-  const [funderKey, setFunderKey] = useState("")
   const [fundAmount, setFundAmount] = useState("0.05")
   const [buyAmountAll, setBuyAmountAll] = useState("0.01")
 
@@ -122,8 +105,7 @@ export default function BundlerPage() {
   const [groupName, setGroupName] = useState("")
   const [groupType, setGroupType] = useState<"custom" | "launch" | "exit" | "volume">("custom")
   // gather
-  const [gatherMainSecret, setGatherMainSecret] = useState("")
-  const [gatherBuyerSecret, setGatherBuyerSecret] = useState("")
+  const [gatherBuyerAddress, setGatherBuyerAddress] = useState("")
   const [gatherWalletIds, setGatherWalletIds] = useState("")
   const [gatherGroupIds, setGatherGroupIds] = useState("")
   const [gatherPriorityFee, setGatherPriorityFee] = useState("220000")
@@ -173,6 +155,8 @@ export default function BundlerPage() {
 
   const activeWallets = useMemo(() => wallets.filter((w) => w.isActive), [wallets])
   const activeWalletCount = activeWallets.length
+  const devWalletRecord = useMemo(() => wallets.find((w) => w.role === "dev") || null, [wallets])
+  const funderWalletRecord = useMemo(() => wallets.find((w) => w.role === "funder") || null, [wallets])
 
   const applyStaggerPreset = (preset: "fast" | "human" | "slow") => {
     if (preset === "fast") {
@@ -259,83 +243,135 @@ export default function BundlerPage() {
     loadTokens()
   }, [])
 
-  // setup dev wallet
-  const setupDevWallet = async () => {
-    if (!allowPrivateKeys) {
-      toast.error("private keys are disabled by policy")
+  const updateWalletRole = async (publicKey: string, role: "dev" | "funder") => {
+    const trimmed = publicKey.trim()
+    if (!trimmed) {
+      toast.error(`enter ${role} wallet address`)
       return
     }
-    if (!devWalletKey.trim()) {
-      toast.error("enter dev wallet private key")
-      return
-    }
+
     try {
-      const { Keypair } = await import("@solana/web3.js")
-      const bs58 = (await import("bs58")).default
-      const keypair = Keypair.fromSecretKey(bs58.decode(devWalletKey.trim()))
-      
-      setDevWallet({
-        publicKey: keypair.publicKey.toBase58(),
-        secretKey: devWalletKey.trim(),
-        solBalance: 0,
+      const existing = role === "dev" ? devWalletRecord : funderWalletRecord
+      if (existing && existing.publicKey !== trimmed) {
+        const clearRes = await fetch("/api/bundler/wallets", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "update",
+            publicKey: existing.publicKey,
+            role: "project",
+          }),
+        })
+        const clearData = await clearRes.json().catch(() => ({}))
+        if (!clearRes.ok || clearData?.error) {
+          throw new Error(clearData?.error || `failed to clear ${role} wallet`)
+        }
+      }
+
+      const res = await fetch("/api/bundler/wallets", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "update",
+          publicKey: trimmed,
+          role,
+        }),
       })
-      setDevWalletKey("")
-      toast.success("dev wallet configured")
-      refreshDevFunderBalances()
-    } catch (error) {
-      toast.error("invalid private key")
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || data?.error) {
+        throw new Error(data?.error || `failed to set ${role} wallet`)
+      }
+
+      await loadSavedWallets({ silent: true })
+      if (role === "dev") {
+        setDevWalletInput("")
+      } else {
+        setFunderWalletInput("")
+      }
+      toast.success(`${role} wallet assigned`)
+    } catch (error: any) {
+      toast.error(error?.message || `failed to set ${role} wallet`)
     }
   }
 
-  const useConnectedDevWallet = async () => {
-    if (!connectedPublicKey) {
-      toast.error("connect wallet first")
-      return
-    }
-    // check if we have the secret key in saved wallets
-    const match = wallets.find(w => w.publicKey === connectedPublicKey.toBase58())
-    if (match && match.secretKey) {
-      setDevWallet({
-        publicKey: match.publicKey,
-        secretKey: match.secretKey,
-        solBalance: match.solBalance,
+  const clearWalletRole = async (role: "dev" | "funder") => {
+    const existing = role === "dev" ? devWalletRecord : funderWalletRecord
+    if (!existing) return
+
+    try {
+      const res = await fetch("/api/bundler/wallets", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "update",
+          publicKey: existing.publicKey,
+          role: "project",
+        }),
       })
-      toast.success("connected wallet set as dev wallet")
-    } else {
-      toast.error("connected wallet secret key not found in database. please import it first.")
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || data?.error) {
+        throw new Error(data?.error || `failed to clear ${role} wallet`)
+      }
+      await loadSavedWallets({ silent: true })
+      toast.success(`${role} wallet cleared`)
+    } catch (error: any) {
+      toast.error(error?.message || `failed to clear ${role} wallet`)
     }
   }
 
-  // setup funder wallet
-  const setupFunderWallet = async () => {
-    if (!allowPrivateKeys) {
-      toast.error("private keys are disabled by policy")
-      return
-    }
-    if (!funderWalletKey.trim()) {
-      toast.error("enter funder wallet private key")
-      return
-    }
+  const generateRoleWallet = async (role: "dev" | "funder") => {
     try {
-      const { Keypair } = await import("@solana/web3.js")
-      const bs58 = (await import("bs58")).default
-      const keypair = Keypair.fromSecretKey(bs58.decode(funderWalletKey.trim()))
-      
-      setFunderWallet({
-        publicKey: keypair.publicKey.toBase58(),
-        secretKey: funderWalletKey.trim(),
-        solBalance: 0,
+      const label = role === "dev" ? "Dev" : "Funder"
+      const res = await fetch(`/api/bundler/wallets?action=generate&label=${encodeURIComponent(label)}`)
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || data?.error || !data?.wallet?.publicKey) {
+        throw new Error(data?.error || "failed to generate wallet")
+      }
+
+      await updateWalletRole(data.wallet.publicKey, role)
+    } catch (error: any) {
+      toast.error(error?.message || `failed to generate ${role} wallet`)
+    }
+  }
+
+  const refreshRoleBalances = async () => {
+    const keys = [devWalletRecord?.publicKey, funderWalletRecord?.publicKey].filter(Boolean)
+    if (keys.length === 0) return
+
+    try {
+      const res = await fetch("/api/bundler/wallets", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "refresh",
+          walletPublicKeys: keys,
+        }),
       })
-      setFunderWalletKey("")
-      toast.success("funder wallet configured")
-      refreshDevFunderBalances()
-    } catch (error) {
-      toast.error("invalid private key")
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || data?.error) {
+        throw new Error(data?.error || "failed to refresh balances")
+      }
+      if (data.wallets) {
+        setWallets((prev) => {
+          const byKey = new Map(prev.map((w) => [w.publicKey, w]))
+          data.wallets.forEach((w: BundlerWallet) => {
+            const existing = byKey.get(w.publicKey)
+            byKey.set(w.publicKey, {
+              ...w,
+              buyAmount: existing?.buyAmount ?? w.buyAmount,
+              sellPercentage: existing?.sellPercentage ?? w.sellPercentage,
+            })
+          })
+          return Array.from(byKey.values())
+        })
+      }
+    } catch (error: any) {
+      toast.error(error?.message || "failed to refresh balances")
     }
   }
 
   const topUpFunderWallet = async () => {
-    if (!funderWallet) {
+    if (!funderWalletRecord) {
       toast.error("funder wallet not configured")
       return
     }
@@ -353,52 +389,28 @@ export default function BundlerPage() {
     }
 
     try {
-      const transaction = new Transaction().add(
-        SystemProgram.transfer({
-          fromPubkey: connectedPublicKey,
-          toPubkey: new PublicKey(funderWallet.publicKey),
-          lamports: amount * 1_000_000_000,
-        })
-      )
-
       const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash()
-      transaction.recentBlockhash = blockhash
-      transaction.lastValidBlockHeight = lastValidBlockHeight
+      const message = new TransactionMessage({
+        payerKey: connectedPublicKey,
+        recentBlockhash: blockhash,
+        instructions: [
+          SystemProgram.transfer({
+            fromPubkey: connectedPublicKey,
+            toPubkey: new PublicKey(funderWalletRecord.publicKey),
+            lamports: Math.floor(amount * 1_000_000_000),
+          }),
+        ],
+      }).compileToV0Message()
 
-      const signature = await ensureTransactionSignature({
-        transaction,
-        connection,
-        sendTransaction,
-        signTransaction,
-      })
-
+      const tx = new VersionedTransaction(message)
+      const signature = await sendTransaction(tx, connection)
       toast.success(`top up sent: ${signature.slice(0, 8)}...`)
-      await connection.confirmTransaction(signature, "confirmed")
+      await connection.confirmTransaction({ signature, blockhash, lastValidBlockHeight }, "confirmed")
       toast.success("top up confirmed")
-      refreshDevFunderBalances()
+      refreshRoleBalances()
     } catch (error: any) {
       console.error("top up failed:", error)
       toast.error(`top up failed: ${error.message}`)
-    }
-  }
-
-  // refresh dev/funder balances
-  const refreshDevFunderBalances = async () => {
-    try {
-      if (devWallet) {
-        const res = await fetch(`/api/solana/balance?publicKey=${devWallet.publicKey}`)
-        const data = await res.json()
-        const sol = Number(data?.sol ?? 0)
-        setDevWallet(prev => prev ? { ...prev, solBalance: sol } : null)
-      }
-      if (funderWallet) {
-        const res = await fetch(`/api/solana/balance?publicKey=${funderWallet.publicKey}`)
-        const data = await res.json()
-        const sol = Number(data?.sol ?? 0)
-        setFunderWallet(prev => prev ? { ...prev, solBalance: sol } : null)
-      }
-    } catch (error) {
-      console.error("failed to refresh balances:", error)
     }
   }
 
@@ -426,7 +438,7 @@ export default function BundlerPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           action: "warmup_batch",
-          walletSecretKeys: activeWallets.map((w) => w.secretKey),
+          walletPublicKeys: activeWallets.map((w) => w.publicKey),
           jitoTip: safeTip,
           jitoRegion,
           transferSol: 0.000001,
@@ -479,15 +491,18 @@ export default function BundlerPage() {
 
   // retard prevention - check if can launch
   const canLaunch = (): { ok: boolean; error?: string } => {
-    if (!devWallet) {
+    if (!devWalletRecord) {
       return { ok: false, error: "configure dev wallet first" }
+    }
+    if (!devWalletRecord.isActive) {
+      return { ok: false, error: "dev wallet must be active" }
     }
     const devBuy = parseFloat(devBuyAmount) || 0
     const fees = 0.02 + parseFloat(jitoTip) + parseFloat(priorityFee)
     const minRequired = devBuy + fees
     
-    if (devWallet.solBalance < minRequired) {
-      return { ok: false, error: `dev wallet needs at least ${minRequired.toFixed(4)} SOL (has ${devWallet.solBalance.toFixed(4)})` }
+    if (devWalletRecord.solBalance < minRequired) {
+      return { ok: false, error: `dev wallet needs at least ${minRequired.toFixed(4)} SOL (has ${devWalletRecord.solBalance.toFixed(4)})` }
     }
     
     const activeWallets = wallets.filter(w => w.isActive)
@@ -518,7 +533,7 @@ export default function BundlerPage() {
 
   // refund all - collect SOL from all wallets
   const refundAll = async () => {
-    if (!funderWallet) {
+    if (!funderWalletRecord) {
       toast.error("configure funder wallet to receive funds")
       return
     }
@@ -536,8 +551,8 @@ export default function BundlerPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           action: "collect",
-          wallets: walletsWithBalance,
-          recipientAddress: funderWallet.publicKey,
+          walletPublicKeys: walletsWithBalance.map((wallet) => wallet.publicKey),
+          recipientAddress: funderWalletRecord.publicKey,
         }),
       })
 
@@ -589,14 +604,16 @@ export default function BundlerPage() {
       }
       
       if (data.wallets && Array.isArray(data.wallets) && data.wallets.length > 0) {
-        // merge with existing wallets (avoid duplicates)
         setWallets((prev) => {
-          const existingKeys = new Set(prev.map(w => w.publicKey))
-          const newWallets = data.wallets.filter((w: BundlerWallet) => !existingKeys.has(w.publicKey))
-          if (newWallets.length > 0) {
-            return [...prev, ...newWallets]
-          }
-          return prev
+          const byKey = new Map(prev.map((w) => [w.publicKey, w]))
+          return data.wallets.map((w: BundlerWallet) => {
+            const existing = byKey.get(w.publicKey)
+            return {
+              ...w,
+              buyAmount: existing?.buyAmount ?? w.buyAmount,
+              sellPercentage: existing?.sellPercentage ?? w.sellPercentage,
+            }
+          })
         })
         if (data.wallets.length > 0 && !opts?.silent) {
           toast.success(`loaded ${data.wallets.length} saved wallets`)
@@ -645,6 +662,7 @@ export default function BundlerPage() {
             tokenBalance: parseFloat(w.tokenBalance || "0"),
             isActive: true,
             label: w.label,
+            role: w.role,
           }))
         setWallets([...wallets, ...newWallets])
         toast.success(`loaded ${newWallets.length} wallets from group`)
@@ -656,12 +674,9 @@ export default function BundlerPage() {
 
   // gather tokens/sol from wallets
   const handleGather = async () => {
-    if (!allowPrivateKeys) {
-      toast.error("private keys are disabled by policy")
-      return
-    }
-    if (!gatherMainSecret.trim()) {
-      toast.error("enter main secret key")
+    const mainWallet = devWalletRecord || funderWalletRecord
+    if (!mainWallet) {
+      toast.error("configure dev or funder wallet first")
       return
     }
 
@@ -675,8 +690,8 @@ export default function BundlerPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          mainSecret: gatherMainSecret.trim(),
-          buyerSecret: gatherBuyerSecret.trim() || undefined,
+          mainAddress: mainWallet.publicKey,
+          buyerAddress: gatherBuyerAddress.trim() || undefined,
           walletIds: walletIds.length ? walletIds : undefined,
           groupIds: groupIds.length ? groupIds : undefined,
           priorityFeeMicroLamports: priority,
@@ -837,14 +852,24 @@ export default function BundlerPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           action: "refresh",
-          wallets,
+          walletPublicKeys: wallets.map((wallet) => wallet.publicKey),
           mintAddress: mintAddress || undefined,
         }),
       })
 
       const data = await res.json()
       if (data.wallets) {
-        setWallets(data.wallets)
+        setWallets((prev) => {
+          const byKey = new Map(prev.map((w) => [w.publicKey, w]))
+          return data.wallets.map((w: BundlerWallet) => {
+            const existing = byKey.get(w.publicKey)
+            return {
+              ...w,
+              buyAmount: existing?.buyAmount ?? w.buyAmount,
+              sellPercentage: existing?.sellPercentage ?? w.sellPercentage,
+            }
+          })
+        })
         toast.success("balances refreshed")
       }
     } catch (error) {
@@ -855,18 +880,22 @@ export default function BundlerPage() {
   }
 
   const fundWallets = async () => {
-    if (!allowPrivateKeys) {
-      toast.error("private keys are disabled by policy")
-      return
-    }
-    if (!funderKey.trim()) {
-      toast.error("enter funder private key")
+    if (!funderWalletRecord) {
+      toast.error("configure funder wallet first")
       return
     }
 
     const activeWallets = wallets.filter((w) => w.isActive)
     if (activeWallets.length === 0) {
       toast.error("no active wallets")
+      return
+    }
+    if (!devWalletRecord) {
+      toast.error("configure dev wallet first")
+      return
+    }
+    if (!activeWallets.some((wallet) => wallet.publicKey === devWalletRecord.publicKey)) {
+      toast.error("dev wallet must be active")
       return
     }
 
@@ -880,8 +909,8 @@ export default function BundlerPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           action: "fund",
-          funderSecretKey: funderKey.trim(),
-          wallets: activeWallets,
+          funderAddress: funderWalletRecord.publicKey,
+          walletPublicKeys: activeWallets.map((wallet) => wallet.publicKey),
           amounts,
         }),
       })
@@ -1047,7 +1076,8 @@ export default function BundlerPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          wallets: activeWallets,
+          walletPublicKeys: activeWallets.map((wallet) => wallet.publicKey),
+          devPublicKey: devWalletRecord.publicKey,
           tokenMetadata: {
             name: tokenName,
             symbol: tokenSymbol,
@@ -1116,7 +1146,7 @@ export default function BundlerPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          wallets: activeWallets,
+          walletPublicKeys: activeWallets.map((wallet) => wallet.publicKey),
           mintAddress,
           buyAmounts,
           mode,
@@ -1183,7 +1213,7 @@ export default function BundlerPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          wallets: activeWallets,
+          walletPublicKeys: activeWallets.map((wallet) => wallet.publicKey),
           mintAddress,
           sellPercentages,
           mode,
@@ -1260,7 +1290,7 @@ export default function BundlerPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          wallets: activeWallets,
+          walletPublicKeys: activeWallets.map((wallet) => wallet.publicKey),
           mintAddress,
           jitoTip: jitoTipNum,
           priorityFee: priorityNum,
@@ -1404,11 +1434,11 @@ export default function BundlerPage() {
           </CardHeader>
           <CardContent className="space-y-2">
             <Input
-              placeholder="funder private key..."
-              value={funderKey}
-              onChange={(e) => setFunderKey(e.target.value)}
-              className="bg-background border-border"
-              type="password"
+              placeholder="funder wallet address"
+              value={funderWalletRecord?.publicKey || "not set"}
+              readOnly
+              className="bg-neutral-950/50 border-border text-slate-500 cursor-not-allowed"
+              type="text"
             />
             <div className="flex gap-2">
               <Input
@@ -1417,7 +1447,7 @@ export default function BundlerPage() {
                 onChange={(e) => setFundAmount(e.target.value)}
                 className="bg-background border-border w-32"
               />
-              <Button onClick={fundWallets} disabled={loading || wallets.length === 0} className="flex-1">
+              <Button onClick={fundWallets} disabled={loading || wallets.length === 0 || !funderWalletRecord} className="flex-1">
                 Fund active ({activeWalletCount})
               </Button>
             </div>
@@ -1521,41 +1551,41 @@ export default function BundlerPage() {
           {/* Dev & Funder Wallets (like Infinity) */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             {/* Dev Wallet */}
-            <Card className={`border ${devWallet ? "border-purple-500/50 bg-purple-900/10" : "border-neutral-700 bg-neutral-900"}`}>
+            <Card className={`border ${devWalletRecord ? "border-purple-500/50 bg-purple-900/10" : "border-neutral-700 bg-neutral-900"}`}>
               <CardHeader className="pb-3">
                 <div className="flex items-center justify-between">
                   <CardTitle className="text-sm text-neutral-300 flex items-center gap-2">
-                    <div className={`w-3 h-3 rounded-full ${devWallet ? "bg-purple-500" : "bg-neutral-600"}`} />
+                    <div className={`w-3 h-3 rounded-full ${devWalletRecord ? "bg-purple-500" : "bg-neutral-600"}`} />
                     Dev Wallet
                   </CardTitle>
-                  {devWallet && (
+                  {devWalletRecord && (
                     <Badge className="bg-purple-500/20 text-purple-400">
-                      {devWallet.solBalance.toFixed(4)} SOL
+                      {devWalletRecord.solBalance.toFixed(4)} SOL
                     </Badge>
                   )}
                 </div>
               </CardHeader>
               <CardContent className="space-y-3">
-                {devWallet ? (
+                {devWalletRecord ? (
                   <div className="space-y-2">
                     <div className="flex items-center gap-2 p-2 bg-neutral-800 rounded">
                       <Copy className="w-4 h-4 text-neutral-500" />
                       <span className="text-white font-mono text-sm flex-1">
-                        {devWallet.publicKey.slice(0, 8)}...{devWallet.publicKey.slice(-8)}
+                        {devWalletRecord.publicKey.slice(0, 8)}...{devWalletRecord.publicKey.slice(-8)}
                       </span>
                       <Button size="sm" variant="ghost" onClick={() => {
-                        navigator.clipboard.writeText(devWallet.publicKey)
+                        navigator.clipboard.writeText(devWalletRecord.publicKey)
                         toast.success("copied")
                       }}>
                         <Copy className="w-3 h-3" />
                       </Button>
                     </div>
                     <div className="flex gap-2">
-                      <Button onClick={refreshDevFunderBalances} size="sm" variant="outline" className="flex-1 border-neutral-700">
+                      <Button onClick={refreshRoleBalances} size="sm" variant="outline" className="flex-1 border-neutral-700">
                         <RefreshCw className="w-3 h-3 mr-1" />
                         Refresh
                       </Button>
-                      <Button onClick={() => setDevWallet(null)} size="sm" variant="ghost" className="text-red-400">
+                      <Button onClick={() => clearWalletRole("dev")} size="sm" variant="ghost" className="text-red-400">
                         <Trash2 className="w-3 h-3" />
                       </Button>
                     </div>
@@ -1563,79 +1593,59 @@ export default function BundlerPage() {
                       Default Dev Buy: <span className="text-cyan-400">{devBuyAmount} SOL</span>
                     </div>
                   </div>
-                ) : (
-                  <div className="space-y-2">
-                    <Input
-                      placeholder="enter dev wallet private key..."
-                      value={devWalletKey}
-                      onChange={(e) => setDevWalletKey(e.target.value)}
-                      type="password"
-                      className="bg-neutral-800 border-neutral-700 text-white"
-                    />
-                    <div className="flex gap-2">
-                      <Button onClick={setupDevWallet} className="flex-1 bg-purple-500 hover:bg-purple-600">
-                        <Plus className="w-4 h-4 mr-1" />
-                        Import Dev Wallet
-                      </Button>
-                      <Button onClick={async () => {
-                        try {
-                        const { Keypair } = await import("@solana/web3.js")
-                        const bs58 = (await import("bs58")).default
-                        const keypair = Keypair.generate()
-                        setDevWallet({
-                          publicKey: keypair.publicKey.toBase58(),
-                          secretKey: bs58.encode(keypair.secretKey),
-                          solBalance: 0,
-                        })
-                        toast.success("generated new dev wallet")
-                        } catch (error: any) {
-                          console.error("generate dev wallet error:", error)
-                          toast.error(`failed to generate: ${error.message || "unknown error"}`)
-                        }
-                      }} variant="outline" className="border-neutral-700">
-                        Generate
-                      </Button>
-                      <Button onClick={useConnectedDevWallet} variant="outline" className="border-neutral-700">
-                        Use Connected
-                      </Button>
-                    </div>
-                  </div>
                 )}
+                <div className="space-y-2">
+                  <Input
+                    placeholder="dev wallet address..."
+                    value={devWalletInput}
+                    onChange={(e) => setDevWalletInput(e.target.value)}
+                    className="bg-neutral-800 border-neutral-700 text-white"
+                  />
+                  <div className="flex gap-2">
+                    <Button onClick={() => updateWalletRole(devWalletInput, "dev")} className="flex-1 bg-purple-500 hover:bg-purple-600">
+                      <Plus className="w-4 h-4 mr-1" />
+                      Set Dev Wallet
+                    </Button>
+                    <Button onClick={() => generateRoleWallet("dev")} variant="outline" className="border-neutral-700">
+                      Generate
+                    </Button>
+                  </div>
+                </div>
               </CardContent>
             </Card>
 
             {/* Funder Wallet */}
-            <Card className={`border ${funderWallet ? "border-green-500/50 bg-green-900/10" : "border-neutral-700 bg-neutral-900"}`}>
+            <Card className={`border ${funderWalletRecord ? "border-green-500/50 bg-green-900/10" : "border-neutral-700 bg-neutral-900"}`}>
               <CardHeader className="pb-3">
                 <div className="flex items-center justify-between">
                   <CardTitle className="text-sm text-neutral-300 flex items-center gap-2">
-                    <div className={`w-3 h-3 rounded-full ${funderWallet ? "bg-green-500" : "bg-neutral-600"}`} />
+                    <div className={`w-3 h-3 rounded-full ${funderWalletRecord ? "bg-green-500" : "bg-neutral-600"}`} />
                     Funder Wallet
                   </CardTitle>
-                  {funderWallet && (
+                  {funderWalletRecord && (
                     <Badge className="bg-green-500/20 text-green-400">
-                      {funderWallet.solBalance.toFixed(4)} SOL
+                      {funderWalletRecord.solBalance.toFixed(4)} SOL
                     </Badge>
                   )}
                 </div>
               </CardHeader>
               <CardContent className="space-y-3">
-                {funderWallet ? (
+                {funderWalletRecord ? (
                   <div className="space-y-2">
                     <div className="flex items-center gap-2 p-2 bg-neutral-800 rounded">
                       <Copy className="w-4 h-4 text-neutral-500" />
                       <span className="text-white font-mono text-sm flex-1">
-                        {funderWallet.publicKey.slice(0, 8)}...{funderWallet.publicKey.slice(-8)}
+                        {funderWalletRecord.publicKey.slice(0, 8)}...{funderWalletRecord.publicKey.slice(-8)}
                       </span>
                       <Button size="sm" variant="ghost" onClick={() => {
-                        navigator.clipboard.writeText(funderWallet.publicKey)
+                        navigator.clipboard.writeText(funderWalletRecord.publicKey)
                         toast.success("copied")
                       }}>
                         <Copy className="w-3 h-3" />
                       </Button>
                     </div>
                     <div className="flex gap-2">
-                      <Button onClick={refreshDevFunderBalances} size="sm" variant="outline" className="flex-1 border-neutral-700">
+                      <Button onClick={refreshRoleBalances} size="sm" variant="outline" className="flex-1 border-neutral-700">
                         <RefreshCw className="w-3 h-3 mr-1" />
                         Refresh
                       </Button>
@@ -1643,47 +1653,29 @@ export default function BundlerPage() {
                         <Plus className="w-3 h-3 mr-1" />
                         Top Up
                       </Button>
-                      <Button onClick={() => setFunderWallet(null)} size="sm" variant="ghost" className="text-red-400">
+                      <Button onClick={() => clearWalletRole("funder")} size="sm" variant="ghost" className="text-red-400">
                         <Trash2 className="w-3 h-3" />
                       </Button>
                     </div>
                   </div>
-                ) : (
-                  <div className="space-y-2">
-                    <p className="text-xs text-neutral-500">Funder wallet not configured</p>
-                    <Input
-                      placeholder="enter funder wallet private key..."
-                      value={funderWalletKey}
-                      onChange={(e) => setFunderWalletKey(e.target.value)}
-                      type="password"
-                      className="bg-neutral-800 border-neutral-700 text-white"
-                    />
-                    <div className="flex gap-2">
-                      <Button onClick={setupFunderWallet} className="flex-1 bg-green-600 hover:bg-green-700">
-                        <Plus className="w-4 h-4 mr-1" />
-                        Import Funder
-                      </Button>
-                      <Button onClick={async () => {
-                        try {
-                        const { Keypair } = await import("@solana/web3.js")
-                        const bs58 = (await import("bs58")).default
-                        const keypair = Keypair.generate()
-                        setFunderWallet({
-                          publicKey: keypair.publicKey.toBase58(),
-                          secretKey: bs58.encode(keypair.secretKey),
-                          solBalance: 0,
-                        })
-                        toast.success("generated new funder wallet")
-                        } catch (error: any) {
-                          console.error("generate funder wallet error:", error)
-                          toast.error(`failed to generate: ${error.message || "unknown error"}`)
-                        }
-                      }} variant="outline" className="border-neutral-700">
-                        Generate
-                      </Button>
-                    </div>
-                  </div>
                 )}
+                <div className="space-y-2">
+                  <Input
+                    placeholder="funder wallet address..."
+                    value={funderWalletInput}
+                    onChange={(e) => setFunderWalletInput(e.target.value)}
+                    className="bg-neutral-800 border-neutral-700 text-white"
+                  />
+                  <div className="flex gap-2">
+                    <Button onClick={() => updateWalletRole(funderWalletInput, "funder")} className="flex-1 bg-green-600 hover:bg-green-700">
+                      <Plus className="w-4 h-4 mr-1" />
+                      Set Funder
+                    </Button>
+                    <Button onClick={() => generateRoleWallet("funder")} variant="outline" className="border-neutral-700">
+                      Generate
+                    </Button>
+                  </div>
+                </div>
               </CardContent>
             </Card>
           </div>
@@ -1710,7 +1702,7 @@ export default function BundlerPage() {
               <Download className="w-4 h-4 mr-1" />
               Import Wallets
             </Button>
-            <Button onClick={refundAll} disabled={loading || !funderWallet} variant="outline" className="border-neutral-700">
+            <Button onClick={refundAll} disabled={loading || !funderWalletRecord} variant="outline" className="border-neutral-700">
               <Send className="w-4 h-4 mr-1" />
               Claim Fees ({totalSolBalance.toFixed(4)} SOL)
             </Button>
@@ -1760,11 +1752,11 @@ export default function BundlerPage() {
               </CardHeader>
               <CardContent className="space-y-3">
                 <Input
-                  placeholder="funder private key..."
-                  value={funderKey}
-                  onChange={(e) => setFunderKey(e.target.value)}
-                  type="password"
-                  className="bg-neutral-800 border-neutral-700 text-white"
+                  placeholder="funder wallet address"
+                  value={funderWalletRecord?.publicKey || "not set"}
+                  readOnly
+                  type="text"
+                  className="bg-neutral-950/50 border-neutral-700 text-slate-500 cursor-not-allowed"
                 />
                 <div className="flex gap-2">
                   <Input
@@ -1777,7 +1769,7 @@ export default function BundlerPage() {
                   <span className="text-neutral-500 self-center">SOL each</span>
                   <Button
                     onClick={fundWallets}
-                    disabled={loading || activeWalletCount === 0}
+                    disabled={loading || activeWalletCount === 0 || !funderWalletRecord}
                     className="flex-1 bg-green-600 hover:bg-green-700"
                   >
                     <Send className="w-4 h-4 mr-1" />
@@ -1905,22 +1897,22 @@ export default function BundlerPage() {
             <CardContent className="space-y-3">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <div className="space-y-2">
-                  <Label className="text-neutral-400 text-xs">Main Secret (receives funds)</Label>
+                  <Label className="text-neutral-400 text-xs">Main Wallet (dev/funder)</Label>
                   <Input
-                    type="password"
-                    value={gatherMainSecret}
-                    onChange={(e) => setGatherMainSecret(e.target.value)}
-                    placeholder="base58 secret"
-                    className="bg-neutral-800 border-neutral-700 text-white"
+                    type="text"
+                    value={devWalletRecord?.publicKey || funderWalletRecord?.publicKey || "not set"}
+                    readOnly
+                    placeholder="set dev or funder wallet"
+                    className="bg-neutral-950/50 border-neutral-700 text-slate-500 cursor-not-allowed"
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label className="text-neutral-400 text-xs">Buyer Secret (optional, drains too)</Label>
+                  <Label className="text-neutral-400 text-xs">Buyer Wallet Address (optional)</Label>
                   <Input
-                    type="password"
-                    value={gatherBuyerSecret}
-                    onChange={(e) => setGatherBuyerSecret(e.target.value)}
-                    placeholder="base58 secret"
+                    type="text"
+                    value={gatherBuyerAddress}
+                    onChange={(e) => setGatherBuyerAddress(e.target.value)}
+                    placeholder="public key"
                     className="bg-neutral-800 border-neutral-700 text-white"
                   />
                 </div>
@@ -1966,7 +1958,7 @@ export default function BundlerPage() {
                 </div>
               </div>
               <p className="text-xs text-neutral-500">
-                собирает все токены в main wallet, закрывает ATA и выводит SOL; можно ограничить списком walletId или groupId.
+                Gathers token accounts and SOL into the selected dev/funder wallet. Filter sources by walletId or groupId.
               </p>
             </CardContent>
           </Card>

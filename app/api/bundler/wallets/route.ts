@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server"
-import { PublicKey, Keypair, LAMPORTS_PER_SOL, Transaction } from "@solana/web3.js"
+import { PublicKey, Keypair, LAMPORTS_PER_SOL, TransactionMessage, VersionedTransaction } from "@solana/web3.js"
 import {
   generateWallet,
   generateWallets,
@@ -25,6 +25,41 @@ const sanitizeWallet = (wallet: BundlerWallet): BundlerWallet => {
   if (EXPOSE_WALLET_SECRETS) return wallet
   const { secretKey, ...rest } = wallet
   return { ...rest, secretKey: "" }
+}
+
+const extractWalletPublicKeys = (body: any): string[] => {
+  const rawKeys = Array.isArray(body?.walletPublicKeys)
+    ? body.walletPublicKeys
+    : Array.isArray(body?.wallets)
+      ? (body.wallets as BundlerWallet[]).map((w) => w.publicKey)
+      : []
+  return rawKeys
+    .map((key) => (typeof key === "string" ? key.trim() : ""))
+    .filter(Boolean)
+}
+
+async function loadWalletsByPublicKeys(publicKeys: string[]): Promise<BundlerWallet[]> {
+  if (publicKeys.length === 0) return []
+  const rows = await prisma.wallet.findMany({
+    where: { publicKey: { in: publicKeys } },
+  })
+  const byKey = new Map(
+    rows.map((w) => [
+      w.publicKey,
+      {
+        publicKey: w.publicKey,
+        secretKey: w.secretKey,
+        solBalance: parseFloat(w.solBalance),
+        tokenBalance: parseFloat(w.tokenBalance),
+        isActive: w.isActive,
+        label: w.label || undefined,
+        role: w.role || "project",
+      } as BundlerWallet,
+    ])
+  )
+  return publicKeys
+    .map((key) => byKey.get(key))
+    .filter((wallet): wallet is BundlerWallet => Boolean(wallet))
 }
 
 // helper: save wallet to DB
@@ -162,12 +197,18 @@ export async function POST(request: NextRequest) {
 
     // refresh balances
     if (action === "refresh") {
-      const { wallets, mintAddress } = body
-      if (!wallets || !Array.isArray(wallets)) {
-        return NextResponse.json({ error: "wallets array required" }, { status: 400 })
+      const { mintAddress } = body
+      const publicKeys = extractWalletPublicKeys(body)
+      if (publicKeys.length === 0) {
+        return NextResponse.json({ error: "walletPublicKeys array required" }, { status: 400 })
       }
 
-      const updated = await refreshWalletBalances(wallets as BundlerWallet[], mintAddress)
+      const dbWallets = await loadWalletsByPublicKeys(publicKeys)
+      if (dbWallets.length === 0) {
+        return NextResponse.json({ error: "wallets not found in database" }, { status: 404 })
+      }
+
+      const updated = await refreshWalletBalances(dbWallets, mintAddress)
       // обновить балансы в БД
       await Promise.all(updated.map(w => saveWalletToDB(w)))
       return NextResponse.json({ wallets: updated.map(sanitizeWallet) })
@@ -175,9 +216,10 @@ export async function POST(request: NextRequest) {
 
     // fund wallets
     if (action === "fund") {
-      const { funderAddress, wallets, amounts } = body
-      if (!funderAddress || !wallets || !amounts) {
-        return NextResponse.json({ error: "funderAddress, wallets, and amounts required" }, { status: 400 })
+      const { funderAddress, amounts } = body
+      const publicKeys = extractWalletPublicKeys(body)
+      if (!funderAddress || publicKeys.length === 0 || !amounts) {
+        return NextResponse.json({ error: "funderAddress, walletPublicKeys, and amounts required" }, { status: 400 })
       }
 
       // Find funder wallet in DB by address
@@ -186,6 +228,9 @@ export async function POST(request: NextRequest) {
       })
       if (!funderWallet) {
         return NextResponse.json({ error: "funder wallet not found in database" }, { status: 400 })
+      }
+      if (funderWallet.role !== "funder") {
+        return NextResponse.json({ error: "wallet is not configured as funder" }, { status: 400 })
       }
       if (!funderWallet.secretKey) {
         return NextResponse.json({ error: "funder wallet missing secret key" }, { status: 400 })
@@ -199,7 +244,12 @@ export async function POST(request: NextRequest) {
         const balanceSOL = balance / LAMPORTS_PER_SOL
         console.log("Using funder:", funderWallet.publicKey, "with balance:", balanceSOL.toFixed(4), "SOL")
 
-        const signatures = await fundWallets(funder, wallets as BundlerWallet[], amounts)
+        const recipientWallets = await loadWalletsByPublicKeys(publicKeys)
+        if (recipientWallets.length === 0) {
+          return NextResponse.json({ error: "recipient wallets not found in database" }, { status: 404 })
+        }
+
+        const signatures = await fundWallets(funder, recipientWallets, amounts)
         return NextResponse.json({ signatures })
       } catch (error: any) {
         return NextResponse.json({ error: error.message }, { status: 400 })
@@ -260,27 +310,15 @@ export async function POST(request: NextRequest) {
 
     // collect SOL back
     if (action === "collect") {
-      const { wallets, recipientAddress } = body
-      if (!wallets || !recipientAddress) {
-        return NextResponse.json({ error: "wallets and recipientAddress required" }, { status: 400 })
+      const { recipientAddress } = body
+      const publicKeys = extractWalletPublicKeys(body)
+      if (publicKeys.length === 0 || !recipientAddress) {
+        return NextResponse.json({ error: "walletPublicKeys and recipientAddress required" }, { status: 400 })
       }
 
       try {
         // Hydrate wallets from DB to ensure secret keys are present if missing
-        const publicKeys = (wallets as BundlerWallet[]).map((w) => w.publicKey)
-        const dbWallets = await prisma.wallet.findMany({
-          where: { publicKey: { in: publicKeys } },
-        })
-
-        const walletsWithSecrets: BundlerWallet[] = dbWallets.map((w) => ({
-          publicKey: w.publicKey,
-          secretKey: w.secretKey,
-          solBalance: parseFloat(w.solBalance),
-          tokenBalance: parseFloat(w.tokenBalance),
-          isActive: w.isActive,
-          label: w.label || undefined,
-          role: w.role || "project",
-        }))
+        const walletsWithSecrets = await loadWalletsByPublicKeys(publicKeys)
 
         if (walletsWithSecrets.length === 0) {
           throw new Error("no valid wallets found for collection")
@@ -363,12 +401,18 @@ export async function POST(request: NextRequest) {
 
     // create associated token accounts for wallets
     if (action === "create-atas") {
-      const { wallets, mintAddress } = body
-      if (!wallets || !Array.isArray(wallets) || wallets.length === 0) {
-        return NextResponse.json({ error: "wallets array required" }, { status: 400 })
+      const { mintAddress } = body
+      const publicKeys = extractWalletPublicKeys(body)
+      if (publicKeys.length === 0) {
+        return NextResponse.json({ error: "walletPublicKeys array required" }, { status: 400 })
       }
       if (!mintAddress) {
         return NextResponse.json({ error: "mintAddress required" }, { status: 400 })
+      }
+
+      const wallets = await loadWalletsByPublicKeys(publicKeys)
+      if (wallets.length === 0) {
+        return NextResponse.json({ error: "wallets not found in database" }, { status: 404 })
       }
 
       const mint = new PublicKey(mintAddress)
@@ -397,22 +441,26 @@ export async function POST(request: NextRequest) {
             // ATA missing - create it
           }
 
-          const tx = new Transaction()
-          tx.add(createAssociatedTokenAccountInstruction(
-            keypair.publicKey,
-            ata,
-            keypair.publicKey,
-            mint
-          ))
+          const instructions = [
+            createAssociatedTokenAccountInstruction(
+              keypair.publicKey,
+              ata,
+              keypair.publicKey,
+              mint
+            ),
+          ]
 
           const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash()
-          tx.recentBlockhash = blockhash
-          tx.lastValidBlockHeight = lastValidBlockHeight
-          tx.feePayer = keypair.publicKey
-          tx.sign(keypair)
+          const message = new TransactionMessage({
+            payerKey: keypair.publicKey,
+            recentBlockhash: blockhash,
+            instructions,
+          }).compileToV0Message()
+          const tx = new VersionedTransaction(message)
+          tx.sign([keypair])
 
           const signature = await connection.sendRawTransaction(tx.serialize())
-          await connection.confirmTransaction(signature, "confirmed")
+          await connection.confirmTransaction({ signature, blockhash, lastValidBlockHeight }, "confirmed")
           signatures.push(signature)
         } catch (error: any) {
           const message =
