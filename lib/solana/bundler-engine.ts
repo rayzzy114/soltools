@@ -580,21 +580,35 @@ async function sendBundleGroup(
   txSigners: Keypair[][],
   label: string,
   jitoRegion: JitoRegion | "auto",
-  jitoTip: number
+  jitoTip: number,
+  tipPayer?: Keypair
 ): Promise<{ bundleId: string; signatures: string[] }> {
-  if (jitoTip > 0 && transactions.length > 0) {
-    const lastIdx = transactions.length - 1
-    const lastTx = transactions[lastIdx]
-    if (lastTx instanceof Transaction) {
-      const lastSigner = txSigners[lastIdx]?.[0]
-      if (lastSigner) {
-        lastTx.add(createTipInstruction(lastSigner.publicKey, jitoTip))
-        lastTx.sign(...txSigners[lastIdx])
+  if (jitoTip > 0) {
+    if (tipPayer) {
+      const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash()
+      const tipTx = new Transaction()
+      tipTx.add(createTipInstruction(tipPayer.publicKey, jitoTip))
+      tipTx.recentBlockhash = blockhash
+      tipTx.lastValidBlockHeight = lastValidBlockHeight
+      tipTx.feePayer = tipPayer.publicKey
+      tipTx.sign(tipPayer)
+
+      transactions.push(tipTx)
+      txSigners.push([tipPayer])
+    } else if (transactions.length > 0) {
+      const lastIdx = transactions.length - 1
+      const lastTx = transactions[lastIdx]
+      if (lastTx instanceof Transaction) {
+        const lastSigner = txSigners[lastIdx]?.[0]
+        if (lastSigner) {
+          lastTx.add(createTipInstruction(lastSigner.publicKey, jitoTip))
+          lastTx.sign(...txSigners[lastIdx])
+        } else {
+          console.warn("[bundler] missing signer for last tx (tip not added)")
+        }
       } else {
-        console.warn("[bundler] missing signer for last tx (tip not added)")
+        console.warn("[bundler] tip must be embedded in versioned transactions; skipping auto-tip")
       }
-    } else {
-      console.warn("[bundler] tip must be embedded in versioned transactions; skipping auto-tip")
     }
   }
 
@@ -1250,6 +1264,15 @@ export async function createLaunchBundle(config: BundleConfig): Promise<BundleRe
     // Force dev wallet to be the one we found/sorted to top
     const devWallet = activeWallets[0]
     const devKeypair = getKeypair(devWallet)
+
+    // Pre-flight check: ensure dev wallet has enough SOL for tip
+    const devSolBalance = devWallet.solBalance || 0
+    // We check against resolvedTip (which might be dynamic) + buffer.
+    // Since we resolve tip below, we can do a quick check here with base tip or do it after resolution.
+    // User requested: "if (devWalletBalance < JITO_TIP_AMOUNT + 0.01 SOL) throw..."
+    // We'll check against jitoTip first for early exit, or wait until resolved.
+    // Let's resolve tip first.
+
     const safeSlippage = Math.min(Math.max(Math.floor(slippage), 0), 99)
     const computeUnits = 800_000
     const resolvedTip = await resolveJitoTip({
@@ -1257,6 +1280,10 @@ export async function createLaunchBundle(config: BundleConfig): Promise<BundleRe
       dynamic: config.dynamicJitoTip,
       computeUnits,
     })
+
+    if (devSolBalance < resolvedTip + 0.01) {
+      throw new Error(`Dev wallet insufficient funds for tip: has ${devSolBalance.toFixed(4)} SOL, need ${(resolvedTip + 0.01).toFixed(4)} SOL`)
+    }
 
     const initialCurve = await getInitialCurve()
     if (!initialCurve) {
@@ -1535,6 +1562,15 @@ export async function createBuyBundle(config: BundleConfig): Promise<BundleResul
       computeUnits,
     })
 
+    // Find dev wallet for tip payment
+    const devWallet = wallets.find(w => w.role?.toLowerCase() === 'dev')
+    if (devWallet && devWallet.isActive) {
+      const devBalance = devWallet.solBalance || 0
+      if (devBalance < resolvedTip + 0.01) {
+        throw new Error(`Dev wallet insufficient funds for tip: has ${devBalance.toFixed(4)} SOL, need ${(resolvedTip + 0.01).toFixed(4)} SOL`)
+      }
+    }
+
     const bondingCurve = await getBondingCurveData(mint)
     if (!bondingCurve) {
       return {
@@ -1606,12 +1642,17 @@ export async function createBuyBundle(config: BundleConfig): Promise<BundleResul
         txSigners.push([keypair])
       }
 
+      // Identify tip payer: prioritize dev wallet if available
+      const tipPayerWallet = wallets.find(w => w.role?.toLowerCase() === 'dev')
+      const tipPayer = tipPayerWallet ? getKeypair(tipPayerWallet) : undefined
+
       const result = await sendBundleGroup(
         transactions,
         txSigners,
         "buy",
         jitoRegion,
-        resolvedTip
+        resolvedTip,
+        tipPayer
       )
       bundleIds.push(result.bundleId)
       bundleSignatures.push(result.signatures)
@@ -1689,6 +1730,15 @@ export async function createSellBundle(config: BundleConfig): Promise<BundleResu
       computeUnits,
     })
 
+    // Find dev wallet for tip payment
+    const devWallet = wallets.find(w => w.role?.toLowerCase() === 'dev')
+    if (devWallet && devWallet.isActive) {
+      const devBalance = devWallet.solBalance || 0
+      if (devBalance < resolvedTip + 0.01) {
+        throw new Error(`Dev wallet insufficient funds for tip: has ${devBalance.toFixed(4)} SOL, need ${(resolvedTip + 0.01).toFixed(4)} SOL`)
+      }
+    }
+
     const bondingCurve = await getBondingCurveData(mint)
     if (!bondingCurve) {
       return {
@@ -1745,12 +1795,17 @@ export async function createSellBundle(config: BundleConfig): Promise<BundleResu
         continue
       }
 
+      // Identify tip payer
+      const tipPayerWallet = wallets.find(w => w.role?.toLowerCase() === 'dev')
+      const tipPayer = tipPayerWallet ? getKeypair(tipPayerWallet) : undefined
+
       const result = await sendBundleGroup(
         transactions,
         txSigners,
         "sell",
         jitoRegion,
-        resolvedTip
+        resolvedTip,
+        tipPayer
       )
       bundleIds.push(result.bundleId)
       bundleSignatures.push(result.signatures)
@@ -2121,6 +2176,15 @@ export async function createRugpullBundle(config: BundleConfig): Promise<BundleR
       computeUnits,
     })
 
+    // Find dev wallet for tip payment
+    const devWallet = wallets.find(w => w.role?.toLowerCase() === 'dev')
+    if (devWallet && devWallet.isActive) {
+      const devBalance = devWallet.solBalance || 0
+      if (devBalance < resolvedTip + 0.01) {
+        throw new Error(`Dev wallet insufficient funds for tip: has ${devBalance.toFixed(4)} SOL, need ${(resolvedTip + 0.01).toFixed(4)} SOL`)
+      }
+    }
+
     const walletBalances: { wallet: BundlerWallet; tokenAmount: bigint; keypair: any }[] = []
 
     for (const wallet of activeWallets) {
@@ -2229,12 +2293,17 @@ export async function createRugpullBundle(config: BundleConfig): Promise<BundleR
         continue
       }
 
+      // Identify tip payer
+      const tipPayerWallet = wallets.find(w => w.role?.toLowerCase() === 'dev')
+      const tipPayer = tipPayerWallet ? getKeypair(tipPayerWallet) : undefined
+
       const result = await sendBundleGroup(
         transactions,
         txSigners,
         "rugpull",
         jitoRegion as any,
-        resolvedTip
+        resolvedTip,
+        tipPayer
       )
       bundleIds.push(result.bundleId)
       bundleSignatures.push(result.signatures)
