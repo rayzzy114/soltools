@@ -930,29 +930,14 @@ export default function DashboardPage() {
             return
           }
 
-          addSystemLog(`Auto-funding ${launchWallets.length} wallets`, "info")
-          const trimmedFunderKey = funderKey.trim()
-          if (!trimmedFunderKey) {
-            toast.error("funder private key required")
-            return
-          }
-
-          try {
-            const decoded = bs58.decode(trimmedFunderKey)
-            if (decoded.length !== 64) {
-              throw new Error("invalid length")
-            }
-          } catch {
-            toast.error("invalid funder private key format")
-            return
-          }
+          addSystemLog(`Auto-funding ${launchWallets.length} wallets using Dev wallet`, "info")
 
           const fundRes = await fetch("/api/bundler/wallets", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               action: "fund",
-              funderSecretKey: trimmedFunderKey,
+              useDevWallet: true, // Use Dev wallet from DB as funder instead of user-provided key
               wallets: launchWallets,
               amounts: launchWallets.map(() => funderAmount),
             }),

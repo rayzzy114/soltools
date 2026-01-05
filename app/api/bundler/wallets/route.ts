@@ -175,13 +175,30 @@ export async function POST(request: NextRequest) {
 
     // fund wallets
     if (action === "fund") {
-      const { funderSecretKey, wallets, amounts } = body
-      if (!funderSecretKey || !wallets || !amounts) {
-        return NextResponse.json({ error: "funderSecretKey, wallets, and amounts required" }, { status: 400 })
+      const { funderSecretKey, wallets, amounts, useDevWallet } = body
+
+      // If useDevWallet is true, find the Dev wallet from DB and use it as funder
+      let actualFunderSecretKey = funderSecretKey
+      if (useDevWallet) {
+        const devWallet = await prisma.wallet.findFirst({
+          where: { role: 'dev' }
+        })
+        if (!devWallet) {
+          return NextResponse.json({ error: "no dev wallet found in database" }, { status: 400 })
+        }
+        if (!devWallet.secretKey) {
+          return NextResponse.json({ error: "dev wallet missing secret key" }, { status: 400 })
+        }
+        actualFunderSecretKey = devWallet.secretKey
+        logger.info({ correlationId, devWallet: devWallet.publicKey }, "using dev wallet as funder")
+      } else {
+        if (!funderSecretKey) {
+          return NextResponse.json({ error: "funderSecretKey required when useDevWallet is false" }, { status: 400 })
+        }
       }
 
       try {
-        const funder = Keypair.fromSecretKey(bs58.decode(funderSecretKey))
+        const funder = Keypair.fromSecretKey(bs58.decode(actualFunderSecretKey))
         const signatures = await fundWallets(funder, wallets as BundlerWallet[], amounts)
         return NextResponse.json({ signatures })
       } catch (error: any) {
