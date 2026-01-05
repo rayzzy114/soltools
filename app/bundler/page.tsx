@@ -1593,24 +1593,25 @@ export default function BundlerPage() {
                       Default Dev Buy: <span className="text-cyan-400">{devBuyAmount} SOL</span>
                     </div>
                   </div>
-                )}
-                <div className="space-y-2">
-                  <Input
-                    placeholder="dev wallet address..."
-                    value={devWalletInput}
-                    onChange={(e) => setDevWalletInput(e.target.value)}
-                    className="bg-neutral-800 border-neutral-700 text-white"
-                  />
-                  <div className="flex gap-2">
-                    <Button onClick={() => updateWalletRole(devWalletInput, "dev")} className="flex-1 bg-purple-500 hover:bg-purple-600">
-                      <Plus className="w-4 h-4 mr-1" />
-                      Set Dev Wallet
-                    </Button>
-                    <Button onClick={() => generateRoleWallet("dev")} variant="outline" className="border-neutral-700">
-                      Generate
-                    </Button>
+                ) : (
+                  <div className="space-y-2">
+                    <Input
+                      placeholder="dev wallet address..."
+                      value={devWalletInput}
+                      onChange={(e) => setDevWalletInput(e.target.value)}
+                      className="bg-neutral-800 border-neutral-700 text-white"
+                    />
+                    <div className="flex gap-2">
+                      <Button onClick={() => updateWalletRole(devWalletInput, "dev")} className="flex-1 bg-purple-500 hover:bg-purple-600">
+                        <Plus className="w-4 h-4 mr-1" />
+                        Set Dev Wallet
+                      </Button>
+                      <Button onClick={() => generateRoleWallet("dev")} variant="outline" className="border-neutral-700">
+                        Generate
+                      </Button>
+                    </div>
                   </div>
-                </div>
+                )}
               </CardContent>
             </Card>
 
