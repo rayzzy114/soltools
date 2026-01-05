@@ -175,30 +175,30 @@ export async function POST(request: NextRequest) {
 
     // fund wallets
     if (action === "fund") {
-      const { funderSecretKey, wallets, amounts, useDevWallet } = body
+      const { funderAddress, wallets, amounts } = body
+      if (!funderAddress || !wallets || !amounts) {
+        return NextResponse.json({ error: "funderAddress, wallets, and amounts required" }, { status: 400 })
+      }
 
-      // If useDevWallet is true, find the Dev wallet from DB and use it as funder
-      let actualFunderSecretKey = funderSecretKey
-      if (useDevWallet) {
-        const devWallet = await prisma.wallet.findFirst({
-          where: { role: 'dev' }
-        })
-        if (!devWallet) {
-          return NextResponse.json({ error: "no dev wallet found in database" }, { status: 400 })
-        }
-        if (!devWallet.secretKey) {
-          return NextResponse.json({ error: "dev wallet missing secret key" }, { status: 400 })
-        }
-        actualFunderSecretKey = devWallet.secretKey
-        logger.info({ correlationId, devWallet: devWallet.publicKey }, "using dev wallet as funder")
-      } else {
-        if (!funderSecretKey) {
-          return NextResponse.json({ error: "funderSecretKey required when useDevWallet is false" }, { status: 400 })
-        }
+      // Find funder wallet in DB by address
+      const funderWallet = await prisma.wallet.findUnique({
+        where: { publicKey: funderAddress }
+      })
+      if (!funderWallet) {
+        return NextResponse.json({ error: "funder wallet not found in database" }, { status: 400 })
+      }
+      if (!funderWallet.secretKey) {
+        return NextResponse.json({ error: "funder wallet missing secret key" }, { status: 400 })
       }
 
       try {
-        const funder = Keypair.fromSecretKey(bs58.decode(actualFunderSecretKey))
+        const funder = Keypair.fromSecretKey(bs58.decode(funderWallet.secretKey))
+
+        // Check balance and log it
+        const balance = await connection.getBalance(funder.publicKey)
+        const balanceSOL = balance / LAMPORTS_PER_SOL
+        console.log("Using funder:", funderWallet.publicKey.toBase58(), "with balance:", balanceSOL.toFixed(4), "SOL")
+
         const signatures = await fundWallets(funder, wallets as BundlerWallet[], amounts)
         return NextResponse.json({ signatures })
       } catch (error: any) {

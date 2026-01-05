@@ -47,7 +47,7 @@ import {
   createTipInstruction,
   JitoRegion,
   JITO_ENDPOINTS,
-  estimateDynamicJitoTip,
+  getJitoTipFloor,
   MIN_JITO_TIP_LAMPORTS,
 } from "./jito"
 import bs58 from "bs58"
@@ -228,15 +228,14 @@ function toMicroLamportsPerCu(totalLamports: number, computeUnits: number): numb
 async function resolveJitoTip({
   baseTip,
   dynamic,
-  computeUnits,
 }: {
   baseTip?: number
   dynamic?: boolean
-  computeUnits: number
+  computeUnits?: number // deprecated, kept for compatibility
 }): Promise<number> {
   const floorSol = MIN_JITO_TIP_LAMPORTS / LAMPORTS_PER_SOL
   if (dynamic) {
-    const est = await estimateDynamicJitoTip(connection, computeUnits)
+    const est = await getJitoTipFloor()
     return Math.max(est, floorSol)
   }
   return Math.max(baseTip ?? floorSol, floorSol)
@@ -1011,15 +1010,16 @@ export async function fundWallets(
     if (instructions.length === 0) continue
 
     try {
-      const transaction = new Transaction()
-      transaction.add(...instructions)
+      const { blockhash } = await connection.getLatestBlockhash()
 
-      const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash()
-      transaction.recentBlockhash = blockhash
-      transaction.lastValidBlockHeight = lastValidBlockHeight
-      transaction.feePayer = funder.publicKey
+      const message = new TransactionMessage({
+        payerKey: funder.publicKey, // Explicitly set payer key
+        recentBlockhash: blockhash,
+        instructions,
+      }).compileToV0Message()
 
-      transaction.sign(funder)
+      const transaction = new VersionedTransaction(message)
+      transaction.sign([funder])
 
       const signature = await connection.sendRawTransaction(transaction.serialize())
       await connection.confirmTransaction(signature, "confirmed")
@@ -1284,9 +1284,9 @@ export async function createLaunchBundle(config: BundleConfig): Promise<BundleRe
     // Calculate proper Dev wallet cost estimate
     // Dev wallet pays for: token creation, all ATAs, all buys, fees, tip
     const walletCount = activeWallets.length
-    const devBuyAmount = devBuyAmount || 0.01
+    const devBuyAmountValue = config.devBuyAmount || 0.01
     const buyerBuyAmounts = sortedBuyAmounts.slice(1) // exclude dev wallet
-    const costEstimate = estimateBundleCost(walletCount, [devBuyAmount, ...buyerBuyAmounts], resolvedTip, priorityFee)
+    const costEstimate = estimateBundleCost(walletCount, [devBuyAmountValue, ...buyerBuyAmounts], resolvedTip, priorityFee)
 
     // Add extra buffer for token creation rent (bonding curve + metadata PDAs)
     const tokenCreationRentEstimate = 0.025 // rough estimate for bonding curve + metadata rent
@@ -1399,7 +1399,23 @@ export async function createLaunchBundle(config: BundleConfig): Promise<BundleRe
         })
       )
 
+      // Robustly separate dev wallet from buyers using role-based identification
+      const devWalletInChunk = walletsChunk.find(w => w.role?.toLowerCase() === 'dev')
+      const allBuyerWalletsInChunk = walletsChunk.filter(w => w.role?.toLowerCase() !== 'dev')
+
+      // LIMIT: First transaction can only handle 2-3 buyers due to create instruction size
+      const maxBuyersInFirstTx = 3
+      const buyerWalletsInChunk = chunkIndex === 0
+        ? allBuyerWalletsInChunk.slice(0, maxBuyersInFirstTx)
+        : allBuyerWalletsInChunk
+
+      // WARNING: If too many buyers in first chunk, log warning
+      if (chunkIndex === 0 && allBuyerWalletsInChunk.length > maxBuyersInFirstTx) {
+        console.warn(`WARNING: First transaction limited to ${maxBuyersInFirstTx} buyers due to create instruction size. ${allBuyerWalletsInChunk.length - maxBuyersInFirstTx} buyers moved to next transaction.`)
+      }
+
       if (chunkIndex === 0) {
+        // FIRST TRANSACTION: Must include create + dev buy + some buyers
         instructions.push(
           createCreateTokenInstruction(devKeypair.publicKey, mintKeypair.publicKey, {
             name: tokenMetadata.name,
@@ -1408,6 +1424,7 @@ export async function createLaunchBundle(config: BundleConfig): Promise<BundleRe
           })
         )
 
+        // Dev wallet ATA creation
         const devAta = await getAssociatedTokenAddress(mint, devKeypair.publicKey, false)
         instructions.push(
           createAssociatedTokenAccountIdempotentInstruction(
@@ -1417,11 +1434,31 @@ export async function createLaunchBundle(config: BundleConfig): Promise<BundleRe
             mint
           )
         )
+
+        // Dev wallet BUY instruction (if devBuyAmount > 0)
+        if (devBuyAmount > 0) {
+          const devBuyAmountLamports = BigInt(Math.floor(devBuyAmount * LAMPORTS_PER_SOL))
+          const { tokensOut: devTokensOut } = calculateBuyAmount(curveState as any, devBuyAmount)
+          const devMinTokensOut = (devTokensOut * BigInt(100 - safeSlippage)) / BigInt(100)
+
+          instructions.push(
+            await createBuyInstruction(devKeypair.publicKey, mint, devMinTokensOut, devBuyAmountLamports)
+          )
+
+          // Update curve state for dev buy
+          curveState = {
+            ...(curveState as any),
+            ...applyBuyToCurve(curveState, devBuyAmountLamports, devTokensOut),
+          }
+        }
       }
 
-      for (let i = 0; i < walletsChunk.length; i++) {
-        const wallet = walletsChunk[i]
-        const globalIndex = chunkIndex * ghostChunkSize + i
+      // Process all wallets in chunk (including dev for subsequent chunks if any)
+      const walletsToProcess = chunkIndex === 0 ? buyerWalletsInChunk : walletsChunk
+
+      for (let i = 0; i < walletsToProcess.length; i++) {
+        const wallet = walletsToProcess[i]
+        const globalIndex = chunkIndex * ghostChunkSize + i + (chunkIndex === 0 ? 1 : 0) // +1 for dev in first chunk
         const keypair = getKeypair(wallet)
         const baseBuyAmount = resolveLaunchBuyAmount(globalIndex, devBuyAmount, sortedBuyAmounts)
         const buyAmount = getRandomizedBuyAmount(globalIndex, baseBuyAmount, buyRandomizer)
@@ -1473,26 +1510,24 @@ export async function createLaunchBundle(config: BundleConfig): Promise<BundleRe
         signerMap.set(mintKeypair.publicKey.toBase58(), mintKeypair)
       }
 
-      const massTx = new VersionedTransaction(message)
+      // Add Jito tip to EVERY transaction in the bundle (not just first)
+      const tipInstructions = buildCommentInstructions(
+        devKeypair.publicKey,
+        `Bullish! ${mint.toBase58()}`,
+        resolvedTip,
+        ghostPlan.regions[chunkIndex] as any
+      )
+
+      const massMessage = new TransactionMessage({
+        payerKey: devKeypair.publicKey,
+        recentBlockhash: blockhash,
+        instructions: [...instructions, ...tipInstructions], // Add tip to mass transaction
+      }).compileToV0Message([lookupTable])
+
+      const massTx = new VersionedTransaction(massMessage)
       massTx.sign(Array.from(signerMap.values()))
 
       const txList: VersionedTransaction[] = [massTx]
-      if (chunkIndex === 0) {
-        const commentInstructions = buildCommentInstructions(
-          devKeypair.publicKey,
-          `Bullish! ${mint.toBase58()}`,
-          resolvedTip,
-          ghostPlan.regions[chunkIndex] as any
-        )
-        const commentMessage = new TransactionMessage({
-          payerKey: devKeypair.publicKey,
-          recentBlockhash: blockhash,
-          instructions: commentInstructions,
-        }).compileToV0Message()
-        const commentTx = new VersionedTransaction(commentMessage)
-        commentTx.sign([devKeypair])
-        txList.push(commentTx)
-      }
 
       for (const tx of txList) {
         const sim = await connection.simulateTransaction(tx)

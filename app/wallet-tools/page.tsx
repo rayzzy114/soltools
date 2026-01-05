@@ -606,23 +606,14 @@ export default function WalletToolsPage() {
       const amountPerWallet = (!isNaN(parsedAmount) && parsedAmount > 0) ? parsedAmount : 0.003
 
       const totalSolNeeded = (amountPerWallet * active.length) + 0.01
-      const trimmed = funderKey.trim()
-      if (!trimmed) {
-        const error = "Funder private key required"
+      if (!funderWalletRecord) {
+        const error = "Funder wallet not selected"
         addSystemLog(error, "error")
         toast.error(error)
         return
       }
 
-      let funderPubkey: PublicKey | null = null
-      try {
-        funderPubkey = Keypair.fromSecretKey(bs58.decode(trimmed)).publicKey
-      } catch (error: any) {
-        const message = `Invalid funder key: ${error?.message || error}`
-        addSystemLog(message, "error")
-        toast.error(message)
-        return
-      }
+      const funderPubkey = new PublicKey(funderWalletRecord.publicKey)
 
       const balanceRes = await fetch(`/api/solana/balance?publicKey=${funderPubkey.toBase58()}`)
       const balanceData = await balanceRes.json()
@@ -641,7 +632,7 @@ export default function WalletToolsPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           action: "fund",
-          funderSecretKey: trimmed,
+          funderAddress: funderWalletRecord.publicKey,
           wallets: active,
           amounts: active.map(() => amountPerWallet),
         }),

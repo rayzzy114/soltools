@@ -87,46 +87,79 @@ function withUuidParam(url: string, uuid: string): string {
  * @param ceilingLamports - Upper bound in lamports for the estimated tip
  * @returns The suggested tip expressed in SOL
  */
+/**
+ * Fetch Jito tip floor from Jito API and calculate dynamic tip.
+ * Jito tips are FLAT lamports (not multiplied by compute units).
+ *
+ * @returns Tip amount in SOL
+ */
+export async function getJitoTipFloor(): Promise<number> {
+  const STATIC_FALLBACK_SOL = 0.000001 // 1000 lamports fallback if API fails (matches MIN_JITO_TIP_LAMPORTS)
+  const CEILING_LAMPORTS = 10_000_000 // 0.01 SOL safety ceiling
+
+  try {
+    const response = await fetch('https://bundles.jito.wtf/api/v1/bundles/tip_floor', {
+      method: 'GET',
+      headers: { 'Content-Type': 'application/json' }
+    })
+
+    if (!response.ok) {
+      throw new Error(`Jito API error: ${response.status}`)
+    }
+
+    const data = await response.json()
+
+    // Extract landed_tips_75th_percentile from first element (API returns SOL values)
+    const jito75thSol = data?.[0]?.landed_tips_75th_percentile
+
+    if (typeof jito75thSol !== 'number' || jito75thSol <= 0) {
+      throw new Error('Invalid Jito API response format')
+    }
+
+    // CRITICAL: Convert API SOL value to lamports FIRST
+    const jito75thLamps = jito75thSol * LAMPORTS_PER_SOL
+
+    // Jito tips are FLAT lamports: Math.max(jito_75th_lamports * 1.1, MIN_TIP_LAMPS)
+    const calculatedLamports = Math.max(
+      jito75thLamps * 1.1, // 10% buffer above 75th percentile
+      MIN_JITO_TIP_LAMPORTS // minimum floor
+    )
+
+    // Apply ceiling for safety
+    const finalLamports = Math.min(calculatedLamports, CEILING_LAMPORTS)
+
+    // Convert back to SOL for return
+    const tipAmount = finalLamports / LAMPORTS_PER_SOL
+
+    console.log(`Jito Tip: ${finalLamports} lamports (${tipAmount} SOL) [API: ${jito75thSol} SOL → ${jito75thLamps} lamports]`)
+
+    return tipAmount
+
+  } catch (error) {
+    console.warn("[jito] Failed to fetch Jito tip floor, using static fallback:", error)
+    return STATIC_FALLBACK_SOL
+  }
+}
+
+/**
+ * LEGACY: Keep for backward compatibility, but DEPRECATED.
+ * Use getJitoTipFloor() instead.
+ */
 export async function estimateDynamicJitoTip(
   connection: Connection,
   computeUnits: number = 800_000,
   {
     multiplier = 1.25,
     floorLamports = MIN_JITO_TIP_LAMPORTS,
-    ceilingLamports = 10_000_000, // 0.01 SOL safety upper bound
+    ceilingLamports = 10_000_000,
   }: {
     multiplier?: number
     floorLamports?: number
     ceilingLamports?: number
   } = {}
 ): Promise<number> {
-  try {
-    const fees = await connection.getRecentPrioritizationFees()
-    const sorted = fees
-      .map((f) => f.prioritizationFee)
-      .filter((v) => Number.isFinite(v) && v > 0)
-      .sort((a, b) => a - b)
-
-    let p75 = 0
-    if (sorted.length === 0) {
-      p75 = 0
-    } else if (sorted.length === 1) {
-      p75 = sorted[0]
-    } else {
-      const pickIndex = Math.floor(sorted.length * 0.75)
-      const safeIndex = Math.min(sorted.length - 1, pickIndex)
-      p75 = sorted[safeIndex]
-    }
-
-    const lamports = Math.min(
-      ceilingLamports,
-      Math.max(floorLamports, Math.floor(p75 * computeUnits * multiplier))
-    )
-    return lamports / LAMPORTS_PER_SOL
-  } catch (error) {
-    console.warn("[jito] failed to estimate dynamic tip, falling back", error)
-    return floorLamports / LAMPORTS_PER_SOL
-  }
+  console.warn("[jito] estimateDynamicJitoTip is DEPRECATED. Use getJitoTipFloor() instead.")
+  return getJitoTipFloor()
 }
 
 // default config

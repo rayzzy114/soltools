@@ -872,6 +872,14 @@ export default function DashboardPage() {
       return
     }
 
+    // WARNING: First transaction can only handle 2-3 buyers due to create instruction size
+    const maxBuyersInFirstTx = 3
+    if (buyerWallets.length > maxBuyersInFirstTx) {
+      toast.warning(`Warning: First transaction limited to ${maxBuyersInFirstTx} buyers. ${buyerWallets.length - maxBuyersInFirstTx} buyers will be processed in subsequent transactions.`, {
+        duration: 5000,
+      })
+    }
+
     const buyerKeys = buyerWallets.map((wallet) => wallet.publicKey).filter(Boolean)
     const uniqueBuyerKeys = new Set(buyerKeys)
     if (uniqueBuyerKeys.size !== buyerKeys.length) {
@@ -937,7 +945,7 @@ export default function DashboardPage() {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               action: "fund",
-              useDevWallet: true, // Use Dev wallet from DB as funder instead of user-provided key
+              funderAddress: launchDevWallet, // Use selected Dev wallet address as funder
               wallets: launchWallets,
               amounts: launchWallets.map(() => funderAmount),
             }),
