@@ -1121,6 +1121,7 @@ export default function WalletToolsPage() {
                 checked={bundlerWallets.length > 0 && selectedWallets.size === bundlerWallets.length}
                 onCheckedChange={(checked) => handleSelectAll(!!checked)}
                 className="border-neutral-600"
+                aria-label="Select all wallets"
              />
              <div className="text-[10px] text-slate-400">Total Wallets: {bundlerWallets.length}</div>
              {selectedWallets.size > 0 && (
@@ -1143,6 +1144,7 @@ export default function WalletToolsPage() {
                         checked={selectedWallets.has(wallet.publicKey)}
                         onCheckedChange={() => toggleWalletSelection(wallet.publicKey)}
                         className="border-neutral-600"
+                        aria-label={`Select wallet ${index + 1}`}
                     />
                     <div className="text-[10px] text-neutral-700 w-5 text-center font-bold">#{index + 1}</div>
                     <div className="min-w-0">
@@ -1150,6 +1152,20 @@ export default function WalletToolsPage() {
                           <div className="text-neutral-900 font-mono truncate font-bold">
                             {wallet.publicKey.slice(0, 8)}...{wallet.publicKey.slice(-4)}
                           </div>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-4 w-4 text-slate-400 hover:text-slate-600 ml-1"
+                            onClick={() => {
+                              navigator.clipboard.writeText(wallet.publicKey)
+                                .then(() => toast.success("Address copied"))
+                                .catch(() => toast.error("Failed to copy address"))
+                            }}
+                            aria-label="Copy address"
+                            title="Copy address"
+                          >
+                            <Copy className="w-3 h-3" />
+                          </Button>
                               {/* Role Badges */}
                           {wallet.role === 'dev' && (
                                   <Badge variant="outline" className="h-4 px-1 text-[9px] border-purple-500 text-purple-400 bg-purple-500/10">DEV</Badge>
@@ -1180,6 +1196,7 @@ export default function WalletToolsPage() {
                         onClick={() => handleRefreshWallet(wallet)}
                         disabled={refreshingWallets.has(wallet.publicKey)}
                         className="h-6 w-6 text-slate-400 hover:text-white"
+                        aria-label="Refresh balance"
                         title="Refresh balance"
                     >
                         <RefreshCw className={`w-3 h-3 ${refreshingWallets.has(wallet.publicKey) ? "animate-spin" : ""}`} />
