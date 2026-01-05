@@ -25,6 +25,7 @@ import { getResilientConnection } from "@/lib/solana/config"
 import { getBondingCurveAddress } from "@/lib/solana/pumpfun-sdk"
 import { TokenHolderTracker, type HolderRow } from "@/lib/solana/holder-tracker"
 import { clampNumber } from "@/lib/ui-utils"
+import { BuyerWalletList, DevWalletSelect } from "./MemoizedLists"
 
 interface DashboardStats {
   activeTokens: number
@@ -2977,9 +2978,11 @@ export default function DashboardPage() {
                         Use Connected
                     </Button>
                 </div>
-                <Select
-                  value={launchDevWallet}
-                  onValueChange={(value) => {
+                  <DevWalletSelect
+                    launchDevWallet={launchDevWallet}
+                    connectedWalletKey={connectedWalletKey}
+                    devWalletOptions={devWalletOptions}
+                    onSelect={(value) => {
                     if (launchDevWallet) {
                       updateWalletRole(launchDevWallet, 'project')
                     }
@@ -2987,41 +2990,7 @@ export default function DashboardPage() {
                     setLaunchDevWallet(value)
                     setBuyerWallets((prev) => prev.filter((wallet) => wallet.publicKey !== value))
                   }}
-                >
-                  <SelectTrigger className="h-8 bg-background border-border text-xs">
-                    <SelectValue placeholder="Pick dev wallet" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {devWalletOptions.map((wallet, index) => {
-                      const isConnectedWallet = connectedWalletKey.length > 0 && wallet.publicKey === connectedWalletKey
-                      const labelPrefix = isConnectedWallet ? "Connected" : "Balance"
-
-                      let roleColor = "text-slate-400"
-                      let roleLabel = ""
-                      if (wallet.role === 'dev') { roleColor = "text-purple-400"; roleLabel = "DEV" }
-                      else if (wallet.role === 'buyer') { roleColor = "text-cyan-400"; roleLabel = "BUYER" }
-                      else if (wallet.role === 'funder') { roleColor = "text-green-400"; roleLabel = "FUNDER" }
-                      else if (wallet.role === 'volume_bot') { roleColor = "text-orange-400"; roleLabel = "BOT" }
-                      else if (wallet.role && wallet.role !== 'project') { roleLabel = wallet.role.toUpperCase() }
-
-                      return (
-                        <SelectItem key={wallet.publicKey} value={wallet.publicKey}>
-                          <div className="flex items-center gap-2">
-                            <span className="text-neutral-600 font-bold font-mono text-[10px]">#{index + 1}</span>
-                            <span className="text-neutral-800 font-medium">{labelPrefix}: {wallet.solBalance.toFixed(4)} SOL</span>
-                            <span className="text-neutral-400">-</span>
-                            <span className="font-mono text-neutral-900 font-semibold">{wallet.publicKey.slice(0, 6)}...{wallet.publicKey.slice(-4)}</span>
-                            {roleLabel && (
-                              <span className={`text-[9px] font-bold ${roleColor} border border-current px-1 rounded`}>
-                                {roleLabel}
-                              </span>
-                            )}
-                          </div>
-                        </SelectItem>
-                      )
-                    })}
-                  </SelectContent>
-                </Select>
+                  />
               </div>
               <div className="text-[10px] text-slate-500">
                 {launchDevWallet
@@ -3093,79 +3062,14 @@ export default function DashboardPage() {
               </div>
 
               <div className="space-y-1">
-                {buyerWallets.length === 0 ? (
-                  <div className="text-[10px] text-slate-500">No buyer wallets selected</div>
-                ) : (
-                  buyerWallets.map((wallet, index) => {
-                    const usedKeys = new Set(buyerWallets.map((entry) => entry.publicKey))
-                    const options = activeWallets.filter((option) => {
-                      if (option.publicKey === launchDevWallet) return false
-                      if (option.publicKey === wallet.publicKey) return true
-                      return !usedKeys.has(option.publicKey)
-                    })
-                    return (
-                      <div key={`${wallet.publicKey}-${index}`} className="grid grid-cols-12 gap-2 items-center rounded border border-neutral-800 bg-neutral-950/40 p-2">
-                        <div className="col-span-1 text-[10px] text-slate-400">{index + 1}</div>
-                        <div className="col-span-7">
-                          <Select
-                            value={wallet.publicKey}
-                            onValueChange={(value) => {
-                              updateWalletRole(wallet.publicKey, 'project')
-                              updateWalletRole(value, 'buyer')
-                              setBuyerWallets((prev) =>
-                                prev.map((entry, idx) =>
-                                  idx === index ? { ...entry, publicKey: value } : entry
-                                )
-                              )
-                            }}
-                          >
-                            <SelectTrigger className="h-8 bg-background border-border text-xs">
-                              <SelectValue placeholder="Select wallet" />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {options.map((option) => {
-                                const roleSuffix = option.role && option.role !== 'project' ? ` [${option.role.toUpperCase()}]` : ""
-                                return (
-                                  <SelectItem key={option.publicKey} value={option.publicKey}>
-                                    {option.label ? `${option.label} - ` : ""}
-                                    {option.publicKey.slice(0, 6)}...{option.publicKey.slice(-4)} ({option.solBalance.toFixed(3)} SOL){roleSuffix}
-                                  </SelectItem>
-                                )
-                              })}
-                            </SelectContent>
-                          </Select>
-                        </div>
-                        <div className="col-span-3">
-                          <Input
-                            type="number"
-                            step="0.0001"
-                            value={wallet.amount}
-                            onChange={(e) => {
-                              setBuyerWallets((prev) =>
-                                prev.map((entry, idx) =>
-                                  idx === index ? { ...entry, amount: e.target.value } : entry
-                                )
-                              )
-                            }}
-                            className="h-8 bg-background border-border text-xs"
-                          />
-                        </div>
-                        <div className="col-span-1 flex justify-end">
-                          <Button
-                            size="icon"
-                            variant="ghost"
-                            onClick={() => handleRemoveBuyerWallet(index)}
-                            className="h-8 w-8 text-red-400 hover:text-red-300"
-                            aria-label="Remove wallet"
-                            title="Remove wallet"
-                          >
-                            <Trash2 className="h-3 w-3" />
-                          </Button>
-                        </div>
-                      </div>
-                    )
-                  })
-                )}
+                <BuyerWalletList
+                  buyerWallets={buyerWallets}
+                  activeWallets={activeWallets}
+                  launchDevWallet={launchDevWallet}
+                  onUpdateWalletRole={updateWalletRole}
+                  onSetBuyerWallets={setBuyerWallets}
+                  onRemoveBuyerWallet={handleRemoveBuyerWallet}
+                />
               </div>
             </CardContent>
           </Card>
