@@ -197,7 +197,7 @@ export async function POST(request: NextRequest) {
         // Check balance and log it
         const balance = await connection.getBalance(funder.publicKey)
         const balanceSOL = balance / LAMPORTS_PER_SOL
-        console.log("Using funder:", funderWallet.publicKey.toBase58(), "with balance:", balanceSOL.toFixed(4), "SOL")
+        console.log("Using funder:", funderWallet.publicKey, "with balance:", balanceSOL.toFixed(4), "SOL")
 
         const signatures = await fundWallets(funder, wallets as BundlerWallet[], amounts)
         return NextResponse.json({ signatures })
