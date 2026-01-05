@@ -1281,8 +1281,44 @@ export async function createLaunchBundle(config: BundleConfig): Promise<BundleRe
       computeUnits,
     })
 
-    if (devSolBalance < resolvedTip + 0.01) {
-      throw new Error(`Dev wallet insufficient funds for tip: has ${devSolBalance.toFixed(4)} SOL, need ${(resolvedTip + 0.01).toFixed(4)} SOL`)
+    // Calculate proper Dev wallet cost estimate
+    // Dev wallet pays for: token creation, all ATAs, all buys, fees, tip
+    const walletCount = activeWallets.length
+    const devBuyAmount = devBuyAmount || 0.01
+    const buyerBuyAmounts = sortedBuyAmounts.slice(1) // exclude dev wallet
+    const costEstimate = estimateBundleCost(walletCount, [devBuyAmount, ...buyerBuyAmounts], resolvedTip, priorityFee)
+
+    // Add extra buffer for token creation rent (bonding curve + metadata PDAs)
+    const tokenCreationRentEstimate = 0.025 // rough estimate for bonding curve + metadata rent
+    const totalDevCostEstimate = costEstimate.totalSol + tokenCreationRentEstimate
+
+    // #region agent log - Hypothesis A: Log Dev wallet balance check
+    fetch('http://127.0.0.1:7247/ingest/6660ca90-26c7-4aff-8c90-88511fe0d0d0d4', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        location: 'lib/solana/bundler-engine.ts:1284',
+        message: 'Dev wallet balance check calculation',
+        data: {
+          devSolBalance,
+          resolvedTip,
+          costEstimateTotal: costEstimate.totalSol,
+          tokenCreationRentEstimate,
+          totalDevCostEstimate,
+          walletCount,
+          devBuyAmount,
+          buyerCount: buyerBuyAmounts.length
+        },
+        timestamp: Date.now(),
+        sessionId: 'debug-session',
+        runId: 'run1',
+        hypothesisId: 'A'
+      })
+    }).catch(() => {})
+    // #endregion
+
+    if (devSolBalance < totalDevCostEstimate) {
+      throw new Error(`Dev wallet insufficient funds: has ${devSolBalance.toFixed(4)} SOL, need ${totalDevCostEstimate.toFixed(4)} SOL (includes token creation, ATAs, buys, fees, tip)`)
     }
 
     const initialCurve = await getInitialCurve()
@@ -1466,6 +1502,90 @@ export async function createLaunchBundle(config: BundleConfig): Promise<BundleRe
       }
 
       const region = ghostPlan.regions[chunkIndex] || fallbackRegion
+
+      // #region agent log - Hypothesis A, B, C, D, E: Log fee payers, balances, and transfer amounts before bundle send
+      for (let txIdx = 0; txIdx < txList.length; txIdx++) {
+        const tx = txList[txIdx]
+        const feePayer = tx.message.getAccountKeys().get(0) // fee payer is always account 0
+
+        try {
+          const balance = await connection.getBalance(feePayer)
+          fetch('http://127.0.0.1:7247/ingest/6660ca90-26c7-4aff-8c90-88511fe0d0d4', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              location: 'lib/solana/bundler-engine.ts:1469',
+              message: `Bundle TX ${txIdx} fee payer and balance`,
+              data: {
+                txIndex: txIdx,
+                feePayer: feePayer.toBase58(),
+                balanceLamports: balance,
+                balanceSOL: balance / LAMPORTS_PER_SOL
+              },
+              timestamp: Date.now(),
+              sessionId: 'debug-session',
+              runId: 'run1',
+              hypothesisId: 'A,B,C,D,E'
+            })
+          }).catch(() => {})
+
+          // Log SystemProgram.transfer instructions with lamports
+          const instructions = tx.message.compiledInstructions
+          for (let instIdx = 0; instIdx < instructions.length; instIdx++) {
+            const inst = instructions[instIdx]
+            const programId = tx.message.getAccountKeys().get(inst.programIdIndex)
+            if (programId && programId.equals(SystemProgram.programId)) {
+              // Check if this is a transfer instruction (instruction type 2)
+              if (inst.data.length >= 4) {
+                const instructionType = inst.data.readUInt32LE(0)
+                if (instructionType === 2) { // SystemProgram.transfer
+                  const lamports = inst.data.readBigUInt64LE(4)
+                  fetch('http://127.0.0.1:7247/ingest/6660ca90-26c7-4aff-8c90-88511fe0d0d0d4', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      location: 'lib/solana/bundler-engine.ts:1469',
+                      message: `SystemProgram.transfer instruction found`,
+                      data: {
+                        txIndex: txIdx,
+                        instructionIndex: instIdx,
+                        lamports: lamports.toString(),
+                        solAmount: Number(lamports) / LAMPORTS_PER_SOL,
+                        fromPubkey: tx.message.getAccountKeys().get(inst.accountKeyIndexes[0])?.toBase58(),
+                        toPubkey: tx.message.getAccountKeys().get(inst.accountKeyIndexes[1])?.toBase58()
+                      },
+                      timestamp: Date.now(),
+                      sessionId: 'debug-session',
+                      runId: 'run1',
+                      hypothesisId: 'A,B,C,D,E'
+                    })
+                  }).catch(() => {})
+                }
+              }
+            }
+          }
+        } catch (error) {
+          fetch('http://127.0.0.1:7247/ingest/6660ca90-26c7-4aff-8c90-88511fe0d0d0d4', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              location: 'lib/solana/bundler-engine.ts:1469',
+              message: `Error getting balance for TX ${txIdx}`,
+              data: {
+                txIndex: txIdx,
+                feePayer: feePayer.toBase58(),
+                error: error.message
+              },
+              timestamp: Date.now(),
+              sessionId: 'debug-session',
+              runId: 'run1',
+              hypothesisId: 'A,B,C,D,E'
+            })
+          }).catch(() => {})
+        }
+      }
+      // #endregion
+
       const bundleResult = await sendBundleWithRetry(txList, region as any)
       const txSignatures = txList.map(extractTxSignature)
       bundleIds.push(bundleResult.bundleId)
@@ -2370,11 +2490,57 @@ export function estimateBundleCost(
   jitoTip: number
   fees: number
 } {
-  const fees = walletCount * 0.00005 + jitoTip + priorityFee * walletCount // rough estimate
+  // #region agent log - Hypothesis D: Log the 0.003 buffer calculation
+  fetch('http://127.0.0.1:7247/ingest/6660ca90-26c7-4aff-8c90-88511fe0d0d4', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      location: 'lib/solana/bundler-engine.ts:2446',
+      message: 'estimateBundleCost called with 0.003 buffer logic',
+      data: {
+        walletCount,
+        buyAmounts,
+        jitoTip,
+        priorityFee,
+        bufferAmount: 0.003,
+        bufferReason: 'buy amount + ATA rent + fees'
+      },
+      timestamp: Date.now(),
+      sessionId: 'debug-session',
+      runId: 'run1',
+      hypothesisId: 'D'
+    })
+  }).catch(() => {})
+  // #endregion
+
+  const fees = walletCount * 0.00005 + priorityFee * walletCount // rough estimate (jitoTip added separately)
 
   const perWallet = buyAmounts.map((amount, i) => {
     const buy = amount || buyAmounts[0] || 0.01
-    return buy + 0.003 // buy amount + ATA rent + fees
+    const withBuffer = buy + 0.003 // buy amount + ATA rent + fees
+
+    // #region agent log - Hypothesis D: Log per-wallet buffer application
+    fetch('http://127.0.0.1:7247/ingest/6660ca90-26c7-4aff-8c90-88511fe0d0d4', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        location: 'lib/solana/bundler-engine.ts:2519',
+        message: 'Per-wallet buffer calculation',
+        data: {
+          walletIndex: i,
+          originalBuyAmount: buy,
+          bufferAdded: 0.003,
+          finalAmount: withBuffer
+        },
+        timestamp: Date.now(),
+        sessionId: 'debug-session',
+        runId: 'run1',
+        hypothesisId: 'D'
+      })
+    }).catch(() => {})
+    // #endregion
+
+    return withBuffer
   })
 
   const totalSol = perWallet.reduce((sum, amount) => sum + amount, 0) + jitoTip + fees

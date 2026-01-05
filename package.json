@@ -5,10 +5,10 @@
   "scripts": {
     "postinstall": "node -e \"console.log('skip prisma generate on install; run pnpm db:generate manually')\"",
     "pretest": "pnpm exec prisma generate",
-    "build": "pnpm exec prisma generate && pnpm exec next build",
-    "dev": "next dev --turbopack",
+    "build": "cmd /c node node_modules\\prisma\\build\\index.js generate && cmd /c node node_modules\\next\\dist\\bin\\next build",
+    "dev": "cmd /c node node_modules\\next\\dist\\bin\\next dev --turbopack",
     "lint": "eslint .",
-    "start": "next start",
+    "start": "cmd /c node node_modules\\next\\dist\\bin\\next start",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
