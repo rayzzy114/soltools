@@ -208,6 +208,7 @@ export async function createBuyInstruction(
   maxSolCost: bigint,
   bondingCurveCreator?: string
 ): Promise<TransactionInstruction> {
+  console.log(`Creating buy instruction: buyer=${buyer.toBase58()}, mint=${mint.toBase58()}, maxSolCost=${maxSolCost} lamports`)
   const bondingCurve = getBondingCurveAddress(mint)
   const bondingCurveTokenAccount = getBondingCurveTokenAccount(mint, bondingCurve)
   const buyerTokenAccount = await getAssociatedTokenAddress(mint, buyer, false)

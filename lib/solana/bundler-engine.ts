@@ -1484,6 +1484,7 @@ export async function createLaunchBundle(config: BundleConfig): Promise<BundleRe
             })
           )
         }
+        console.log(`Adding buy instruction for buyer: ${keypair.publicKey.toBase58()}, amount: ${solAmountLamports} lamports`)
         instructions.push(
           await createBuyInstruction(keypair.publicKey, mint, minTokensOut, solAmountLamports)
         )
@@ -1525,6 +1526,13 @@ export async function createLaunchBundle(config: BundleConfig): Promise<BundleRe
       }).compileToV0Message([lookupTable])
 
       const massTx = new VersionedTransaction(massMessage)
+
+      // DEBUG: Log all signers in the transaction
+      console.log(`Transaction signers for chunk ${chunkIndex}:`)
+      for (const [pubkeyStr, keypair] of signerMap) {
+        console.log(`  - Signer: ${pubkeyStr}`)
+      }
+
       massTx.sign(Array.from(signerMap.values()))
 
       const txList: VersionedTransaction[] = [massTx]
