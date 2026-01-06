@@ -342,41 +342,44 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: "publicKey required" }, { status: 400 })
       }
 
-      try {
-        const existingWallet = await prisma.wallet.findUnique({ where: { publicKey } })
-        if (!existingWallet) {
-          logger.warn({ correlationId, publicKey }, "update requested for unknown wallet")
-          return NextResponse.json({ error: "wallet not found; import it before updating" }, { status: 404 })
-        }
+      const updatePayload: { label?: string | null; isActive?: boolean; role?: string } = {}
+      if (label !== undefined) updatePayload.label = label
+      if (isActive !== undefined) updatePayload.isActive = isActive
+      if (role !== undefined) updatePayload.role = role
 
-        const wallet = await prisma.wallet.update({
+      if (Object.keys(updatePayload).length === 0) {
+        return NextResponse.json({ error: "no update fields provided" }, { status: 400 })
+      }
+
+      try {
+        const wallet = await prisma.wallet.upsert({
           where: { publicKey },
-          data: {
-            ...(label !== undefined && { label }),
-            ...(isActive !== undefined && { isActive }),
-            ...(role !== undefined && { role }),
+          update: updatePayload,
+          create: {
+            publicKey,
+            secretKey: "",
+            solBalance: "0",
+            tokenBalance: "0",
+            isActive: updatePayload.isActive ?? true,
+            ...(updatePayload.label !== undefined ? { label: updatePayload.label } : {}),
+            ...(updatePayload.role !== undefined ? { role: updatePayload.role } : {}),
           },
         })
 
         return NextResponse.json({
-          wallet: {
+          wallet: sanitizeWallet({
             publicKey: wallet.publicKey,
-            secretKey: EXPOSE_WALLET_SECRETS ? wallet.secretKey : "",
+            secretKey: wallet.secretKey,
             solBalance: parseFloat(wallet.solBalance),
             tokenBalance: parseFloat(wallet.tokenBalance),
             isActive: wallet.isActive,
             label: wallet.label || undefined,
             role: wallet.role || "project",
-          },
+          }),
         })
       } catch (error: any) {
-        const isNotFound =
-          error?.code === "P2025" ||
-          typeof error?.code === "string" && error.code.includes("NotFound") ||
-          typeof error?.message === "string" && error.message.toLowerCase().includes("not found")
-
-        const status = isNotFound ? 404 : 400
-        const message = isNotFound ? "wallet not found; import it before updating" : error?.message
+        const status = error?.code === "P2025" ? 404 : 400
+        const message = status === 404 ? "wallet not found; import it before updating" : error?.message
         logger.error({ correlationId, error: error?.message, publicKey }, "failed to update wallet")
         return NextResponse.json({ error: message }, { status })
       }

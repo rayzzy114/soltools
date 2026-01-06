@@ -233,16 +233,38 @@ export default function WalletToolsPage() {
   }, [normalizeTokenList])
 
   const refreshFunderBalance = useCallback(async (pubkeyStr?: string) => {
-    const target = pubkeyStr || funderWalletRecord?.publicKey
+    const target = (pubkeyStr?.trim() || funderWalletRecord?.publicKey)?.trim()
     if (!target) return
     try {
-        const res = await fetch(`/api/solana/balance?publicKey=${target}`)
-        const data = await res.json()
-        if (typeof data.sol === 'number') {
-            setFunderBalance(data.sol)
-        }
-    } catch (e) {
-        console.error("failed to refresh funder balance", e)
+      const res = await fetch("/api/bundler/wallets", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "refresh",
+          walletPublicKeys: [target],
+        }),
+      })
+
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || data?.error) {
+        throw new Error(data?.error || "failed to refresh funder wallet")
+      }
+
+      const updatedWallet = Array.isArray(data.wallets) ? data.wallets[0] : null
+      if (updatedWallet) {
+        setFunderBalance(updatedWallet.solBalance)
+        setBundlerWallets((prev) => {
+          const map = new Map(prev.map((wallet) => [wallet.publicKey, wallet]))
+          const existing = map.get(updatedWallet.publicKey)
+          map.set(updatedWallet.publicKey, {
+            ...existing,
+            ...updatedWallet,
+          })
+          return Array.from(map.values())
+        })
+      }
+    } catch (error) {
+      console.error("failed to refresh funder balance", error)
     }
   }, [funderWalletRecord])
 
@@ -253,16 +275,7 @@ export default function WalletToolsPage() {
       if (data?.funderWallet) {
         setFunderWalletRecord(data.funderWallet)
         setFunderWalletInput(data.funderWallet.publicKey)
-        // Fetch balance directly to avoid circular dependency
-        try {
-          const balRes = await fetch(`/api/solana/balance?publicKey=${data.funderWallet.publicKey}`)
-          const balData = await balRes.json()
-          if (typeof balData.sol === "number") {
-            setFunderBalance(balData.sol)
-          }
-        } catch (e) {
-          console.error("failed to fetch funder balance", e)
-        }
+        refreshFunderBalance(data.funderWallet.publicKey)
       } else {
         setFunderWalletRecord(null)
         setFunderBalance(null)
@@ -270,7 +283,16 @@ export default function WalletToolsPage() {
     } catch (error: any) {
       console.error("failed to load funder wallet:", error)
     }
-  }, [])
+  }, [refreshFunderBalance])
+
+  useEffect(() => {
+    const funderFromWallets = bundlerWallets.find((wallet) => wallet.role === "funder")
+    if (funderFromWallets) {
+      setFunderBalance(funderFromWallets.solBalance)
+    } else if (!funderWalletRecord) {
+      setFunderBalance(null)
+    }
+  }, [bundlerWallets, funderWalletRecord])
 
   const saveFunderWallet = useCallback(async (options?: { publicKey?: string; secretKey?: string }) => {
     const trimmed = options?.publicKey || funderWalletInput.trim()

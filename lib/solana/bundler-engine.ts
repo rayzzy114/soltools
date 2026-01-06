@@ -18,7 +18,7 @@ import {
   TOKEN_PROGRAM_ID,
   AccountLayout,
 } from "@solana/spl-token"
-import { connection, SOLANA_NETWORK } from "./config"
+import { connection, getResilientConnection, SOLANA_NETWORK } from "./config"
 import {
   PUMPFUN_PROGRAM_ID,
   getBondingCurveAddress,
@@ -330,15 +330,16 @@ function isRateLimitedError(error: any): boolean {
   return message.includes("429") || message.includes("rate limit") || message.includes("too many requests")
 }
 
+function isCloudflare403Error(error: any): boolean {
+  if (!error) return false
+  const status = Number(error?.status || error?.statusCode || error?.code)
+  if (status === 403) return true
+  const message = (error?.message || "").toLowerCase()
+  return message.includes("cloudflare") || (message.includes("403") && message.includes("forbidden")) || message.includes("forbidden")
+}
+
 /**
- * Execute an RPC operation with automatic retries when the call is rate-limited.
- *
- * Retries the provided operation up to RPC_RETRY_ATTEMPTS when errors are classified
- * as rate-limited, using exponential backoff with random jitter between attempts.
- *
- * @param fn - A function that performs the RPC call and returns a promise for its result
- * @returns The resolved value from `fn`
- * @throws The last encountered error if a non-rate-limited error occurs or all retry attempts are exhausted
+ * Execute an RPC operation with automatic retries when the call is rate-limited or blocked by a Cloudflare 403.
  */
 async function rpcWithRetry<T>(fn: () => Promise<T>): Promise<T> {
   let lastError: any
@@ -347,7 +348,16 @@ async function rpcWithRetry<T>(fn: () => Promise<T>): Promise<T> {
       return await fn()
     } catch (error) {
       lastError = error
-      if (!isRateLimitedError(error)) break
+      const isRateLimit = isRateLimitedError(error)
+      const isForbidden = isCloudflare403Error(error)
+      if (isForbidden) {
+        try {
+          await getResilientConnection()
+        } catch (rotateError) {
+          console.warn("failed to rotate RPC endpoint after forbidden error", rotateError)
+        }
+      }
+      if (!isRateLimit && !isForbidden) break
       const backoff = RPC_RETRY_BASE_MS * Math.pow(2, attempt)
       const jitter = Math.random() * RPC_RETRY_JITTER_MS
       await sleep(backoff + jitter)

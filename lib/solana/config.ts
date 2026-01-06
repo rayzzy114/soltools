@@ -150,6 +150,8 @@ export const getConnection = () => {
   return cachedConnection
 }
 
+export let connection: Connection = getConnection()
+
 export async function getResilientConnection(): Promise<Connection> {
   const endpoint = await selectHealthyRpcEndpoint()
   if (!cachedConnection || endpoint !== selectedRpcEndpoint) {
@@ -158,6 +160,7 @@ export async function getResilientConnection(): Promise<Connection> {
       commitment: "confirmed",
       fetch: rateLimitedFetch,
     })
+    connection = cachedConnection
   }
   return cachedConnection
 }
@@ -167,8 +170,6 @@ export async function getRpcHealth(): Promise<{ endpoint: string; healthy: boole
   const healthy = await probeEndpoint(endpoint)
   return { endpoint, healthy }
 }
-
-export const connection = getConnection()
 
 // Log network info and warnings
 if (typeof window === "undefined") {
