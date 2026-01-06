@@ -24,6 +24,12 @@ import { getBondingCurveAddress } from "@/lib/solana/pumpfun-sdk"
 import { TokenHolderTracker, type HolderRow } from "@/lib/solana/holder-tracker"
 import { clampNumber } from "@/lib/ui-utils"
 import { BuyerWalletList, DevWalletSelect } from "./MemoizedLists"
+import {
+  readStoredBundlerWallets,
+  importStoredBundlerWallets,
+  mergeStoredSecrets,
+  upsertStoredBundlerWallet,
+} from "@/lib/bundler-wallet-storage"
 
 interface DashboardStats {
   activeTokens: number
@@ -172,6 +178,10 @@ export default function DashboardPage() {
   // New states for enhanced dashboard
   const [selectedToken, setSelectedToken] = useState<Token | null>(null)
   const [bundlerWallets, setBundlerWallets] = useState<BundlerWallet[]>([])
+  const applyStoredSecrets = useCallback(
+    (list: BundlerWallet[]) => mergeStoredSecrets(list, readStoredBundlerWallets()),
+    []
+  )
   const [rugpullEstimate, setRugpullEstimate] = useState<RugpullEstimate | null>(null)
   const [devRugpullEstimate, setDevRugpullEstimate] = useState<RugpullEstimate | null>(null)
   const [priorityFeeSol, setPriorityFeeSol] = useState("0.0001")
@@ -434,13 +444,20 @@ export default function DashboardPage() {
 
       const updatedWallet = data?.wallet as BundlerWallet | undefined
       setBundlerWallets((prev) => {
+        let next: BundlerWallet[] = prev
         if (updatedWallet) {
+          upsertStoredBundlerWallet({
+            publicKey: updatedWallet.publicKey,
+            secretKey: updatedWallet.secretKey,
+          })
           const exists = prev.some((w) => w.publicKey === updatedWallet.publicKey)
-          return exists
+          next = exists
             ? prev.map((w) => (w.publicKey === updatedWallet.publicKey ? { ...w, role: updatedWallet.role } : w))
             : [...prev, updatedWallet]
+        } else {
+          next = prev.map((w) => (w.publicKey === publicKey ? { ...w, role } : w))
         }
-        return prev.map((w) => (w.publicKey === publicKey ? { ...w, role } : w))
+        return applyStoredSecrets(next)
       })
       return data
     } catch (error) {
@@ -448,11 +465,13 @@ export default function DashboardPage() {
       toast.error("Failed to update wallet role")
       return null
     }
-  }, [])
+  }, [applyStoredSecrets])
 
   // Load saved wallets from database with batched balance updates
   const loadSavedWallets = useCallback(async () => {
     try {
+      const storedSecrets = readStoredBundlerWallets()
+      await importStoredBundlerWallets(storedSecrets)
       const res = await fetch("/api/bundler/wallets?action=load-all")
       if (!res.ok) {
         throw new Error(`HTTP error! status: ${res.status}`)
@@ -486,9 +505,10 @@ export default function DashboardPage() {
           }
         }
 
-        setBundlerWallets(walletsToUse)
+        const mergedWallets = applyStoredSecrets(walletsToUse)
+        setBundlerWallets(mergedWallets)
 
-        const nextWallets = walletsToUse
+        const nextWallets = mergedWallets
         // Restore selections from roles
         const dev = nextWallets.find((w: any) => w.role === 'dev')
         if (dev) {
@@ -512,7 +532,7 @@ export default function DashboardPage() {
       console.error("failed to load saved wallets:", error)
       toast.error(`failed to load wallets: ${error.message || "unknown error"}`)
     }
-  }, [buyAmountPerWallet])
+  }, [buyAmountPerWallet, applyStoredSecrets])
 
   // Add system log
   const getLogStorageKey = useCallback((mint: string) => `system_logs_${mint}`, [])
@@ -1454,7 +1474,7 @@ export default function DashboardPage() {
         if (Array.isArray(data.wallets) && data.wallets[0]) {
           effectiveWallet = data.wallets[0]
           setBundlerWallets((prev) =>
-            prev.map((w) => (w.publicKey === effectiveWallet.publicKey ? effectiveWallet : w))
+            applyStoredSecrets(prev.map((w) => (w.publicKey === effectiveWallet.publicKey ? effectiveWallet : w)))
           )
           sellAmount = calcSellAmount(effectiveWallet)
         }
@@ -1536,6 +1556,7 @@ export default function DashboardPage() {
       toast.error(`Failed to ${action}`)
     }
   }, [
+    applyStoredSecrets,
     selectedToken?.mintAddress,
     volumeBotConfig,
     priorityFeeSol,

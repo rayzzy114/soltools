@@ -5,6 +5,7 @@ const ALLOWED_ORIGINS = (process.env.CORS_ALLOWED_ORIGINS || "")
   .split(",")
   .map((s) => s.trim())
   .filter(Boolean)
+const NGROK_ORIGIN_PATTERN = /^https:\/\/([^/]+\.)*ngrok\.io$/i
 
 function buildCorsHeaders(origin: string): HeadersInit {
   return {
@@ -30,9 +31,11 @@ export function middleware(request: NextRequest) {
   const isApiRoute = pathname.startsWith("/api/")
   const origin = request.headers.get("origin") || ""
   const originRestricted = ALLOWED_ORIGINS.length > 0
+  const isNgrokOrigin = origin ? NGROK_ORIGIN_PATTERN.test(origin) : false
+  const originAllowed = !originRestricted || (origin && (ALLOWED_ORIGINS.includes(origin) || isNgrokOrigin))
 
   if (isApiRoute) {
-    if (originRestricted && origin && !ALLOWED_ORIGINS.includes(origin)) {
+    if (originRestricted && origin && !originAllowed) {
       return new NextResponse(JSON.stringify({ error: "origin not allowed" }), {
         status: 403,
         headers: { "content-type": "application/json" },
@@ -40,7 +43,7 @@ export function middleware(request: NextRequest) {
     }
 
     if (request.method === "OPTIONS") {
-      const headers = origin && originRestricted ? buildCorsHeaders(origin) : undefined
+      const headers = origin && originAllowed ? buildCorsHeaders(origin) : undefined
       return new NextResponse(null, { status: 204, headers })
     }
   }
@@ -57,7 +60,7 @@ export function middleware(request: NextRequest) {
   }
 
   const response = NextResponse.next()
-  if (isApiRoute && origin && originRestricted) {
+  if (isApiRoute && origin && originAllowed) {
     const corsHeaders = buildCorsHeaders(origin)
     Object.entries(corsHeaders).forEach(([key, value]) => {
       if (value) response.headers.set(key, value)

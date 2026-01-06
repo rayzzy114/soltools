@@ -15,6 +15,12 @@ import { useWallet } from "@solana/wallet-adapter-react"
 import { LAMPORTS_PER_SOL, PublicKey, SystemProgram, TransactionMessage, VersionedTransaction, Keypair } from "@solana/web3.js"
 import bs58 from "bs58"
 import { getResilientConnection } from "@/lib/solana/config"
+import {
+  readStoredBundlerWallets,
+  importStoredBundlerWallets,
+  mergeStoredSecrets,
+  upsertStoredBundlerWallet,
+} from "@/lib/bundler-wallet-storage"
 
 interface Token {
   symbol?: string
@@ -61,6 +67,10 @@ export default function WalletToolsPage() {
   const [walletCount, setWalletCount] = useState("5")
   const [gasAmount, setGasAmount] = useState("0.003")
   const [gasLoading, setGasLoading] = useState(false)
+  const applyStoredSecrets = useCallback(
+    (list: BundlerWallet[]) => mergeStoredSecrets(list, readStoredBundlerWallets()),
+    []
+  )
   const [ataLoading, setAtaLoading] = useState(false)
   const [collectingSol, setCollectingSol] = useState(false)
   const [clearingWallets, setClearingWallets] = useState(false)
@@ -165,6 +175,8 @@ export default function WalletToolsPage() {
 
   const loadSavedWallets = useCallback(async (opts?: { silent?: boolean }) => {
     try {
+      const storedSecrets = readStoredBundlerWallets()
+      await importStoredBundlerWallets(storedSecrets)
       const res = await fetch("/api/bundler/wallets?action=load-all")
       if (!res.ok) {
         throw new Error(`HTTP error! status: ${res.status}`)
@@ -196,7 +208,8 @@ export default function WalletToolsPage() {
           }
         }
 
-        setBundlerWallets(walletsToUse)
+        const mergedWallets = applyStoredSecrets(walletsToUse)
+        setBundlerWallets(mergedWallets)
       }
     } catch (error: any) {
       console.error("failed to load saved wallets:", error)
@@ -204,7 +217,7 @@ export default function WalletToolsPage() {
         toast.error(`failed to load wallets: ${error.message || "unknown error"}`)
       }
     }
-  }, [])
+  }, [applyStoredSecrets])
 
   const loadTokens = useCallback(async () => {
     try {
@@ -260,13 +273,13 @@ export default function WalletToolsPage() {
             ...existing,
             ...updatedWallet,
           })
-          return Array.from(map.values())
+          return applyStoredSecrets(Array.from(map.values()))
         })
       }
     } catch (error) {
       console.error("failed to refresh funder balance", error)
     }
-  }, [funderWalletRecord])
+  }, [funderWalletRecord, applyStoredSecrets])
 
   const loadFunderWallet = useCallback(async () => {
     try {
@@ -443,7 +456,13 @@ export default function WalletToolsPage() {
         return
       }
       if (data.wallets && Array.isArray(data.wallets)) {
-        setBundlerWallets(prev => [...prev, ...data.wallets])
+        data.wallets.forEach((wallet: BundlerWallet) => {
+          upsertStoredBundlerWallet({
+            publicKey: wallet.publicKey,
+            secretKey: wallet.secretKey,
+          })
+        })
+        setBundlerWallets((prev) => applyStoredSecrets([...prev, ...data.wallets]))
         toast.success(`generated ${data.wallets.length} wallets`)
       } else {
         toast.error("invalid response from server")
@@ -452,7 +471,7 @@ export default function WalletToolsPage() {
       console.error("generate wallets error:", error)
       toast.error(`failed to generate wallets: ${error.message || "unknown error"}`)
     }
-  }, [walletCount])
+  }, [walletCount, applyStoredSecrets])
 
   const handleSelectAll = useCallback((checked: boolean) => {
     if (checked) {
@@ -493,7 +512,7 @@ export default function WalletToolsPage() {
         throw new Error(data?.error || "failed to batch delete wallets")
       }
 
-      setBundlerWallets(prev => prev.filter(w => !selectedWallets.has(w.publicKey)))
+      setBundlerWallets((prev) => applyStoredSecrets(prev.filter((w) => !selectedWallets.has(w.publicKey))))
       setSelectedWallets(new Set()) // Clear selection
       await loadSavedWallets({ silent: true })
       toast.success(`Deleted ${data.count || publicKeys.length} wallets`)
@@ -504,7 +523,7 @@ export default function WalletToolsPage() {
     } finally {
       setClearingWallets(false)
     }
-  }, [selectedWallets, loadSavedWallets])
+  }, [selectedWallets, loadSavedWallets, applyStoredSecrets])
 
   const handleRefreshWallet = useCallback(async (wallet: BundlerWallet) => {
     setRefreshingWallets(prev => {
@@ -524,7 +543,7 @@ export default function WalletToolsPage() {
         const data = await res.json()
         if (data.wallets && data.wallets.length > 0) {
              const updated = data.wallets[0]
-             setBundlerWallets(prev => prev.map(w => w.publicKey === updated.publicKey ? updated : w))
+             setBundlerWallets((prev) => applyStoredSecrets(prev.map((w) => (w.publicKey === updated.publicKey ? updated : w))))
              toast.success("Wallet refreshed")
         }
     } catch (error) {
@@ -536,7 +555,7 @@ export default function WalletToolsPage() {
             return next
         })
     }
-  }, [])
+  }, [applyStoredSecrets])
 
   const handleCollectSol = useCallback(async () => {
     if (!recipientWallet) {
@@ -612,11 +631,11 @@ export default function WalletToolsPage() {
 
       // Refresh UI
       if (data.wallets) {
-        setBundlerWallets(prev => {
+        setBundlerWallets((prev) => {
            // Merge updates
            const map = new Map(prev.map(w => [w.publicKey, w]))
            data.wallets.forEach((w: BundlerWallet) => map.set(w.publicKey, w))
-           return Array.from(map.values())
+           return applyStoredSecrets(Array.from(map.values()))
         })
       } else {
         loadSavedWallets()
@@ -629,7 +648,7 @@ export default function WalletToolsPage() {
     } finally {
       setCollectingSol(false)
     }
-  }, [bundlerWallets, recipientWallet, addSystemLog, loadSavedWallets])
+  }, [bundlerWallets, recipientWallet, addSystemLog, loadSavedWallets, applyStoredSecrets])
 
   // Handle Gas Amount Change with Persistence
   const handleGasAmountChange = (e: React.ChangeEvent<HTMLInputElement>) => {
