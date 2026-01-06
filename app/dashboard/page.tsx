@@ -14,7 +14,7 @@ import { Switch } from "@/components/ui/switch"
 import { Slider } from "@/components/ui/slider"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Alert, AlertDescription } from "@/components/ui/alert"
-import { TrendingUp, TrendingDown, Coins, Activity, Users, Play, Pause, Settings, RefreshCw, Flame, Rocket, AlertTriangle, BarChart3, Trash2, Upload, Wallet, Download, ShieldCheck, Zap, Terminal } from "lucide-react"
+import { TrendingUp, TrendingDown, Coins, Activity, Users, Play, Pause, Settings, RefreshCw, Flame, Rocket, AlertTriangle, BarChart3, Trash2, Upload, Wallet, Download, ShieldCheck, Zap, Terminal, Copy } from "lucide-react"
 import { PnLSummaryCard, MiniPnLCard } from "@/components/pnl/PnLCard"
 import type { PnLSummary, TokenPnL, Trade } from "@/lib/pnl/types"
 import { toast } from "sonner"
@@ -2097,16 +2097,52 @@ export default function DashboardPage() {
                             <div className="text-slate-500">Symbol</div>
                             <div className="text-white">{selectedToken?.symbol || "-"}</div>
                             <div className="text-slate-500">Mint / Token key</div>
-                            <div className="text-white font-mono truncate">
-                              {selectedToken?.mintAddress
-                                ? `${selectedToken.mintAddress.slice(0, 6)}...${selectedToken.mintAddress.slice(-4)}`
-                                : "-"}
+                            <div className="flex items-center gap-1">
+                              <div className="text-white font-mono truncate">
+                                {selectedToken?.mintAddress
+                                  ? `${selectedToken.mintAddress.slice(0, 6)}...${selectedToken.mintAddress.slice(-4)}`
+                                  : "-"}
+                              </div>
+                              {selectedToken?.mintAddress && (
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-4 w-4 text-slate-400 hover:text-white"
+                                  onClick={() => {
+                                    navigator.clipboard.writeText(selectedToken.mintAddress!)
+                                      .then(() => toast.success("Mint address copied"))
+                                      .catch(() => toast.error("Failed to copy"))
+                                  }}
+                                  aria-label="Copy mint address"
+                                  title="Copy mint address"
+                                >
+                                  <Copy className="w-3 h-3" />
+                                </Button>
+                              )}
                             </div>
                             <div className="text-slate-500">Dev key</div>
-                            <div className="text-white font-mono truncate">
-                              {selectedToken?.creatorWallet
-                                ? `${selectedToken.creatorWallet.slice(0, 6)}...${selectedToken.creatorWallet.slice(-4)}`
-                                : "-"}
+                            <div className="flex items-center gap-1">
+                              <div className="text-white font-mono truncate">
+                                {selectedToken?.creatorWallet
+                                  ? `${selectedToken.creatorWallet.slice(0, 6)}...${selectedToken.creatorWallet.slice(-4)}`
+                                  : "-"}
+                              </div>
+                              {selectedToken?.creatorWallet && (
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-4 w-4 text-slate-400 hover:text-white"
+                                  onClick={() => {
+                                    navigator.clipboard.writeText(selectedToken.creatorWallet!)
+                                      .then(() => toast.success("Dev address copied"))
+                                      .catch(() => toast.error("Failed to copy"))
+                                  }}
+                                  aria-label="Copy dev address"
+                                  title="Copy dev address"
+                                >
+                                  <Copy className="w-3 h-3" />
+                                </Button>
+                              )}
                             </div>
                             <div className="text-slate-500">Pump.fun link</div>
                             <div className="text-white">
@@ -2426,6 +2462,20 @@ export default function DashboardPage() {
                             <span className="font-mono text-neutral-400">
                               {wallet.address.slice(0, 6)}...{wallet.address.slice(-4)}
                             </span>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-4 w-4 text-slate-400 hover:text-white"
+                              onClick={() => {
+                                navigator.clipboard.writeText(wallet.address)
+                                  .then(() => toast.success("Address copied"))
+                                  .catch(() => toast.error("Failed to copy"))
+                              }}
+                              aria-label="Copy wallet address"
+                              title="Copy wallet address"
+                            >
+                              <Copy className="w-3 h-3" />
+                            </Button>
                             {isLiquidityPool && (
                               <span className="rounded bg-cyan-500/10 px-1 text-[9px] text-cyan-300">
                                 Liquidity pool
@@ -2473,6 +2523,20 @@ export default function DashboardPage() {
                               <span className="font-mono text-neutral-400">
                                 {trade.mintAddress.slice(0, 6)}...{trade.mintAddress.slice(-4)}
                               </span>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-4 w-4 text-slate-400 hover:text-white"
+                                onClick={() => {
+                                  navigator.clipboard.writeText(trade.mintAddress)
+                                    .then(() => toast.success("Mint address copied"))
+                                    .catch(() => toast.error("Failed to copy"))
+                                }}
+                                aria-label="Copy mint address"
+                                title="Copy mint address"
+                              >
+                                <Copy className="w-3 h-3" />
+                              </Button>
                             </div>
                             <div className="text-right">
                               <div className="text-white">{trade.solAmount.toFixed(3)} SOL</div>
