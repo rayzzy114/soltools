@@ -14,7 +14,7 @@ import { Switch } from "@/components/ui/switch"
 import { Slider } from "@/components/ui/slider"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Alert, AlertDescription } from "@/components/ui/alert"
-import { TrendingUp, TrendingDown, Coins, Activity, Users, Play, Pause, Settings, RefreshCw, Flame, Rocket, AlertTriangle, BarChart3, Trash2, Upload, Wallet, Download, ShieldCheck, Zap, Terminal } from "lucide-react"
+import { TrendingUp, TrendingDown, Coins, Activity, Users, Play, Pause, Settings, RefreshCw, Flame, Rocket, AlertTriangle, BarChart3, Trash2, Upload, Wallet, Download, ShieldCheck, Zap, Terminal, Copy } from "lucide-react"
 import { PnLSummaryCard, MiniPnLCard } from "@/components/pnl/PnLCard"
 import type { PnLSummary, TokenPnL, Trade } from "@/lib/pnl/types"
 import { toast } from "sonner"
@@ -94,6 +94,25 @@ interface RugpullEstimate {
 
 const PRIORITY_FEE_COMPUTE_UNITS = 400000
 const PRICE_SERIES_MAX_POINTS = 60
+
+// Reusable Copy Button for lists
+const CopyButton = ({ text, className }: { text: string, className?: string }) => (
+  <Button
+    variant="ghost"
+    size="icon"
+    className={`h-4 w-4 text-slate-400 hover:text-slate-200 ${className}`}
+    onClick={(e) => {
+      e.stopPropagation()
+      navigator.clipboard.writeText(text)
+        .then(() => toast.success("Copied to clipboard"))
+        .catch(() => toast.error("Failed to copy"))
+    }}
+    aria-label="Copy"
+    title="Copy"
+  >
+    <Copy className="w-3 h-3" />
+  </Button>
+)
 
 // Optimized Wallet Row Component
 const WalletRow = memo(({ wallet, index, onSelect }: { wallet: BundlerWallet, index: number, onSelect: (w: BundlerWallet) => void }) => {
@@ -2118,16 +2137,26 @@ export default function DashboardPage() {
                             <div className="text-slate-500">Symbol</div>
                             <div className="text-white">{selectedToken?.symbol || "-"}</div>
                             <div className="text-slate-500">Mint / Token key</div>
-                            <div className="text-white font-mono truncate">
-                              {selectedToken?.mintAddress
-                                ? `${selectedToken.mintAddress.slice(0, 6)}...${selectedToken.mintAddress.slice(-4)}`
-                                : "-"}
+                            <div className="text-white font-mono truncate flex items-center gap-1">
+                              {selectedToken?.mintAddress ? (
+                                <>
+                                  {selectedToken.mintAddress.slice(0, 6)}...{selectedToken.mintAddress.slice(-4)}
+                                  <CopyButton text={selectedToken.mintAddress} />
+                                </>
+                              ) : (
+                                "-"
+                              )}
                             </div>
                             <div className="text-slate-500">Dev key</div>
-                            <div className="text-white font-mono truncate">
-                              {selectedToken?.creatorWallet
-                                ? `${selectedToken.creatorWallet.slice(0, 6)}...${selectedToken.creatorWallet.slice(-4)}`
-                                : "-"}
+                            <div className="text-white font-mono truncate flex items-center gap-1">
+                              {selectedToken?.creatorWallet ? (
+                                <>
+                                  {selectedToken.creatorWallet.slice(0, 6)}...{selectedToken.creatorWallet.slice(-4)}
+                                  <CopyButton text={selectedToken.creatorWallet} />
+                                </>
+                              ) : (
+                                "-"
+                              )}
                             </div>
                             <div className="text-slate-500">Pump.fun link</div>
                             <div className="text-white">
@@ -2241,11 +2270,15 @@ export default function DashboardPage() {
                   </div>
                   <div className="space-y-1">
                     <Label className="text-[10px] text-slate-600">Dev Wallet</Label>
-                    <div className="h-7 px-3 flex items-center bg-neutral-950/40 rounded border border-neutral-800 text-xs text-slate-300 font-mono">
-                      {launchDevWallet
-                        ? `${launchDevWallet.slice(0, 8)}...${launchDevWallet.slice(-8)}`
-                        : "No dev wallet selected"
-                      }
+                    <div className="h-7 px-3 flex items-center justify-between bg-neutral-950/40 rounded border border-neutral-800 text-xs text-slate-300 font-mono">
+                      {launchDevWallet ? (
+                        <>
+                          <span>{launchDevWallet.slice(0, 8)}...{launchDevWallet.slice(-8)}</span>
+                          <CopyButton text={launchDevWallet} />
+                        </>
+                      ) : (
+                        "No dev wallet selected"
+                      )}
                     </div>
                   </div>
                 </div>
@@ -2447,6 +2480,7 @@ export default function DashboardPage() {
                             <span className="font-mono text-neutral-400">
                               {wallet.address.slice(0, 6)}...{wallet.address.slice(-4)}
                             </span>
+                            <CopyButton text={wallet.address} />
                             {isLiquidityPool && (
                               <span className="rounded bg-cyan-500/10 px-1 text-[9px] text-cyan-300">
                                 Liquidity pool
