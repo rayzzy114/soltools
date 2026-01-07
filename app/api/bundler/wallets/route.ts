@@ -154,10 +154,9 @@ export async function GET(request: NextRequest) {
     // load all wallets from DB
     if (action === "load-all") {
       const wallets = await loadWalletsFromDB()
-      if (mintAddress) {
-        const refreshed = await refreshWalletBalances(wallets, mintAddress)
-        return NextResponse.json({ wallets: refreshed.map(sanitizeWallet) })
-      }
+      // Return DB state only. 
+      // Refreshing is expensive and rate-limited. 
+      // Client must call action=refresh explicitly if needed.
       return NextResponse.json({ wallets: wallets.map(sanitizeWallet) })
     }
 
