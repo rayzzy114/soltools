@@ -1,5 +1,6 @@
 import { Connection } from "@solana/web3.js"
 import { ENV } from "../env"
+import Bottleneck from "bottleneck"
 
 export const SOLANA_NETWORK: string = ENV.network
 
@@ -18,119 +19,74 @@ const toWs = (url: string) => (url?.startsWith("http") ? url.replace(/^http/, "w
 let selectedWebsocketEndpoint = toWs(RPC_ENDPOINT)
 export let RPC_WEBSOCKET_ENDPOINT = selectedWebsocketEndpoint
 
-const RATE_LIMIT_PAUSE_MS = 10_000
-let rateLimitPauseUntil = 0
+// --- GLOBAL RPC LOCK & RATE LIMITING ---
 
-const waitForRateLimitPause = () => {
-  const delay = rateLimitPauseUntil - Date.now()
-  if (delay <= 0) return Promise.resolve()
-  return new Promise((resolve) => setTimeout(resolve, delay))
+let isRpcPaused = false
+let rpcPausePromise: Promise<void> | null = null
+const RPC_PAUSE_DURATION_MS = 15_000
+
+// Strict concurrency limit as requested
+// We use Bottleneck to enforce max concurrent requests
+const limiter = new Bottleneck({
+  maxConcurrent: 2,
+  minTime: 0 // We handle delay manually to ensure "2 by 2" batching effect if needed
+})
+
+const waitForRpcPause = () => {
+  if (isRpcPaused && rpcPausePromise) {
+    return rpcPausePromise
+  }
+  return Promise.resolve()
 }
 
-const triggerRateLimitPause = () => {
-  const nextPause = Date.now() + RATE_LIMIT_PAUSE_MS
-  if (nextPause > rateLimitPauseUntil) {
-    rateLimitPauseUntil = nextPause
-    console.warn(`RPC returned 429 - pausing requests for ${RATE_LIMIT_PAUSE_MS}ms`)
-  }
+const triggerRpcPause = () => {
+  if (isRpcPaused) return
+  isRpcPaused = true
+  console.warn("[RPC] Pausing all traffic for 15s due to 429")
+
+  rpcPausePromise = new Promise((resolve) => {
+    setTimeout(() => {
+      isRpcPaused = false
+      rpcPausePromise = null
+      resolve()
+    }, RPC_PAUSE_DURATION_MS)
+  })
+}
+
+const rateLimitedFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+  return limiter.schedule(async () => {
+    // 1. Check global pause
+    // If paused, we await the promise. Since this function is running inside a limiter slot,
+    // this effectively blocks one of the concurrency slots. With maxConcurrent=2,
+    // 2 requests will hang here, and the rest will queue in Bottleneck.
+    await waitForRpcPause()
+
+    // 2. Strict delay between requests (250ms)
+    // This ensures we don't burst even within the concurrency limit.
+    // "strictly 2 by 2 with a 250ms delay between each"
+    await new Promise(r => setTimeout(r, 250))
+
+    try {
+      const response = await fetch(input, init)
+
+      if (response.status === 429) {
+        triggerRpcPause()
+      }
+      return response
+    } catch (error: any) {
+      // If the fetch itself throws (e.g. network error), check if it has status 429
+      if (error?.status === 429) {
+        triggerRpcPause()
+      }
+      throw error
+    }
+  })
 }
 
 // check if using public RPC (not recommended for production)
 export const isPublicRpc =
   RPC_ENDPOINT.includes("api.mainnet-beta.solana.com") ||
   RPC_ENDPOINT.includes("api.devnet.solana.com")
-
-const defaultRpcMinTime = isPublicRpc ? 1200 : 300
-const defaultRpcMaxConcurrent = 1
-const parsedMinTime = Number(process.env.RPC_RATE_LIMIT_MIN_TIME_MS)
-const parsedMaxConcurrent = Number(process.env.RPC_RATE_LIMIT_MAX_CONCURRENT)
-const RPC_RATE_LIMIT_MIN_TIME_MS = Number.isFinite(parsedMinTime)
-  ? Math.max(0, parsedMinTime)
-  : defaultRpcMinTime
-const RPC_RATE_LIMIT_MAX_CONCURRENT = Number.isFinite(parsedMaxConcurrent)
-  ? Math.max(1, Math.floor(parsedMaxConcurrent))
-  : defaultRpcMaxConcurrent
-
-type FetchTask = {
-  input: RequestInfo | URL
-  init?: RequestInit
-  resolve: (value: Response | PromiseLike<Response>) => void
-  reject: (reason?: any) => void
-}
-
-function createRateLimitedFetch(minIntervalMs: number, maxConcurrent: number) {
-  if (minIntervalMs <= 0 && maxConcurrent >= 50) {
-    return async (input: RequestInfo | URL, init?: RequestInit) => {
-      await waitForRateLimitPause()
-      const response = await fetch(input, init)
-      if (response.status === 429) {
-        triggerRateLimitPause()
-      }
-      return response
-    }
-  }
-
-  const queue: FetchTask[] = []
-  let inFlight = 0
-  let lastStart = 0
-  let timer: ReturnType<typeof setTimeout> | null = null
-
-  const executeTask = async (task: FetchTask) => {
-    try {
-      await waitForRateLimitPause()
-      const response = await fetch(task.input, task.init)
-      if (response.status === 429) {
-        triggerRateLimitPause()
-      }
-      task.resolve(response)
-    } catch (error: any) {
-      if (error?.status === 429) {
-        triggerRateLimitPause()
-      }
-      task.reject(error)
-    } finally {
-      inFlight -= 1
-      pump()
-    }
-  }
-
-  const pump = () => {
-    if (inFlight >= maxConcurrent) return
-    if (!queue.length) return
-    const now = Date.now()
-    const waitMs = Math.max(0, minIntervalMs - (now - lastStart))
-    if (waitMs > 0) {
-      if (!timer) {
-        timer = setTimeout(() => {
-          timer = null
-          pump()
-        }, waitMs)
-      }
-      return
-    }
-
-    const task = queue.shift()
-    if (!task) return
-    inFlight += 1
-    lastStart = Date.now()
-    void executeTask(task)
-
-    if (inFlight < maxConcurrent) {
-      pump()
-    }
-  }
-
-  return (input: RequestInfo | URL, init?: RequestInit) =>
-    new Promise<Response>((resolve, reject) => {
-      queue.push({ input, init, resolve, reject })
-      pump()
-    })
-}
-
-const rateLimitedFetch = createRateLimitedFetch(
-  RPC_RATE_LIMIT_MIN_TIME_MS,
-  RPC_RATE_LIMIT_MAX_CONCURRENT
-)
 
 let selectedRpcEndpoint = RPC_ENDPOINT
 let cachedConnection: Connection | null = null
@@ -159,12 +115,16 @@ async function probeEndpoint(endpoint: string, timeoutMs = 1500): Promise<boolea
 
 export async function selectHealthyRpcEndpoint(): Promise<string> {
   if (!RPC_ENDPOINTS.length) {
-    // Should not happen due to fallback, but keep safe
     return DEFAULT_RPC
   }
+
+  // Optimization: If we are paused, wait before probing anything.
+  await waitForRpcPause()
+
   const attempts = Math.min(RPC_ENDPOINTS.length * 2, 6)
   for (let i = 0; i < attempts; i++) {
     const endpoint = RPC_ENDPOINTS[i % RPC_ENDPOINTS.length]
+    // probeEndpoint uses rateLimitedFetch, so it respects limits and pause
     const healthy = await probeEndpoint(endpoint, 1200 + i * 200)
     if (healthy) {
       selectedRpcEndpoint = endpoint
@@ -191,6 +151,9 @@ export const getConnection = () => {
 export let connection: Connection = getConnection()
 
 export async function getResilientConnection(): Promise<Connection> {
+  // Respect global pause before attempting rotation
+  await waitForRpcPause()
+
   const endpoint = await selectHealthyRpcEndpoint()
   if (!cachedConnection || endpoint !== selectedRpcEndpoint) {
     selectedRpcEndpoint = endpoint
@@ -224,7 +187,6 @@ if (typeof window === "undefined") {
     console.error("RPC Endpoint missing: set RPC in .env")
   }
 
-  // production warnings
   if (SOLANA_NETWORK === "devnet") {
     console.warn("WARNING: Running on DEVNET! Set NEXT_PUBLIC_SOLANA_NETWORK=mainnet-beta for production")
   }
