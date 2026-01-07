@@ -7,11 +7,12 @@ import { Keypair, PublicKey } from "@solana/web3.js"
 import bs58 from "bs58"
 import {
   getBondingCurveData,
+  getMultipleBondingCurves,
   calculateTokenPrice,
   buildSellTransaction,
   calculateSellAmount,
 } from "@/lib/solana/pumpfun-sdk"
-import { connection } from "@/lib/solana/config"
+import { safeConnection, execConnection } from "@/lib/solana/config"
 import { getAssociatedTokenAddress } from "@solana/spl-token"
 import type {
   Trigger,
@@ -186,7 +187,7 @@ export async function executeTrigger(trigger: Trigger): Promise<TriggerExecution
 
     // получить баланс токенов
     const ata = await getAssociatedTokenAddress(mint, keypair.publicKey, false)
-    const tokenAccount = await connection.getTokenAccountBalance(ata)
+    const tokenAccount = await safeConnection.getTokenAccountBalance(ata)
     const totalBalance = BigInt(tokenAccount.value.amount)
 
     if (totalBalance === BigInt(0)) {
@@ -220,12 +221,12 @@ export async function executeTrigger(trigger: Trigger): Promise<TriggerExecution
 
     transaction.sign(keypair)
 
-    const signature = await connection.sendRawTransaction(transaction.serialize(), {
+    const signature = await execConnection.sendRawTransaction(transaction.serialize(), {
       skipPreflight: false,
       maxRetries: 3,
     })
 
-    await connection.confirmTransaction(signature, "confirmed")
+    await safeConnection.confirmTransaction(signature, "confirmed")
 
     // calculate received sol
     const receivedSol = Number(minSolOut) / 1e9
@@ -389,11 +390,15 @@ export class TriggerEngine {
       byMint.set(trigger.mintAddress, list)
     }
 
-    // check each mint
-    for (const [mintAddress, triggers] of byMint) {
-      try {
-        const mint = new PublicKey(mintAddress)
-        const bondingCurve = await getBondingCurveData(mint)
+    const mintAddresses = Array.from(byMint.keys())
+    const mintPublicKeys = mintAddresses.map(m => new PublicKey(m))
+
+    try {
+      // Batch fetch bonding curves
+      const bondingCurves = await getMultipleBondingCurves(mintPublicKeys)
+
+      for (const [mintAddress, triggers] of byMint) {
+        const bondingCurve = bondingCurves.get(mintAddress)
         
         if (!bondingCurve) {
           continue // token not found or migrated
@@ -460,9 +465,9 @@ export class TriggerEngine {
             this.triggers.set(trigger.id, updated)
           }
         }
-      } catch (error) {
-        console.error(`error checking triggers for ${mintAddress}:`, error)
       }
+    } catch (error) {
+      console.error(`error checking triggers batch:`, error)
     }
   }
 

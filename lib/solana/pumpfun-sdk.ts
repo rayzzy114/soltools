@@ -15,7 +15,7 @@ import {
   getAssociatedTokenAddress,
   createAssociatedTokenAccountIdempotentInstruction,
 } from "@solana/spl-token"
-import { connection, getResilientConnection, SOLANA_NETWORK, RPC_ENDPOINT } from "./config"
+import { connection, getResilientConnection, safeConnection, execConnection, SOLANA_NETWORK, RPC_ENDPOINT } from "./config"
 import { LRUCache } from "lru-cache"
 import { fetchWithRetry } from "../utils/fetch-retry"
 import bs58 from "bs58"
@@ -78,7 +78,7 @@ let cachedGlobalState: GlobalState | null = null
 export async function getPumpfunGlobalState(): Promise<GlobalState | null> {
   if (cachedGlobalState) return cachedGlobalState
   try {
-    const accountInfo = await connection.getAccountInfo(PUMPFUN_GLOBAL)
+    const accountInfo = await safeConnection.getAccountInfo(PUMPFUN_GLOBAL)
     if (!accountInfo) return null
     const data = accountInfo.data
     let offset = 0
@@ -122,7 +122,7 @@ const INIT_USER_VOLUME_ACCUMULATOR_DISCRIMINATOR = Buffer.from([94, 6, 202, 115,
 async function getTokenProgramForMint(mint: PublicKey): Promise<{ program: PublicKey; owner: string | null }> {
   let owner: PublicKey | null = null
   try {
-    const info = await connection.getAccountInfo(mint)
+    const info = await safeConnection.getAccountInfo(mint)
     if (info?.owner) owner = info.owner
   } catch {
     // ignore lookup errors
@@ -352,7 +352,7 @@ export async function buildCreateTokenTransaction(
   transaction.add(createIx)
 
   // set recent blockhash and fee payer
-  const { blockhash } = await connection.getLatestBlockhash()
+  const { blockhash } = await safeConnection.getLatestBlockhash()
   transaction.recentBlockhash = blockhash
   transaction.feePayer = creator
 
@@ -397,8 +397,8 @@ export async function buildBuyTransaction(
   const globalVolumeAccumulator = getGlobalVolumeAccumulatorPda()
   const userVolumeAccumulator = getUserVolumeAccumulatorPda(buyer)
   const [gvaInfo, uvaInfo] = await Promise.all([
-    connection.getAccountInfo(globalVolumeAccumulator),
-    connection.getAccountInfo(userVolumeAccumulator),
+    safeConnection.getAccountInfo(globalVolumeAccumulator),
+    safeConnection.getAccountInfo(userVolumeAccumulator),
   ])
   if (!gvaInfo) {
     throw new Error("pump.fun global_volume_accumulator is missing on-chain (unexpected)")
@@ -426,7 +426,7 @@ export async function buildBuyTransaction(
   )
   transaction.add(buyIx)
 
-  const { blockhash } = await connection.getLatestBlockhash()
+  const { blockhash } = await safeConnection.getLatestBlockhash()
   transaction.recentBlockhash = blockhash
   transaction.feePayer = buyer
 
@@ -480,7 +480,7 @@ export async function buildSellTransaction(
   const sellIx = await createSellInstruction(seller, mint, tokenAmount, safeMinSolOut)
   transaction.add(sellIx)
 
-  const { blockhash } = await connection.getLatestBlockhash()
+  const { blockhash } = await safeConnection.getLatestBlockhash()
   transaction.recentBlockhash = blockhash
   transaction.feePayer = seller
 
@@ -518,8 +518,7 @@ export async function getBondingCurveData(mint: PublicKey): Promise<BondingCurve
     if (cached && cached.expires > Date.now()) return cached.data
 
     const bondingCurve = getBondingCurveAddress(mint)
-    const conn = await getResilientConnection()
-    const accountInfo = await conn.getAccountInfoAndContext(bondingCurve)
+    const accountInfo = await safeConnection.getAccountInfoAndContext(bondingCurve)
     
     if (!accountInfo?.value) {
       console.warn("bonding curve account not found for mint:", mint.toBase58())
@@ -568,6 +567,90 @@ export async function getBondingCurveData(mint: PublicKey): Promise<BondingCurve
 
 export function invalidateBondingCurveCache(mint: PublicKey): void {
   bondingCurveCache.delete(mint.toBase58())
+}
+
+/**
+ * Batch fetch bonding curves for multiple mints
+ */
+export async function getMultipleBondingCurves(mints: PublicKey[]): Promise<Map<string, BondingCurveData | null>> {
+  const result = new Map<string, BondingCurveData | null>()
+  const missingMints: PublicKey[] = []
+
+  // Check cache first
+  for (const mint of mints) {
+    const key = mint.toBase58()
+    const cached = bondingCurveCache.get(key)
+    if (cached && cached.expires > Date.now()) {
+      result.set(key, cached.data)
+    } else {
+      missingMints.push(mint)
+    }
+  }
+
+  if (missingMints.length === 0) return result
+
+  // Batch fetch missing
+  const CHUNK_SIZE = 100
+  for (let i = 0; i < missingMints.length; i += CHUNK_SIZE) {
+    const chunk = missingMints.slice(i, i + CHUNK_SIZE)
+    const addresses = chunk.map(m => getBondingCurveAddress(m))
+
+    try {
+      const accountInfos = await safeConnection.getMultipleAccountsInfo(addresses)
+
+      chunk.forEach((mint, idx) => {
+        const info = accountInfos[idx]
+        const key = mint.toBase58()
+
+        if (!info) {
+          result.set(key, null)
+          return
+        }
+
+        try {
+          const data = info.data
+          const DISCRIMINATOR_SIZE = 8
+          let offset = DISCRIMINATOR_SIZE
+
+          const virtualTokenReserves = data.readBigUInt64LE(offset); offset += 8
+          const virtualSolReserves = data.readBigUInt64LE(offset); offset += 8
+          const realTokenReserves = data.readBigUInt64LE(offset); offset += 8
+          const realSolReserves = data.readBigUInt64LE(offset); offset += 8
+          const tokenTotalSupply = data.readBigUInt64LE(offset); offset += 8
+          const complete = data[offset] === 1; offset += 1
+          const creator = new PublicKey(data.slice(offset, offset + 32))
+
+          const parsed: BondingCurveData = {
+            virtualTokenReserves,
+            virtualSolReserves,
+            realTokenReserves,
+            realSolReserves,
+            tokenTotalSupply,
+            complete,
+            creator,
+          }
+
+          // Cache it
+          bondingCurveCache.set(key, {
+            data: parsed,
+            // Assuming current slot is not strictly required for this batch op,
+            // or we could fetch it once. For optimization, we skip exact slot tracking here.
+            slot: 0,
+            expires: Date.now() + BONDING_CURVE_TTL_MS,
+          })
+
+          result.set(key, parsed)
+        } catch (e) {
+          console.error(`Failed to parse bonding curve for ${key}`, e)
+          result.set(key, null)
+        }
+      })
+    } catch (e) {
+      console.error("Batch fetch failed", e)
+    }
+  }
+
+  return result
 }
 
 /**
@@ -865,7 +948,7 @@ export async function buildPumpswapSwapTransaction(
 
   // check/create WSOL ATA
   const userWsolAccount = await getAssociatedTokenAddress(WSOL_MINT, user, false)
-  const wsolInfo = await connection.getAccountInfo(userWsolAccount)
+  const wsolInfo = await safeConnection.getAccountInfo(userWsolAccount)
   if (!wsolInfo) {
     transaction.add(
       createAssociatedTokenAccountIdempotentInstruction(user, userWsolAccount, user, WSOL_MINT)
@@ -876,7 +959,7 @@ export async function buildPumpswapSwapTransaction(
   const swapIx = await createPumpswapSwapInstruction(user, tokenMint, tokenAmount, safeMinSolOut)
   transaction.add(swapIx)
 
-  const { blockhash } = await connection.getLatestBlockhash()
+  const { blockhash } = await safeConnection.getLatestBlockhash()
   transaction.recentBlockhash = blockhash
   transaction.feePayer = user
 
@@ -909,7 +992,7 @@ export async function checkRugpullStatus(
   let tokenBalance = BigInt(0)
   
   try {
-    const ataInfo = await connection.getTokenAccountBalance(userAta)
+    const ataInfo = await safeConnection.getTokenAccountBalance(userAta)
     tokenBalance = BigInt(ataInfo.value.amount)
   } catch {
     // no token account or zero balance
@@ -1132,7 +1215,7 @@ export async function buildRugpullTransaction(
   const userAta = await getPumpfunAta(mintAddress, user, false)
   let tokenBalance = BigInt(0)
   try {
-    const ataInfo = await connection.getTokenAccountBalance(userAta)
+    const ataInfo = await safeConnection.getTokenAccountBalance(userAta)
     tokenBalance = BigInt(ataInfo.value.amount)
   } catch {
     // no ata or zero balance -> treat as no tokens
@@ -1172,7 +1255,7 @@ export async function getUserTokenBalance(
 ): Promise<{ balance: bigint; uiBalance: number }> {
   try {
     const ata = await getPumpfunAta(mint, user, false)
-    const info = await connection.getTokenAccountBalance(ata)
+    const info = await safeConnection.getTokenAccountBalance(ata)
     return {
       balance: BigInt(info.value.amount),
       uiBalance: info.value.uiAmount || 0,
@@ -1210,7 +1293,7 @@ export async function getAllPumpFunTransactions(
     const bondingCurve = getBondingCurveAddress(mint)
 
     // get recent signatures for bonding curve
-    const signatures = await connection.getSignaturesForAddress(
+    const signatures = await safeConnection.getSignaturesForAddress(
       bondingCurve,
       { limit: Math.min(limit * 2, 1000) }, // fetch more to account for non-pump.fun txs
       "confirmed"
@@ -1222,7 +1305,7 @@ export async function getAllPumpFunTransactions(
     const batchSize = 50
     for (let i = 0; i < signatures.length && transactions.length < limit; i += batchSize) {
       const batch = signatures.slice(i, i + batchSize)
-      const txs = await connection.getParsedTransactions(
+      const txs = await safeConnection.getParsedTransactions(
         batch.map(s => s.signature),
         { maxSupportedTransactionVersion: 0 }
       )

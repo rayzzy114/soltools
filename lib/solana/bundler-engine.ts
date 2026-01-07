@@ -18,7 +18,7 @@ import {
   TOKEN_PROGRAM_ID,
   AccountLayout,
 } from "@solana/spl-token"
-import { connection, getResilientConnection, SOLANA_NETWORK } from "./config"
+import { connection, getResilientConnection, safeConnection, execConnection, executeCritical, SOLANA_NETWORK } from "./config"
 import {
   PUMPFUN_PROGRAM_ID,
   getBondingCurveAddress,
@@ -460,14 +460,14 @@ export async function getOrCreateLUT(
     }
   }
 
-  const recentSlot = await rpcWithRetry(() => connection.getSlot())
+  const recentSlot = await rpcWithRetry(() => safeConnection.getSlot())
   const [createIx, lookupTableAddress] = AddressLookupTableProgram.createLookupTable({
     authority: authority.publicKey,
     payer: authority.publicKey,
     recentSlot,
   })
 
-  const { blockhash: createBlockhash, lastValidBlockHeight: createLvh } = await connection.getLatestBlockhash()
+  const { blockhash: createBlockhash, lastValidBlockHeight: createLvh } = await safeConnection.getLatestBlockhash()
   const createMsg = new TransactionMessage({
     payerKey: authority.publicKey,
     recentBlockhash: createBlockhash,
@@ -475,16 +475,16 @@ export async function getOrCreateLUT(
   }).compileToV0Message()
   const createTx = new VersionedTransaction(createMsg)
   createTx.sign([authority])
-  const createSig = await connection.sendTransaction(createTx)
-  await connection.confirmTransaction({ signature: createSig, blockhash: createBlockhash, lastValidBlockHeight: createLvh })
+  const createSig = await executeCritical(conn => conn.sendTransaction(createTx))
+  await safeConnection.confirmTransaction({ signature: createSig, blockhash: createBlockhash, lastValidBlockHeight: createLvh })
 
   const minSlot = recentSlot + 1
-  let currentSlot = await connection.getSlot()
+  let currentSlot = await safeConnection.getSlot()
   let attempts = 0
   const maxAttempts = 30 // ~12-15s wait
   while (currentSlot <= minSlot && attempts < maxAttempts) {
     await sleep(400)
-    currentSlot = await connection.getSlot()
+    currentSlot = await safeConnection.getSlot()
     attempts++
   }
   if (currentSlot <= minSlot) {
@@ -501,7 +501,7 @@ export async function getOrCreateLUT(
       lookupTable: lookupTableAddress,
       addresses: chunk,
     })
-    const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash()
+    const { blockhash, lastValidBlockHeight } = await safeConnection.getLatestBlockhash()
     const extendMsg = new TransactionMessage({
       payerKey: authority.publicKey,
       recentBlockhash: blockhash,
@@ -509,11 +509,11 @@ export async function getOrCreateLUT(
     }).compileToV0Message()
     const extendTx = new VersionedTransaction(extendMsg)
     extendTx.sign([authority])
-    const sig = await connection.sendTransaction(extendTx)
-    await connection.confirmTransaction({ signature: sig, blockhash, lastValidBlockHeight })
+    const sig = await executeCritical(conn => conn.sendTransaction(extendTx))
+    await safeConnection.confirmTransaction({ signature: sig, blockhash, lastValidBlockHeight })
   }
 
-  const lutAccount = await connection.getAddressLookupTable(lookupTableAddress)
+  const lutAccount = await safeConnection.getAddressLookupTable(lookupTableAddress)
   if (!lutAccount.value) {
     throw new Error("failed to fetch LUT after creation")
   }
@@ -557,7 +557,8 @@ async function confirmSignaturesOnRpc(
   while (Date.now() - start < timeoutMs) {
     const pending = signatures.filter((s) => statusBySig.get(s)?.status === "pending")
     if (!pending.length) break
-    const resp = await connection.getSignatureStatuses(pending)
+    // Uses safe connection to avoid spamming execution lane with status checks
+    const resp = await safeConnection.getSignatureStatuses(pending)
     resp?.value?.forEach((st, idx) => {
       const sig = pending[idx]
       if (!sig || !st) return
@@ -596,7 +597,7 @@ async function sendBundleGroup(
   if (jitoTip > 0) {
     const tipSigner = tipPayer ?? txSigners[txSigners.length - 1]?.[0]
     if (tipSigner) {
-      const { blockhash } = await connection.getLatestBlockhash()
+      const { blockhash } = await safeConnection.getLatestBlockhash()
       const tipMessage = new TransactionMessage({
         payerKey: tipSigner.publicKey,
         recentBlockhash: blockhash,
@@ -618,7 +619,8 @@ async function sendBundleGroup(
   }
 
   for (let i = 0; i < transactions.length; i++) {
-    const sim = await connection.simulateTransaction(transactions[i])
+    // Use execConnection for simulation as it might be rate limited on safeConnection
+    const sim = await execConnection.simulateTransaction(transactions[i])
     if (sim?.value?.err) {
       throw new Error(`simulation failed (${label} idx=${i}): ${JSON.stringify(sim.value.err)}`)
     }
@@ -899,7 +901,7 @@ export async function refreshWalletBalances(
 
     let solAccounts: (any | null)[] = []
     try {
-      solAccounts = await rpcWithRetry(() => connection.getMultipleAccountsInfo(pubkeys))
+      solAccounts = await rpcWithRetry(() => safeConnection.getMultipleAccountsInfo(pubkeys))
     } catch (error) {
       console.error('failed to fetch SOL balances for chunk:', error)
     }
@@ -910,7 +912,7 @@ export async function refreshWalletBalances(
         const ataAddresses = await Promise.all(
           pubkeys.map((owner) => getAssociatedTokenAddress(mint, owner, false))
         )
-        tokenAccounts = await rpcWithRetry(() => connection.getMultipleAccountsInfo(ataAddresses))
+        tokenAccounts = await rpcWithRetry(() => safeConnection.getMultipleAccountsInfo(ataAddresses))
       } catch (error) {
         console.error('failed to fetch token accounts for chunk:', error)
       }
@@ -990,7 +992,7 @@ export async function fundWallets(
     if (instructions.length === 0) continue
 
     try {
-      const { blockhash } = await connection.getLatestBlockhash()
+      const { blockhash } = await safeConnection.getLatestBlockhash()
 
       const message = new TransactionMessage({
         payerKey: funder.publicKey, // Explicitly set payer key
@@ -1001,8 +1003,8 @@ export async function fundWallets(
       const transaction = new VersionedTransaction(message)
       transaction.sign([funder])
 
-      const signature = await connection.sendRawTransaction(transaction.serialize())
-      await connection.confirmTransaction(signature, "confirmed")
+      const signature = await executeCritical(conn => conn.sendRawTransaction(transaction.serialize()))
+      await safeConnection.confirmTransaction(signature, "confirmed")
       signatures.push(signature)
     } catch (error) {
       console.error(`Fund chunk ${i} failed:`, error)
@@ -1052,7 +1054,7 @@ export async function collectSol(
 
     const transactions: VersionedTransaction[] = []
     const txSigners: Keypair[][] = []
-    const { blockhash } = await connection.getLatestBlockhash()
+    const { blockhash } = await safeConnection.getLatestBlockhash()
 
     for (let i = 0; i < sortedChunk.length; i++) {
       const wallet = sortedChunk[i]
@@ -1362,7 +1364,7 @@ export async function createLaunchBundle(config: BundleConfig): Promise<BundleRe
       creator: devKeypair.publicKey,
     }
 
-    const { blockhash } = await connection.getLatestBlockhash()
+    const { blockhash } = await safeConnection.getLatestBlockhash()
 
     const bundleIds: string[] = []
     const bundleSignatures: string[][] = []
@@ -1524,7 +1526,7 @@ export async function createLaunchBundle(config: BundleConfig): Promise<BundleRe
       const txList: VersionedTransaction[] = [massTx]
 
       for (const tx of txList) {
-        const sim = await connection.simulateTransaction(tx)
+        const sim = await execConnection.simulateTransaction(tx)
         if (sim?.value?.err) {
           throw new Error(`simulation failed (launch v0): ${JSON.stringify(sim.value.err)}`)
         }
@@ -1538,7 +1540,7 @@ export async function createLaunchBundle(config: BundleConfig): Promise<BundleRe
         const feePayer = tx.message.getAccountKeys().get(0) // fee payer is always account 0
 
         try {
-          const balance = await connection.getBalance(feePayer)
+          const balance = await safeConnection.getBalance(feePayer)
           fetch('http://127.0.0.1:7247/ingest/6660ca90-26c7-4aff-8c90-88511fe0d0d4', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -1750,7 +1752,7 @@ export async function createBuyBundle(config: BundleConfig): Promise<BundleResul
 
       const transactions: VersionedTransaction[] = []
       const txSigners: Keypair[][] = []
-      const { blockhash } = await connection.getLatestBlockhash()
+      const { blockhash } = await safeConnection.getLatestBlockhash()
 
       for (let i = 0; i < walletsChunk.length; i++) {
         const wallet = walletsChunk[i]
@@ -1909,7 +1911,7 @@ export async function createSellBundle(config: BundleConfig): Promise<BundleResu
       const walletsChunk = chunks[chunkIndex]
       const transactions: VersionedTransaction[] = []
       const txSigners: Keypair[][] = []
-      const { blockhash } = await connection.getLatestBlockhash()
+      const { blockhash } = await safeConnection.getLatestBlockhash()
 
       for (let i = 0; i < walletsChunk.length; i++) {
         const wallet = walletsChunk[i]
@@ -2080,7 +2082,7 @@ export async function createStaggeredBuys(
         instructions.push(buyIx)
 
         const prioritized = addPriorityFeeInstructions(instructions, priorityFee)
-        const { blockhash } = await connection.getLatestBlockhash()
+        const { blockhash } = await safeConnection.getLatestBlockhash()
 
         const message = new TransactionMessage({
           payerKey: keypair.publicKey,
@@ -2090,7 +2092,7 @@ export async function createStaggeredBuys(
         const buyTx = new VersionedTransaction(message)
         buyTx.sign([keypair])
 
-        const signature = await connection.sendRawTransaction(buyTx.serialize())
+        const signature = await executeCritical(conn => conn.sendRawTransaction(buyTx.serialize()))
         signatures.push(signature)
         sent = true
 
@@ -2223,7 +2225,7 @@ export async function createStaggeredSells(
           instructions.push(createTipInstruction(keypair.publicKey, resolvedTip, resolvedRegion as any))
         }
 
-        const { blockhash } = await connection.getLatestBlockhash()
+        const { blockhash } = await safeConnection.getLatestBlockhash()
         const message = new TransactionMessage({
           payerKey: keypair.publicKey,
           recentBlockhash: blockhash,
@@ -2233,7 +2235,7 @@ export async function createStaggeredSells(
         const sellTx = new VersionedTransaction(message)
         sellTx.sign([keypair])
 
-        const signature = await connection.sendRawTransaction(sellTx.serialize())
+        const signature = await executeCritical(conn => conn.sendRawTransaction(sellTx.serialize()))
         signatures.push(signature)
         sent = true
 
@@ -2352,7 +2354,7 @@ export async function createRugpullBundle(config: BundleConfig): Promise<BundleR
         const ata = await getAssociatedTokenAddress(mint, keypair.publicKey, false)
         let tokenBalanceRaw = BigInt(0)
         try {
-          const balance = await connection.getTokenAccountBalance(ata)
+          const balance = await safeConnection.getTokenAccountBalance(ata)
           tokenBalanceRaw = BigInt(balance.value.amount)
         } catch {
           continue
@@ -2422,7 +2424,7 @@ export async function createRugpullBundle(config: BundleConfig): Promise<BundleR
     for (const chunk of chunks) {
       const transactions: VersionedTransaction[] = []
       const txSigners: Keypair[][] = []
-      const { blockhash } = await connection.getLatestBlockhash()
+      const { blockhash } = await safeConnection.getLatestBlockhash()
 
       for (const entry of chunk) {
         const { keypair, tokenAmount } = entry
