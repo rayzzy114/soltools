@@ -2,6 +2,9 @@ import { prisma } from "@/lib/prisma"
 import { getPumpswapPoolData } from "@/lib/solana/pumpfun-sdk"
 import { PublicKey } from "@solana/web3.js"
 
+const ACTIVE_TOKENS_CACHE_TTL_MS = 60 * 1000
+let activeTokensCache: { expires: number; tokens: Array<Record<string, any>> } | null = null
+
 export async function getDashboardStats() {
   try {
   const now = new Date()
@@ -97,6 +100,9 @@ export async function getVolumeChartData(days: number = 7) {
 }
 
 export async function getActiveTokens() {
+  if (activeTokensCache && Date.now() < activeTokensCache.expires) {
+    return activeTokensCache.tokens
+  }
   try {
   const tokens = await prisma.token.findMany({
     orderBy: {
@@ -127,7 +133,7 @@ export async function getActiveTokens() {
       })
     )
 
-    return tokens.map((token: any, idx: number) => ({
+    const result = tokens.map((token: any, idx: number) => ({
       id: token.id,
       symbol: token.symbol,
       name: token.name,
@@ -137,6 +143,11 @@ export async function getActiveTokens() {
       status: migratedFlags[idx] ? "migrated" : "bonding",
       isMigrated: migratedFlags[idx],
     }))
+    activeTokensCache = {
+      expires: Date.now() + ACTIVE_TOKENS_CACHE_TTL_MS,
+      tokens: result,
+    }
+    return result
   } catch {
     return []
   }

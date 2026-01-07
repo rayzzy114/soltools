@@ -874,106 +874,83 @@ export function getKeypair(wallet: BundlerWallet): Keypair {
   return Keypair.fromSecretKey(bs58.decode(wallet.secretKey))
 }
 
+const RPC_ACCOUNT_BATCH_SIZE = 100
+
 /**
- * refresh wallet balances (optimized with getMultipleAccounts)
+ * refresh wallet balances (optimized with batched getMultipleAccounts)
  */
 export async function refreshWalletBalances(
   wallets: BundlerWallet[],
   mintAddress?: string
 ): Promise<BundlerWallet[]> {
-  const chunks = chunkArray(wallets, 5) // RPC limit is 5 accounts per call on low tiers
+  if (wallets.length === 0) return []
+
   const mint = mintAddress ? new PublicKey(mintAddress) : null
+  const batches: BundlerWallet[][] = []
+  for (let i = 0; i < wallets.length; i += RPC_ACCOUNT_BATCH_SIZE) {
+    batches.push(wallets.slice(i, i + RPC_ACCOUNT_BATCH_SIZE))
+  }
 
-  // Process chunks concurrently to speed up refresh (limited by RPC_REFRESH_CONCURRENCY)
-  const chunkResults = await mapWithLimit(chunks, RPC_REFRESH_CONCURRENCY, async (chunk) => {
-    const chunkUpdatedWallets: BundlerWallet[] = []
+  const refreshed: BundlerWallet[] = []
+
+  for (const batch of batches) {
+    const chunk = batch.map((wallet) => ({ ...wallet }))
+    const pubkeys = chunk.map((wallet) => new PublicKey(wallet.publicKey))
+
+    let solAccounts: (any | null)[] = []
     try {
-      const pubkeys = chunk.map(w => new PublicKey(w.publicKey))
+      solAccounts = await rpcWithRetry(() => connection.getMultipleAccountsInfo(pubkeys))
+    } catch (error) {
+      console.error('failed to fetch SOL balances for chunk:', error)
+    }
 
-      // 1. Fetch SOL balances
-      const solAccounts = await rpcWithRetry(() => connection.getMultipleAccountsInfo(pubkeys))
-
-      // 2. Fetch Token balances (if mint provided)
-      let tokenAccounts: (any | null)[] = []
-      let ataAddresses: PublicKey[] = []
-
-      if (mint) {
-        ataAddresses = await Promise.all(
-          pubkeys.map(owner => getAssociatedTokenAddress(mint, owner, false))
+    let tokenAccounts: (any | null)[] = []
+    if (mint) {
+      try {
+        const ataAddresses = await Promise.all(
+          pubkeys.map((owner) => getAssociatedTokenAddress(mint, owner, false))
         )
         tokenAccounts = await rpcWithRetry(() => connection.getMultipleAccountsInfo(ataAddresses))
+      } catch (error) {
+        console.error('failed to fetch token accounts for chunk:', error)
       }
+    }
 
-      // 3. Map results
-      for (let i = 0; i < chunk.length; i++) {
-        const wallet = chunk[i]
-        const solAccount = solAccounts[i]
+    for (let i = 0; i < chunk.length; i++) {
+      const wallet = chunk[i]
+      const solAccount = solAccounts[i]
+      const solBalance = solAccount ? solAccount.lamports / LAMPORTS_PER_SOL : wallet.solBalance
 
-        // SOL Balance
-        const solBalance = solAccount ? solAccount.lamports / LAMPORTS_PER_SOL : 0
-
-        // Token Balance
-        let tokenBalance = 0
-        let ataExists = false
-
-        if (mint) {
-          const tokenAccount = tokenAccounts[i]
-          if (tokenAccount) {
-            ataExists = true
-            try {
-              // Parse SPL Token account data
-              const rawAccount = AccountLayout.decode(tokenAccount.data)
-              const amount = BigInt(rawAccount.amount) // amount is bigint or u64 buffer
-              tokenBalance = Number(amount) / (10 ** TOKEN_DECIMALS) // Assuming 6 decimals for pump.fun tokens
-            } catch (e) {
-              console.error(`Failed to parse token account for ${wallet.publicKey}:`, e)
-            }
+      let tokenBalance = wallet.tokenBalance
+      let ataExists = wallet.ataExists ?? false
+      if (mint) {
+        const tokenAccount = tokenAccounts[i]
+        if (tokenAccount) {
+          ataExists = true
+          try {
+            const rawAccount = AccountLayout.decode(tokenAccount.data)
+            const amount = BigInt(rawAccount.amount)
+            tokenBalance = Number(amount) / 10 ** TOKEN_DECIMALS
+          } catch (error) {
+            console.error(`Failed to parse token account for ${wallet.publicKey}:`, error)
           }
         }
-
-        chunkUpdatedWallets.push({
-          ...wallet,
-          solBalance,
-          tokenBalance: mint ? tokenBalance : wallet.tokenBalance, // preserve old token balance if no mint
-          ...(mint ? { ataExists } : {})
-        })
       }
-      return chunkUpdatedWallets
-    } catch (error) {
-      console.error("Batch refresh failed, falling back to individual:", error)
-      // Fallback to original individual refresh for this chunk if batch fails
-      // Note: This runs within the concurrent worker, effectively running fallback concurrently for failed chunks
-      return await mapWithLimit(chunk, 1, async (wallet) => {
-         try {
-           const pubkey = new PublicKey(wallet.publicKey)
-           const solBalance = await rpcWithRetry(() => connection.getBalance(pubkey))
-           let tokenBalance = 0
-           let ataExists: boolean | undefined = undefined
-           if (mint) {
-             try {
-               const ata = await getAssociatedTokenAddress(mint, pubkey, false)
-               const tokenAccount = await rpcWithRetry(() => connection.getTokenAccountBalance(ata))
-               tokenBalance = tokenAccount.value.uiAmount || 0
-               ataExists = true
-             } catch {
-               ataExists = false
-             }
-           }
-           return {
-             ...wallet,
-             solBalance: solBalance / LAMPORTS_PER_SOL,
-             tokenBalance,
-             ...(mint ? { ataExists } : {})
-           }
-         } catch {
-           return wallet
-         }
+
+      refreshed.push({
+        ...wallet,
+        solBalance,
+        tokenBalance,
+        ataExists,
       })
     }
-  })
+  }
 
-  return chunkResults.flat()
+  return refreshed
 }
+
+
+
 
 /**
  * fund wallets from funder wallet

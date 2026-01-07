@@ -111,6 +111,7 @@ const RPC_REFRESH_CONCURRENCY = 2
 const RPC_RETRY_ATTEMPTS = 4
 const RPC_RETRY_BASE_MS = 500
 const RPC_RETRY_JITTER_MS = 400
+const SIGNATURE_STATUS_POLL_INTERVAL_MS = 5000
 const keypairCache = new Map<string, Keypair>()
 
 function getCachedKeypair(secretKey: string): Keypair {
@@ -543,7 +544,7 @@ export async function executeBuy(
               // If we see landed but RPC still can't see it, keep polling signature;
               // it's possible RPC lags or the tx was re-broadcasted.
             }
-            await sleep(750)
+            await sleep(SIGNATURE_STATUS_POLL_INTERVAL_MS)
           }
 
           // Do not mark as failed on timeout: under congestion it can confirm later.
@@ -606,7 +607,7 @@ export async function executeBuy(
               throw new Error(`resend timeout exceeded (${Date.now() - sendStart}ms, ${resendCount} resends)`)
             }
 
-            await sleep(300)
+            await sleep(SIGNATURE_STATUS_POLL_INTERVAL_MS)
           }
 
           
@@ -899,7 +900,7 @@ export async function executeSell(
             return tx
           }
         }
-        await sleep(750)
+        await sleep(SIGNATURE_STATUS_POLL_INTERVAL_MS)
       }
 
       // At this point we cannot safely claim failure: the bundle might land after congestion clears.
@@ -1591,7 +1592,7 @@ export class VolumeBotPairEngine {
           this.onLog?.(this.pairId, `Bundle failed: ${entry.error || "unknown error"}`, "error")
           break
         }
-        await sleep(750)
+        await sleep(SIGNATURE_STATUS_POLL_INTERVAL_MS)
       }
 
       await prisma.transaction.create({

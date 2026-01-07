@@ -94,6 +94,7 @@ interface RugpullEstimate {
 
 const PRIORITY_FEE_COMPUTE_UNITS = 400000
 const PRICE_SERIES_MAX_POINTS = 60
+const DASHBOARD_POLL_INTERVAL_MS = 5 * 60 * 1000
 
 // Reusable Copy Button for lists
 const CopyButton = ({ text, className }: { text: string, className?: string }) => (
@@ -236,6 +237,7 @@ export default function DashboardPage() {
   const [priceSeries, setPriceSeries] = useState<Array<{ time: string; price: number }>>([])
   const [rugpullLoading, setRugpullLoading] = useState(false)
   const [systemLogs, setSystemLogs] = useState<string[]>([])
+  const [syncingBalances, setSyncingBalances] = useState(false)
   const [rugpullSlippage, setRugpullSlippage] = useState("20")
   const [abortController, setAbortController] = useState<AbortController | null>(null)
   const [volumeBotConfig, setVolumeBotConfig] = useState({
@@ -505,25 +507,6 @@ export default function DashboardPage() {
       if (data.wallets && Array.isArray(data.wallets)) {
         let walletsToUse = data.wallets
 
-        if (walletsToUse.length > 0) {
-          try {
-            const refreshRes = await fetch("/api/bundler/wallets", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                action: "refresh",
-                walletPublicKeys: walletsToUse.map((wallet: BundlerWallet) => wallet.publicKey),
-              }),
-            })
-            const refreshData = await refreshRes.json()
-            if (refreshRes.ok && refreshData.wallets && Array.isArray(refreshData.wallets)) {
-              walletsToUse = refreshData.wallets
-            }
-          } catch (err) {
-            console.error("background wallet refresh failed", err)
-          }
-        }
-
         const mergedWallets = applyStoredSecrets(walletsToUse)
         setBundlerWallets(mergedWallets)
 
@@ -552,6 +535,37 @@ export default function DashboardPage() {
       toast.error(`failed to load wallets: ${error.message || "unknown error"}`)
     }
   }, [buyAmountPerWallet, applyStoredSecrets])
+
+  const handleSyncBalances = useCallback(async () => {
+    if (bundlerWallets.length === 0) {
+      toast.error("No wallets to sync")
+      return
+    }
+    setSyncingBalances(true)
+    try {
+      const response = await fetch("/api/bundler/wallets", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "refresh",
+          walletPublicKeys: bundlerWallets.map((wallet) => wallet.publicKey),
+          mintAddress: selectedToken?.mintAddress,
+        }),
+      })
+      const data = await response.json().catch(() => null)
+      if (!response.ok || !data || !Array.isArray(data.wallets)) {
+        throw new Error(data?.error || "Failed to sync wallet balances")
+      }
+      const refreshed = applyStoredSecrets(data.wallets)
+      setBundlerWallets(refreshed)
+      toast.success("Wallet balances synced")
+    } catch (error: any) {
+      console.error("sync wallet balances error", error)
+      toast.error(error?.message || "Failed to sync wallet balances")
+    } finally {
+      setSyncingBalances(false)
+    }
+  }, [applyStoredSecrets, bundlerWallets, selectedToken?.mintAddress])
 
   // Add system log
   const getLogStorageKey = useCallback((mint: string) => `system_logs_${mint}`, [])
@@ -1933,7 +1947,7 @@ export default function DashboardPage() {
 
   useEffect(() => {
     fetchDashboardData()
-    const interval = setInterval(fetchDashboardData, 60000)
+    const interval = setInterval(fetchDashboardData, DASHBOARD_POLL_INTERVAL_MS)
     return () => clearInterval(interval)
   }, [fetchDashboardData])
 
@@ -2940,6 +2954,16 @@ export default function DashboardPage() {
                     className="h-8 px-2 text-[10px] border-neutral-700"
                   >
                     Random buy
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={handleSyncBalances}
+                    disabled={syncingBalances}
+                    className="h-8 px-2 text-[10px] border-neutral-700"
+                  >
+                    <RefreshCw className="w-3 h-3 mr-1" />
+                    {syncingBalances ? "Syncing..." : "Sync balances"}
                   </Button>
                 </div>
               </div>

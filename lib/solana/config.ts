@@ -18,6 +18,23 @@ const toWs = (url: string) => (url?.startsWith("http") ? url.replace(/^http/, "w
 let selectedWebsocketEndpoint = toWs(RPC_ENDPOINT)
 export let RPC_WEBSOCKET_ENDPOINT = selectedWebsocketEndpoint
 
+const RATE_LIMIT_PAUSE_MS = 10_000
+let rateLimitPauseUntil = 0
+
+const waitForRateLimitPause = () => {
+  const delay = rateLimitPauseUntil - Date.now()
+  if (delay <= 0) return Promise.resolve()
+  return new Promise((resolve) => setTimeout(resolve, delay))
+}
+
+const triggerRateLimitPause = () => {
+  const nextPause = Date.now() + RATE_LIMIT_PAUSE_MS
+  if (nextPause > rateLimitPauseUntil) {
+    rateLimitPauseUntil = nextPause
+    console.warn(`RPC returned 429 - pausing requests for ${RATE_LIMIT_PAUSE_MS}ms`)
+  }
+}
+
 // check if using public RPC (not recommended for production)
 export const isPublicRpc =
   RPC_ENDPOINT.includes("api.mainnet-beta.solana.com") ||
@@ -43,13 +60,39 @@ type FetchTask = {
 
 function createRateLimitedFetch(minIntervalMs: number, maxConcurrent: number) {
   if (minIntervalMs <= 0 && maxConcurrent >= 50) {
-    return (input: RequestInfo | URL, init?: RequestInit) => fetch(input, init)
+    return async (input: RequestInfo | URL, init?: RequestInit) => {
+      await waitForRateLimitPause()
+      const response = await fetch(input, init)
+      if (response.status === 429) {
+        triggerRateLimitPause()
+      }
+      return response
+    }
   }
 
   const queue: FetchTask[] = []
   let inFlight = 0
   let lastStart = 0
   let timer: ReturnType<typeof setTimeout> | null = null
+
+  const executeTask = async (task: FetchTask) => {
+    try {
+      await waitForRateLimitPause()
+      const response = await fetch(task.input, task.init)
+      if (response.status === 429) {
+        triggerRateLimitPause()
+      }
+      task.resolve(response)
+    } catch (error: any) {
+      if (error?.status === 429) {
+        triggerRateLimitPause()
+      }
+      task.reject(error)
+    } finally {
+      inFlight -= 1
+      pump()
+    }
+  }
 
   const pump = () => {
     if (inFlight >= maxConcurrent) return
@@ -70,12 +113,7 @@ function createRateLimitedFetch(minIntervalMs: number, maxConcurrent: number) {
     if (!task) return
     inFlight += 1
     lastStart = Date.now()
-    fetch(task.input, task.init)
-      .then(task.resolve, task.reject)
-      .finally(() => {
-        inFlight -= 1
-        pump()
-      })
+    void executeTask(task)
 
     if (inFlight < maxConcurrent) {
       pump()

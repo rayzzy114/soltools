@@ -681,6 +681,8 @@ export function calculateBondingCurveProgress(bondingCurve: BondingCurveData): n
 
 // pumpswap instruction discriminators
 const PUMPSWAP_SWAP_DISCRIMINATOR = Buffer.from([248, 198, 158, 145, 225, 117, 135, 200])
+const PUMPSWAP_POOL_CACHE_TTL_MS = 60 * 1000
+const pumpswapPoolCache = new Map<string, { expires: number; data: PumpswapPoolData | null }>()
 
 /**
  * get pumpswap pool PDA
@@ -729,6 +731,12 @@ export interface PumpswapPoolData {
  * get pumpswap pool reserves
  */
 export async function getPumpswapPoolData(tokenMint: PublicKey): Promise<PumpswapPoolData | null> {
+  const cacheKey = tokenMint.toBase58()
+  const cached = pumpswapPoolCache.get(cacheKey)
+  if (cached && cached.expires > Date.now()) {
+    return cached.data
+  }
+
   try {
     const pool = getPumpswapPoolAddress(tokenMint, WSOL_MINT)
     const { baseVault, quoteVault } = getPumpswapVaults(pool, tokenMint, WSOL_MINT)
@@ -740,14 +748,26 @@ export async function getPumpswapPoolData(tokenMint: PublicKey): Promise<Pumpswa
       conn.getTokenAccountBalance(quoteVault).catch(() => null),
     ])
     
-    if (!tokenVaultInfo || !solVaultInfo) return null
-    
-    return {
+    if (!tokenVaultInfo || !solVaultInfo) {
+      pumpswapPoolCache.set(cacheKey, { expires: Date.now() + PUMPSWAP_POOL_CACHE_TTL_MS, data: null })
+      return null
+    }
+
+    const result = {
       tokenReserves: BigInt(tokenVaultInfo.value.amount),
       solReserves: BigInt(solVaultInfo.value.amount),
       lpSupply: BigInt(0), // would need pool account data for this
     }
-  } catch {
+    pumpswapPoolCache.set(cacheKey, {
+      expires: Date.now() + PUMPSWAP_POOL_CACHE_TTL_MS,
+      data: result,
+    })
+    return result
+  } catch (error) {
+    pumpswapPoolCache.set(cacheKey, { expires: Date.now() + PUMPSWAP_POOL_CACHE_TTL_MS, data: null })
+    if (process.env.NODE_ENV !== 'production') {
+      console.debug('failed to fetch pumpswap pool data', error)
+    }
     return null
   }
 }
