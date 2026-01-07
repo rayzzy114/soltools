@@ -1,6 +1,8 @@
 "use client"
 
 import { useState, useEffect, useCallback } from "react"
+import { useConnection } from "@solana/wallet-adapter-react"
+import { PublicKey } from "@solana/web3.js"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -94,6 +96,7 @@ export function TriggerManager({
   const [triggerMinutes, setTriggerMinutes] = useState("30")
   const [sellPercent, setSellPercent] = useState("100")
   const [slippage, setSlippage] = useState("10")
+  const { connection } = useConnection()
 
   const fetchTriggers = useCallback(async () => {
     try {
@@ -106,11 +109,68 @@ export function TriggerManager({
     }
   }, [mintAddress])
 
+  // Fetch triggers less frequently (30s) or on mount
   useEffect(() => {
     fetchTriggers()
-    const interval = setInterval(fetchTriggers, 5000)
+    const interval = setInterval(fetchTriggers, 30000)
     return () => clearInterval(interval)
   }, [fetchTriggers])
+
+  // Listen for bonding curve updates to update price locally
+  useEffect(() => {
+    if (!mintAddress || !connection) return
+
+    let subId: number
+
+    // Derive bonding curve address locally to avoid importing server-heavy SDK
+    const deriveBondingCurve = (mint: string) => {
+      try {
+        const PUMPFUN_PROGRAM_ID = new PublicKey("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P")
+        const [bondingCurve] = PublicKey.findProgramAddressSync(
+          [Buffer.from("bonding-curve"), new PublicKey(mint).toBuffer()],
+          PUMPFUN_PROGRAM_ID
+        )
+        return bondingCurve
+      } catch {
+        return null
+      }
+    }
+
+    const bondingCurve = deriveBondingCurve(mintAddress)
+    if (!bondingCurve) return
+
+    subId = connection.onAccountChange(bondingCurve, (accountInfo) => {
+      // Calculate price from account data
+      // Data layout: discriminator(8) + virtualToken(8) + virtualSol(8)
+      // Price = virtualSol / virtualToken
+      try {
+        const data = accountInfo.data
+        if (data.length < 24) return
+
+        const virtualTokenReserves = data.readBigUInt64LE(8)
+        const virtualSolReserves = data.readBigUInt64LE(16)
+
+        if (virtualTokenReserves > BigInt(0)) {
+          // Adjust for decimals (SOL=9, Token=6)
+          const vSol = Number(virtualSolReserves) / 1e9
+          const vToken = Number(virtualTokenReserves) / 1e6
+          const price = vSol / vToken
+
+          // Update triggers with new price
+          setTriggers(prev => prev.map(t => ({
+            ...t,
+            currentPrice: price
+          })))
+        }
+      } catch (e) {
+        console.error("Failed to parse bonding curve update", e)
+      }
+    }, "processed")
+
+    return () => {
+      connection.removeAccountChangeListener(subId)
+    }
+  }, [mintAddress, connection])
 
   const createTrigger = async () => {
     setLoading(true)
