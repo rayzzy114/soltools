@@ -882,10 +882,11 @@ export async function refreshWalletBalances(
   mintAddress?: string
 ): Promise<BundlerWallet[]> {
   const chunks = chunkArray(wallets, 5) // RPC limit is 5 accounts per call on low tiers
-  const updatedWallets: BundlerWallet[] = []
   const mint = mintAddress ? new PublicKey(mintAddress) : null
 
-  for (const chunk of chunks) {
+  // Process chunks concurrently to speed up refresh (limited by RPC_REFRESH_CONCURRENCY)
+  const chunkResults = await mapWithLimit(chunks, RPC_REFRESH_CONCURRENCY, async (chunk) => {
+    const chunkUpdatedWallets: BundlerWallet[] = []
     try {
       const pubkeys = chunk.map(w => new PublicKey(w.publicKey))
 
@@ -930,17 +931,19 @@ export async function refreshWalletBalances(
           }
         }
 
-        updatedWallets.push({
+        chunkUpdatedWallets.push({
           ...wallet,
           solBalance,
           tokenBalance: mint ? tokenBalance : wallet.tokenBalance, // preserve old token balance if no mint
           ...(mint ? { ataExists } : {})
         })
       }
+      return chunkUpdatedWallets
     } catch (error) {
       console.error("Batch refresh failed, falling back to individual:", error)
       // Fallback to original individual refresh for this chunk if batch fails
-      const fallbackChunk = await mapWithLimit(chunk, RPC_REFRESH_CONCURRENCY, async (wallet) => {
+      // Note: This runs within the concurrent worker, effectively running fallback concurrently for failed chunks
+      return await mapWithLimit(chunk, 1, async (wallet) => {
          try {
            const pubkey = new PublicKey(wallet.publicKey)
            const solBalance = await rpcWithRetry(() => connection.getBalance(pubkey))
@@ -966,11 +969,10 @@ export async function refreshWalletBalances(
            return wallet
          }
       })
-      updatedWallets.push(...fallbackChunk)
     }
-  }
+  })
 
-  return updatedWallets
+  return chunkResults.flat()
 }
 
 /**
