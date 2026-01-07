@@ -13,7 +13,7 @@ async function main() {
     console.log("-".repeat(80))
 
     wallets.forEach((w, i) => {
-      console.log(`${i + 1}. | ${w.publicKey} | ${w.secretKey}`)
+      console.log(`${i + 1}. | ${w.publicKey} | [HIDDEN]`)
     })
 
     console.log("\nDone.")

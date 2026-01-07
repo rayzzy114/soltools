@@ -314,7 +314,7 @@ async function exportWallets(): Promise<void> {
   wallets.forEach(w => {
     console.log(`\n${w.name}:`)
     console.log(`  Public Key: ${w.publicKey}`)
-    console.log(`  Secret Key: ${w.secretKey}`)
+    console.log(`  Secret Key: [HIDDEN]`)
   })
   
   console.log("-".repeat(50) + "\n")

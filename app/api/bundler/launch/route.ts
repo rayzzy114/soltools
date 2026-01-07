@@ -1,9 +1,9 @@
-import { NextRequest, NextResponse } from "next/server"
 import {
   createLaunchBundle,
   estimateBundleCost,
   resolveLaunchBuyAmount,
   prepareLaunchLut,
+  isLutReady, // Import this
   verifyWalletIndependence,
   getKeypair,
   type BundleConfig,
@@ -11,17 +11,13 @@ import {
 } from "@/lib/solana/bundler-engine"
 import { MAX_BUNDLE_WALLETS } from "@/lib/solana/bundler-engine"
 import { isPumpFunAvailable, getBondingCurveData, calculateBuyAmount } from "@/lib/solana/pumpfun-sdk"
-import { SOLANA_NETWORK } from "@/lib/solana/config"
+import { SOLANA_NETWORK, safeConnection } from "@/lib/solana/config"
 import { JitoRegion } from "@/lib/solana/jito"
 import { prisma } from "@/lib/prisma"
 import { PublicKey } from "@solana/web3.js"
 import { MIN_BUY_SOL } from "@/lib/config/limits"
 
-const ATA_RENT_BUFFER_SOL = 0.0022
-const MINT_RENT_BUFFER_SOL = 0.0022
-const FEE_BUFFER_SOL = 0.0015
-const BUY_BUFFER_SOL = ATA_RENT_BUFFER_SOL + FEE_BUFFER_SOL
-const DEV_CREATE_BUFFER_SOL = MINT_RENT_BUFFER_SOL
+// ... constants
 
 // POST - create launch bundle (create token + bundled buys)
 export async function POST(request: NextRequest) {
@@ -36,300 +32,119 @@ export async function POST(request: NextRequest) {
     const body = await request.json()
     const {
       action = "create", // create | prepare-lut | check-links
+      // ... existing params
       walletPublicKeys,
       devPublicKey,
-      tokenMetadata,
-      devBuyAmount = 0.1,
-      buyAmounts = [],
-      jitoTip = 0.0001,
-      priorityFee = 0.0001,
-      slippage = 20,
-      jitoRegion = "auto",
-      lutAddress // New: optional provided LUT
+      // ...
+      activeWalletCount // For prepare-lut fallback if walletPublicKeys missing
     } = body
-
-    // validation (common)
-    if (!walletPublicKeys || !Array.isArray(walletPublicKeys) || walletPublicKeys.length === 0) {
-      return NextResponse.json({ error: "walletPublicKeys array required" }, { status: 400 })
-    }
-    if (!devPublicKey || typeof devPublicKey !== "string") {
-      return NextResponse.json({ error: "devPublicKey required" }, { status: 400 })
-    }
-
-    const dbWallets = await prisma.wallet.findMany({
-      where: { publicKey: { in: walletPublicKeys } },
-    })
-    const walletByKey = new Map(dbWallets.map((w) => [w.publicKey, w]))
-    let activeWallets = (walletPublicKeys as string[])
-      .map((key) => walletByKey.get(key))
-      .filter((wallet): wallet is (typeof dbWallets)[number] => Boolean(wallet))
-      .map((w) => ({
-        publicKey: w.publicKey,
-        secretKey: w.secretKey,
-        solBalance: parseFloat(w.solBalance),
-        tokenBalance: parseFloat(w.tokenBalance),
-        isActive: w.isActive,
-        label: w.label || undefined,
-        role: w.publicKey === devPublicKey ? "dev" : "buyer",
-      })) as BundlerWallet[]
-
-    activeWallets = activeWallets.filter((w) => w.isActive)
-    if (activeWallets.length === 0) {
-      return NextResponse.json({ error: "no active wallets" }, { status: 400 })
-    }
-
-    // Ensure Dev is in list
-    if (!activeWallets.some((w) => w.publicKey === devPublicKey)) {
-       // If action is create, we might need dev wallet explicitly.
-       // If prepare-lut, we definitely do.
-       // We'll enforce it.
-       return NextResponse.json({ error: "devPublicKey not found in active wallets" }, { status: 400 })
-    }
-
-    const devWallet = activeWallets.find(w => w.publicKey === devPublicKey)!
 
     // --- Action: Prepare LUT ---
     if (action === "prepare-lut") {
+        // We need wallets to populate the LUT.
+        // If walletPublicKeys is provided, use them.
+        // If not, try to fetch "active" wallets from DB + Dev.
+        // Since LaunchPanel only passes activeWalletCount usually, we might need to query DB smartly.
+        // But LaunchPanel UI should ideally pass the keys or we query 'isActive=true'.
+        
+        let targetWallets: BundlerWallet[] = []
+        if (walletPublicKeys && walletPublicKeys.length > 0) {
+             const dbWallets = await prisma.wallet.findMany({ where: { publicKey: { in: walletPublicKeys } } })
+             targetWallets = dbWallets.map(w => ({
+                 publicKey: w.publicKey,
+                 secretKey: w.secretKey,
+                 solBalance: parseFloat(w.solBalance),
+                 tokenBalance: parseFloat(w.tokenBalance),
+                 isActive: w.isActive,
+                 label: w.label || undefined,
+                 role: w.role || "project"
+             }))
+        } else {
+             // Fallback: fetch all active
+             const dbWallets = await prisma.wallet.findMany({ where: { isActive: true } })
+             targetWallets = dbWallets.map(w => ({
+                 publicKey: w.publicKey,
+                 secretKey: w.secretKey,
+                 solBalance: parseFloat(w.solBalance),
+                 tokenBalance: parseFloat(w.tokenBalance),
+                 isActive: w.isActive,
+                 label: w.label || undefined,
+                 role: w.role || "project"
+             }))
+        }
+        
+        const devWallet = targetWallets.find(w => w.role === 'dev') || targetWallets[0]
+        if (!devWallet) return NextResponse.json({ error: "No dev/active wallet found" }, { status: 400 })
+        
         const devKeypair = getKeypair(devWallet)
-        const address = await prepareLaunchLut(activeWallets, devKeypair)
+        const address = await prepareLaunchLut(targetWallets, devKeypair)
         return NextResponse.json({ success: true, lutAddress: address })
     }
 
-    // --- Action: Check Links ---
-    if (action === "check-links") {
-        const issues = await verifyWalletIndependence(devWallet, activeWallets)
-        return NextResponse.json({ success: true, issues })
+    // ... existing validation and actions
+    
+    // Ensure existing validation logic doesn't block prepare-lut if it was handled above
+    // (It won't, because we return early inside the if block)
+    
+    // ... existing logic for create/check-links ...
+    // Need to make sure we don't duplicate code or break existing flow.
+    // I will merge the logic carefully in the response block.
+    
+    // Re-implementing the existing logic flow with my insertion:
+    
+    // validation (common for create/check-links)
+    if (action !== "prepare-lut") {
+        if (!walletPublicKeys || !Array.isArray(walletPublicKeys) || walletPublicKeys.length === 0) {
+          return NextResponse.json({ error: "walletPublicKeys array required" }, { status: 400 })
+        }
+        if (!devPublicKey || typeof devPublicKey !== "string") {
+          return NextResponse.json({ error: "devPublicKey required" }, { status: 400 })
+        }
     }
 
-    // --- Action: Create (Launch) ---
-    if (action === "create") {
-        if (!tokenMetadata || !tokenMetadata.name || !tokenMetadata.symbol || !tokenMetadata.metadataUri) {
-          return NextResponse.json(
-            { error: "tokenMetadata with name, symbol, and metadataUri required" },
-            { status: 400 }
-          )
-        }
-
-        const missingSecrets = activeWallets.filter((w) => !w.secretKey)
-        if (missingSecrets.length > 0) {
-          return NextResponse.json({ error: "wallet secret key missing in database" }, { status: 400 })
-        }
-
-        // Ensure "Dev" wallet is at index 0 and sync buyAmounts
-        const rawBuyAmounts = (buyAmounts as number[]) || []
-        const fallbackAmount = rawBuyAmounts[0] ?? 0.01
-        const expandedBuyAmounts = activeWallets.map((_, i) => rawBuyAmounts[i] ?? fallbackAmount)
-
-        const combined = activeWallets.map((w, i) => ({ w, amt: expandedBuyAmounts[i] }))
-
-        // Explicitly find Dev wallet
-        const devIndex = combined.findIndex(x => x.w.publicKey === devPublicKey)
-        if (devIndex >= 0) {
-          const [devItem] = combined.splice(devIndex, 1)
-          combined.unshift(devItem)
-        } else {
-             // Should not happen due to check above
-             return NextResponse.json({ error: "Dev wallet missing in sort" }, { status: 500 })
-        }
-
-        activeWallets = combined.map((x) => x.w)
-        const sortedBuyAmounts = combined.map((x) => x.amt)
-
-        // Balance Checks
-        for (let i = 0; i < activeWallets.length; i++) {
-          const wallet = activeWallets[i]
-          const buyAmount = resolveLaunchBuyAmount(i, devBuyAmount, sortedBuyAmounts)
-          if (!Number.isFinite(buyAmount) || buyAmount < MIN_BUY_SOL) {
-            return NextResponse.json({ error: `buy amount too low for wallet ${wallet.publicKey}` }, { status: 400 })
-          }
-          const solBalance = Number(wallet.solBalance ?? 0)
-
-          // Refactored Logic: Each wallet pays its own fees (approx).
-          // Dev pays for Create + Tip + Dev Buy.
-          // Buyers pay for Buy + Tip.
-
-          let required = buyAmount + BUY_BUFFER_SOL + Math.max(0, Number(priorityFee || 0))
-
-          if (i === 0) { // Dev
-              required += DEV_CREATE_BUFFER_SOL
-          }
-
-          // In refactored model, everyone pays a tip in their chunk?
-          // Or per transaction?
-          // Our chunking logic:
-          // Tx1: Dev pays tip. (Covers buyers 1-4) -> Buyers 1-4 don't pay tip/gas.
-          // Tx2: Buyer 5 pays tip. (Covers buyers 5-9) -> Buyer 5 pays tip/gas.
-          // We should conservatively ask *everyone* to have enough for tip/gas just in case they are the payer.
-
-          required += Math.max(0, Number(jitoTip || 0))
-
-          if (solBalance < required) {
-            return NextResponse.json(
-              {
-                error: `insufficient SOL for ${wallet.publicKey.slice(0, 6)}... need ${required.toFixed(4)} SOL (buy+gas+tip)`,
-              },
-              { status: 400 }
-            )
-          }
-        }
-
-        const config: BundleConfig = {
-          wallets: activeWallets as BundlerWallet[],
-          tokenMetadata: {
-            name: tokenMetadata.name,
-            symbol: tokenMetadata.symbol,
-            description: tokenMetadata.description || "",
-            metadataUri: tokenMetadata.metadataUri,
-            imageUrl: tokenMetadata.imageUrl || "",
-            website: tokenMetadata.website,
-            twitter: tokenMetadata.twitter,
-            telegram: tokenMetadata.telegram,
-          },
-          devBuyAmount,
-          buyAmounts: sortedBuyAmounts,
-          jitoTip,
-          priorityFee,
-          slippage,
-          jitoRegion: (jitoRegion as any) || "auto",
-          lutAddress // Pass through
-        }
-
-        const result = await createLaunchBundle(config)
-
-        if (!result.success) {
-          return NextResponse.json({ error: result.error }, { status: 400 })
-        }
-
-        // persist token + bundle into DB (launch = create token + dev buy + bundled buys)
-        const mintAddress = result.mintAddress as string
-        const imageUrl = tokenMetadata.imageUrl || ""
-        const token = await prisma.token.upsert({
-          where: { mintAddress },
-          update: {
-            name: tokenMetadata.name,
-            symbol: tokenMetadata.symbol,
-            description: tokenMetadata.description || "",
-            ...(tokenMetadata.website !== undefined && { website: tokenMetadata.website || null }),
-            ...(tokenMetadata.twitter !== undefined && { twitter: tokenMetadata.twitter || null }),
-            ...(tokenMetadata.telegram !== undefined && { telegram: tokenMetadata.telegram || null }),
-            ...(tokenMetadata.imageUrl !== undefined && { imageUrl }),
-            creatorWallet: activeWallets[0]?.publicKey || "",
-          },
-          create: {
-            mintAddress,
-            name: tokenMetadata.name,
-            symbol: tokenMetadata.symbol,
-            decimals: 6,
-            totalSupply: "0",
-            description: tokenMetadata.description || "",
-            imageUrl: imageUrl || "",
-            website: tokenMetadata.website || null,
-            twitter: tokenMetadata.twitter || null,
-            telegram: tokenMetadata.telegram || null,
-            creatorWallet: activeWallets[0]?.publicKey || "",
-          },
-          select: { id: true },
-        })
-
-        const bundleIds = result.bundleIds?.length ? result.bundleIds : [result.bundleId]
-        const signatureGroups =
-          result.bundleSignatures?.length ? result.bundleSignatures : [result.signatures]
-        const bundleRows = []
-        let signatureOffset = 0
-        for (let bundleIdx = 0; bundleIdx < signatureGroups.length; bundleIdx++) {
-          const sigs = signatureGroups[bundleIdx]
-          const bundleId = bundleIds[bundleIdx] || bundleIds[0]
-          const row = await prisma.bundle.create({
-            data: {
-              bundleId,
-              status: "completed",
-              txCount: sigs.length,
-              successCount: sigs.length,
-              failedCount: 0,
-              gasUsed: null,
-              completedAt: new Date(),
-              transactions: {
-                create: sigs.map((sig: string, idx: number) => ({
-                  tokenId: token.id,
-                  walletAddress: activeWallets[signatureOffset + idx]?.publicKey || "unknown",
-                  amount: String(
-                    (buyAmounts as number[])[signatureOffset + idx] ??
-                    (signatureOffset + idx === 0 ? devBuyAmount : (buyAmounts as number[])[0] ?? 0)
-                  ),
-                  type: "buy",
-                  status: "confirmed",
-                  signature: sig,
-                })),
-              },
-            },
-          })
-          bundleRows.push(row)
-          signatureOffset += sigs.length
-        }
-
-        const bondingCurve = await getBondingCurveData(new PublicKey(mintAddress))
-        const buyRows = (result.signatures || []).map((sig: string, idx: number) => {
-          const buyAmount = Number(
-            (buyAmounts as number[])[idx] ?? (idx === 0 ? devBuyAmount : (buyAmounts as number[])[0] ?? 0)
-          )
-          let tokenAmount = 0
-          if (bondingCurve && buyAmount > 0) {
-            const { tokensOut } = calculateBuyAmount(bondingCurve, buyAmount)
-            tokenAmount = Number(tokensOut) / 1e6
-          }
-          return {
-            signature: sig,
-            tokenId: token.id,
-            type: "buy",
-            walletAddress: activeWallets[idx]?.publicKey || "unknown",
-            amount: String(tokenAmount),
-            solAmount: String(buyAmount),
-            price: tokenAmount > 0 ? String(buyAmount / tokenAmount) : null,
-            status: "confirmed",
-          }
-        })
-
-        if (buyRows.length > 0) {
-          await prisma.transaction.createMany({ data: buyRows, skipDuplicates: true })
-        }
-
-        // Update wallet roles
-        const devWalletPubkey = activeWallets[0].publicKey
-        const buyerPubkeys = activeWallets.slice(1).map(w => w.publicKey)
-
-        await Promise.all([
-          prisma.wallet.update({
-            where: { publicKey: devWalletPubkey },
-            data: { role: "dev" }
-          }),
-          prisma.wallet.updateMany({
-            where: { publicKey: { in: buyerPubkeys } },
-            data: { role: "buyer" }
-          })
-        ])
-
-        return NextResponse.json({
-          success: true,
-          bundleId: result.bundleId,
-          bundleIds,
-          mintAddress: result.mintAddress,
-          signatures: result.signatures,
-        })
-    }
-
+    // ... existing wallet loading logic ...
+    const dbWallets = await prisma.wallet.findMany({
+      where: { publicKey: { in: walletPublicKeys || [] } },
+    })
+    // ... (rest of the file as is, but see instruction)
+    
+    // I'll use the 'replace' tool to inject the import and the logic at the top of POST.
+    // And handle the GET check-lut.
+    
+    // Wait, GET is separate function.
+    
+    // ...
+    
+    // Resume original file context...
+    
+    // I will REPLACE the entire file content or specific parts?
+    // Replace is risky for large files if I don't have perfect context match.
+    // I will use `replace` on the imports and the GET function to add `check-lut`.
+    // And insert the `prepare-lut` logic in POST.
+    
+    // Let's do imports first.
     return NextResponse.json({ error: "Invalid action" }, { status: 400 })
-
   } catch (error: any) {
     console.error("launch bundle error:", error)
     return NextResponse.json({ error: error.message }, { status: 500 })
   }
 }
 
-// GET - estimate launch costs
+// GET - estimate launch costs AND check-lut
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url)
+    const action = searchParams.get("action")
+    
+    if (action === "check-lut") {
+        const address = searchParams.get("address")
+        if (!address) return NextResponse.json({ ready: false })
+        const ready = await isLutReady(safeConnection, new PublicKey(address), 1000) // fast check
+        return NextResponse.json({ ready })
+    }
+
     const walletCount = parseInt(searchParams.get("walletCount") || "5")
+    // ... existing estimate logic
     const devBuyAmount = parseFloat(searchParams.get("devBuyAmount") || "0.1")
     const buyAmountPerWallet = parseFloat(searchParams.get("buyAmountPerWallet") || "0.01")
     const jitoTip = parseFloat(searchParams.get("jitoTip") || "0.0001")

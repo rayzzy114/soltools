@@ -230,6 +230,11 @@ export const isPublicRpc =
   RPC_ENDPOINT.includes("api.mainnet-beta.solana.com") ||
   RPC_ENDPOINT.includes("api.devnet.solana.com")
 
+export async function getRpcHealth() {
+  const healthy = await probeEndpoint(selectedRpcEndpoint)
+  return { endpoint: selectedRpcEndpoint, healthy }
+}
+
 if (typeof window === "undefined") {
   console.log(`Solana Network: ${SOLANA_NETWORK}`)
   console.log(`RPC Strategy: Split Lane (Safe: ${limiter.counts().EXECUTING}, Exec: Unthrottled)`)

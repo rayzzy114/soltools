@@ -9,6 +9,7 @@ import { isPumpFunAvailable, getBondingCurveData, calculateSellAmount, getPumpsw
 import { SOLANA_NETWORK } from "@/lib/solana/config"
 import { prisma } from "@/lib/prisma"
 import { PublicKey } from "@solana/web3.js"
+import { VolumeBotManager } from "@/lib/solana/volume-bot-manager"
 
 const SELL_BUFFER_SOL = 0.0015
 const TOKEN_DECIMALS = 6
@@ -81,6 +82,7 @@ export async function POST(request: NextRequest) {
       priorityFee = 0.0001,
       slippage = 20,
       jitoRegion = "auto",
+      lutAddress
     } = body
 
     // validation
@@ -90,6 +92,23 @@ export async function POST(request: NextRequest) {
 
     if (!mintAddress) {
       return NextResponse.json({ error: "mintAddress required" }, { status: 400 })
+    }
+
+    // Check & Stop Volume Bot
+    const volumeToken = await prisma.token.findUnique({ where: { mintAddress } })
+    if (volumeToken) {
+        const pair = await prisma.volumeBotPair.findFirst({ where: { tokenId: volumeToken.id } })
+        if (pair && pair.status === "running") {
+            console.log(`[rugpull] Stopping volume bot for pair ${pair.id} before rug...`)
+            await VolumeBotManager.getInstance().stopBot(pair.id)
+            // Wait a moment for loop to exit?
+            // stopBot sets a flag, but loop might be mid-execution. 
+            // In a real chaos test, we verify if this prevents collision.
+            await prisma.volumeBotPair.update({
+                where: { id: pair.id },
+                data: { status: "stopped", isActive: false }
+            })
+        }
     }
 
     const dbWallets = await prisma.wallet.findMany({
@@ -144,6 +163,7 @@ export async function POST(request: NextRequest) {
       priorityFee,
       slippage,
       jitoRegion: (jitoRegion as any) || "auto",
+      lutAddress
     }
 
     // bundled rugpull via jito (sells 100% tokens from all wallets)

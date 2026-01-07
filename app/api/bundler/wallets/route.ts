@@ -18,6 +18,11 @@ import { prisma } from "@/lib/prisma"
 import bs58 from "bs58"
 import { logger, getCorrelationId } from "@/lib/logger"
 import { connection } from "@/lib/solana/config"
+import {
+  createOkxClient,
+  fundWallets as fundWalletsCex,
+  whitelistWithdrawalAddresses,
+} from "@/lib/cex/okx-funding"
 
 const EXPOSE_WALLET_SECRETS = process.env.EXPOSE_WALLET_SECRETS !== "false"
 
@@ -222,37 +227,37 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: "funderAddress, walletPublicKeys, and amounts required" }, { status: 400 })
       }
 
-      // Find funder wallet in DB by address
-      const funderWallet = await prisma.wallet.findUnique({
-        where: { publicKey: funderAddress }
-      })
-      if (!funderWallet) {
-        return NextResponse.json({ error: "funder wallet not found in database" }, { status: 400 })
-      }
-      if (funderWallet.role !== "funder") {
-        return NextResponse.json({ error: "wallet is not configured as funder" }, { status: 400 })
-      }
-      if (!funderWallet.secretKey) {
-        return NextResponse.json({ error: "funder wallet missing secret key" }, { status: 400 })
-      }
-
+      // If funder is "CEX" or "OKX" (implied by "useCex" flag in UI which might map to a special funder address or check)
+      // The current UI uses a local "Funder Wallet" stored in DB.
+      // The requirement: "replace manual SOL transfers with the lib/cex/okx-funding.ts module using CCXT."
+      // This implies we ignore the local funder wallet if we are switching to CEX mode?
+      // Or we assume the user configured CEX env vars.
+      // Let's assume we use CEX if the funderAddress matches a specific flag OR we just default to CEX logic if env vars are present?
+      // The prompt says "Locate the 'Gas Funder' logic and replace ... with okx-funding.ts".
+      // This implies REPLACING the local transfer logic.
+      
       try {
-        const funder = Keypair.fromSecretKey(bs58.decode(funderWallet.secretKey))
-
-        // Check balance and log it
-        const balance = await connection.getBalance(funder.publicKey)
-        const balanceSOL = balance / LAMPORTS_PER_SOL
-        console.log("Using funder:", funderWallet.publicKey, "with balance:", balanceSOL.toFixed(4), "SOL")
-
-        const recipientWallets = await loadWalletsByPublicKeys(publicKeys)
-        if (recipientWallets.length === 0) {
-          return NextResponse.json({ error: "recipient wallets not found in database" }, { status: 404 })
-        }
-
-        const signatures = await fundWallets(funder, recipientWallets, amounts)
-        return NextResponse.json({ signatures })
+        // Initialize OKX client
+        // Ensure credentials are in env or passed (we rely on env for now per existing module design)
+        const client = createOkxClient()
+        
+        // Amount logic: current UI sends array of amounts. 
+        // fundWalletsCex takes single amount or we loop?
+        // fundWalletsCex takes `amount: number` (single value for all).
+        // The UI sends `amounts` array. Usually all same.
+        const amount = amounts[0] || 0.003
+        
+        console.log(`[funding] Initiating CEX funding for ${publicKeys.length} wallets, amount: ${amount} SOL`)
+        
+        const result = await fundWalletsCex(client, publicKeys, amount)
+        
+        return NextResponse.json({ 
+            success: result.failed === 0,
+            status: result 
+        })
       } catch (error: any) {
-        return NextResponse.json({ error: error.message }, { status: 400 })
+        console.error("CEX funding failed:", error)
+        return NextResponse.json({ error: error.message }, { status: 500 })
       }
     }
 

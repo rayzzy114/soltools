@@ -215,7 +215,7 @@ export async function createBuyInstruction(
   const global = getGlobalAddress()
   const eventAuthority = getEventAuthorityAddress()
 
-  const FEE_RECIPIENT = new PublicKey("CebN5WGQ4vvepcovs24O1KyeykzzCO3ug0M35DAJLbL6")
+  const FEE_RECIPIENT = new PublicKey("CebN5WGQ4jvEPvsVU4EoHEpgzq1VV7AbicfhtW4xC9iM")
 
   const keys = [
     { pubkey: global, isSigner: false, isWritable: false },
@@ -259,7 +259,7 @@ export async function createSellInstruction(
   const global = getGlobalAddress()
   const eventAuthority = getEventAuthorityAddress()
 
-  const FEE_RECIPIENT = new PublicKey("CebN5WGQ4vvepcovs24O1KyeykzzCO3ug0M35DAJLbL6")
+  const FEE_RECIPIENT = new PublicKey("CebN5WGQ4jvEPvsVU4EoHEpgzq1VV7AbicfhtW4xC9iM")
 
   const keys = [
     { pubkey: global, isSigner: false, isWritable: false },
