@@ -116,8 +116,8 @@ export async function POST(request: NextRequest) {
           return NextResponse.json({ error: "no wallets provided" }, { status: 400 })
         }
 
-        if (walletPublicKeys.length > 20) {
-          return NextResponse.json({ error: "max 20 wallets per batch" }, { status: 400 })
+        if (walletPublicKeys.length > 100) {
+          return NextResponse.json({ error: "max 100 wallets per batch" }, { status: 400 })
         }
 
         const funderKeypair = await getFunderKeypair()
