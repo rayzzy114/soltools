@@ -2669,6 +2669,7 @@ export default function DashboardPage() {
                               <span className="font-mono text-neutral-400">
                                 {trade.mintAddress.slice(0, 6)}...{trade.mintAddress.slice(-4)}
                               </span>
+                              <CopyButton text={trade.mintAddress} />
                             </div>
                             <div className="text-right">
                               <div className="text-white">{trade.solAmount.toFixed(3)} SOL</div>
