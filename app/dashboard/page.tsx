@@ -14,7 +14,7 @@ import { Switch } from "@/components/ui/switch"
 import { Slider } from "@/components/ui/slider"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Alert, AlertDescription } from "@/components/ui/alert"
-import { TrendingUp, TrendingDown, Coins, Activity, Users, Play, Pause, Settings, RefreshCw, Flame, Rocket, AlertTriangle, BarChart3, Trash2, Upload, Wallet, Download, ShieldCheck, Zap, Terminal, Copy } from "lucide-react"
+import { TrendingUp, TrendingDown, Coins, Activity, Users, Play, Pause, Settings, RefreshCw, Flame, Rocket, AlertTriangle, BarChart3, Trash2, Upload, Wallet, Download, ShieldCheck, Zap, Terminal, Copy, Loader2 } from "lucide-react"
 import { PnLSummaryCard, MiniPnLCard } from "@/components/pnl/PnLCard"
 import type { PnLSummary, TokenPnL, Trade } from "@/lib/pnl/types"
 import { toast } from "sonner"
@@ -144,6 +144,7 @@ const WalletRow = memo(({ wallet, index, onSelect }: { wallet: BundlerWallet, in
       type="button"
       onClick={() => onSelect(wallet)}
       className={`h-10 rounded border ${borderColor} bg-white p-1 text-left text-[9px] leading-tight transition`}
+      data-testid={`wallet-row-${index}`}
     >
       <div className="flex items-center justify-between gap-1">
         <div className="text-[9px] truncate text-black font-bold">
@@ -194,6 +195,7 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true)
   const [dashboardStage, setDashboardStage] = useState<"launch" | "main">("launch")
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [isTrading, setIsTrading] = useState(false)
 
   // New states for enhanced dashboard
   const [selectedToken, setSelectedToken] = useState<Token | null>(null)
@@ -1571,6 +1573,7 @@ export default function DashboardPage() {
       "info"
     )
 
+    setIsTrading(true)
     try {
       const response = await fetch("/api/volume-bot/execute", {
         method: "POST",
@@ -1616,6 +1619,8 @@ export default function DashboardPage() {
       console.error(`${action} error:`, error)
       addSystemLog(`Manual ${action} error: ${error?.message || error}`, "error")
       toast.error(`Failed to ${action}`)
+    } finally {
+      setIsTrading(false)
     }
   }, [
     applyStoredSecrets,
@@ -2077,6 +2082,7 @@ export default function DashboardPage() {
               variant="outline"
               onClick={() => setDashboardStage("main")}
               className="h-7 px-2 text-[10px] border-neutral-700 disabled:opacity-50"
+              data-testid="open-main-stage"
             >
               Open main stage
             </Button>
@@ -2760,15 +2766,18 @@ export default function DashboardPage() {
           </DialogContent>
         </Dialog>
         <Dialog open={!!quickTradeWallet} onOpenChange={(open) => { if (!open) setQuickTradeWallet(null) }}>
-          <DialogContent className="bg-white border-neutral-300 text-neutral-900 max-w-sm">
+          <DialogContent className="bg-white border-neutral-300 text-neutral-900 max-w-sm" data-testid="wallet-trade-dialog">
             <DialogHeader>
               <DialogTitle className="text-sm text-neutral-900">Wallet Trade</DialogTitle>
             </DialogHeader>
             <div className="space-y-3">
-              <div className="text-xs text-neutral-600">
-                {quickTradeWallet
-                  ? `${quickTradeWallet.publicKey.slice(0, 8)}...${quickTradeWallet.publicKey.slice(-4)}`
-                  : ""}
+              <div className="text-xs text-neutral-600 flex items-center gap-2">
+                <span className="font-mono">
+                  {quickTradeWallet
+                    ? `${quickTradeWallet.publicKey.slice(0, 8)}...${quickTradeWallet.publicKey.slice(-4)}`
+                    : ""}
+                </span>
+                {quickTradeWallet && <CopyButton text={quickTradeWallet.publicKey} />}
               </div>
               <div className="space-y-1">
                 <Label className="text-xs text-neutral-700">Buy Amount (SOL)</Label>
@@ -2778,6 +2787,7 @@ export default function DashboardPage() {
                   className="h-8 bg-white border-neutral-300 text-xs text-neutral-900"
                   value={quickBuyAmount}
                   onChange={(e) => setQuickBuyAmount(e.target.value)}
+                  disabled={isTrading}
                 />
               </div>
               <div className="grid grid-cols-5 gap-2">
@@ -2787,6 +2797,7 @@ export default function DashboardPage() {
                     variant="outline"
                     className="h-8 text-xs bg-white text-neutral-900 border-neutral-300 hover:bg-neutral-100 disabled:text-neutral-400"
                     onClick={() => setQuickBuyAmount(preset)}
+                    disabled={isTrading}
                   >
                     {preset}
                   </Button>
@@ -2800,8 +2811,9 @@ export default function DashboardPage() {
                     const parsed = Number.parseFloat(quickBuyAmount)
                     executeWalletTrade(quickTradeWallet, "buy", { buyAmount: parsed })
                   }}
-                  disabled={!selectedToken || !quickTradeWallet}
+                  disabled={!selectedToken || !quickTradeWallet || isTrading}
                 >
+                  {isTrading ? <Loader2 className="w-3 h-3 animate-spin mr-2" /> : null}
                   Buy
                 </Button>
               </div>
@@ -2816,9 +2828,9 @@ export default function DashboardPage() {
                       if (!quickTradeWallet) return
                       executeWalletTrade(quickTradeWallet, "sell", { sellPercent: pct })
                     }}
-                    disabled={!selectedToken || !quickTradeWallet}
+                    disabled={!selectedToken || !quickTradeWallet || isTrading}
                   >
-                    {pct}%
+                    {isTrading ? <Loader2 className="w-3 h-3 animate-spin" /> : `${pct}%`}
                   </Button>
                 ))}
               </div>
