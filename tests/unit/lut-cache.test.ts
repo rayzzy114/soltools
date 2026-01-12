@@ -65,8 +65,8 @@ describe("LUT cache persistence", () => {
   })
 
   it("persists to prisma and memory", async () => {
-    const module = await import("@/lib/solana/bundler-engine")
-    const { __testing } = module
+    const mod = await import("@/lib/solana/bundler-engine")
+    const { __testing } = mod
     __testing.resetLutCache()
 
     const authorityKey = Keypair.generate().publicKey.toBase58()
@@ -80,8 +80,8 @@ describe("LUT cache persistence", () => {
   })
 
   it("reads from prisma when memory is cold", async () => {
-    const module = await import("@/lib/solana/bundler-engine")
-    const { __testing } = module
+    const mod = await import("@/lib/solana/bundler-engine")
+    const { __testing } = mod
     __testing.resetLutCache()
 
     const authorityKey = Keypair.generate().publicKey.toBase58()
@@ -97,8 +97,8 @@ describe("LUT cache persistence", () => {
 
 describe("comment bot instructions", () => {
   it("places memo before jito tip", async () => {
-    const module = await import("@/lib/solana/bundler-engine")
-    const { buildCommentInstructions, MEMO_PROGRAM_ID } = module
+    const mod = await import("@/lib/solana/bundler-engine")
+    const { buildCommentInstructions, MEMO_PROGRAM_ID } = mod
 
     const payer = Keypair.generate().publicKey
     const instructions = buildCommentInstructions(payer, "Bullish!", 0.001, "frankfurt")

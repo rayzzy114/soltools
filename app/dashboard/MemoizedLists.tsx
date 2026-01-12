@@ -79,8 +79,12 @@ export const BuyerWalletList = memo(({
                     const roleSuffix = option.role && option.role !== 'project' ? ` [${option.role.toUpperCase()}]` : ""
                     return (
                       <SelectItem key={option.publicKey} value={option.publicKey}>
-                        {option.label ? `${option.label} - ` : ""}
-                        {option.publicKey.slice(0, 6)}...{option.publicKey.slice(-4)} ({option.solBalance.toFixed(3)} SOL){roleSuffix}
+                        <div className="flex items-center gap-2 w-full">
+                          <span className="font-mono font-medium text-neutral-900">{option.publicKey.slice(0, 6)}...{option.publicKey.slice(-4)}</span>
+                          <span className="font-mono text-neutral-700">({option.solBalance.toFixed(3)} SOL)</span>
+                          {option.label && <span className="text-neutral-500 italic">- {option.label}</span>}
+                          {roleSuffix && <span className="text-[10px] text-neutral-500">{roleSuffix}</span>}
+                        </div>
                       </SelectItem>
                     )
                   })}
@@ -156,10 +160,10 @@ export const DevWalletSelect = memo(({
           return (
             <SelectItem key={wallet.publicKey} value={wallet.publicKey}>
               <div className="flex items-center gap-2">
-                <span className="text-neutral-600 font-bold font-mono text-[10px]">#{index + 1}</span>
-                <span className="text-neutral-800 font-medium">Balance: {wallet.solBalance.toFixed(4)} SOL</span>
+                <span className="text-black font-bold font-mono text-[10px]">#{index + 1}</span>
+                <span className="text-neutral-900 font-medium font-mono">Bal: {wallet.solBalance.toFixed(4)} SOL</span>
                 <span className="text-neutral-400">-</span>
-                <span className="font-mono text-neutral-900 font-semibold">{wallet.publicKey.slice(0, 6)}...{wallet.publicKey.slice(-4)}</span>
+                <span className="font-mono text-black font-semibold">{wallet.publicKey.slice(0, 6)}...{wallet.publicKey.slice(-4)}</span>
                 {roleLabel && (
                   <span className={`text-[9px] font-bold ${roleColor} border border-current px-1 rounded`}>
                     {roleLabel}

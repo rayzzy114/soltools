@@ -236,6 +236,8 @@ export default function DashboardPage() {
   const [cloneTokenMint, setCloneTokenMint] = useState("")
   const [priceSeries, setPriceSeries] = useState<Array<{ time: string; price: number }>>([])
   const [rugpullLoading, setRugpullLoading] = useState(false)
+  const [collectLoading, setCollectLoading] = useState(false)
+  const [withdrawLoading, setWithdrawLoading] = useState(false)
   const [systemLogs, setSystemLogs] = useState<string[]>([])
   const [syncingBalances, setSyncingBalances] = useState(false)
   const [rugpullSlippage, setRugpullSlippage] = useState("20")
@@ -1329,6 +1331,7 @@ export default function DashboardPage() {
 
     if (!confirmed) return
 
+    setRugpullLoading(true)
     try {
       const res = await fetch("/api/bundler/rugpull", {
         method: "POST",
@@ -1353,6 +1356,8 @@ export default function DashboardPage() {
     } catch (error: any) {
       console.error("rugpull error:", error)
       toast.error(`rugpull failed: ${error.message}`)
+    } finally {
+      setRugpullLoading(false)
     }
   }, [selectedToken, activeWalletsWithTokens, jitoTipSol, priorityFeeSol, jitoRegion, loadSavedWallets, rugpullSlippage])
 
@@ -1368,6 +1373,7 @@ export default function DashboardPage() {
       return
     }
 
+    setRugpullLoading(true)
     try {
       const res = await fetch("/api/bundler/rugpull", {
         method: "POST",
@@ -1391,6 +1397,8 @@ export default function DashboardPage() {
     } catch (error: any) {
       console.error("dev rugpull error:", error)
       toast.error(`dev rugpull failed: ${error.message}`)
+    } finally {
+      setRugpullLoading(false)
     }
   }, [
     selectedToken,
@@ -1429,6 +1437,7 @@ export default function DashboardPage() {
         return
     }
 
+    setCollectLoading(true)
     try {
       const res = await fetch("/api/bundler/wallets", {
         method: "POST",
@@ -1451,6 +1460,8 @@ export default function DashboardPage() {
     } catch (error: any) {
         console.error("collect error:", error)
         toast.error("Failed to collect SOL")
+    } finally {
+      setCollectLoading(false)
     }
   }, [launchDevWallet, bundlerWallets, activeWallets, loadSavedWallets, addSystemLog])
 
@@ -1476,6 +1487,7 @@ export default function DashboardPage() {
       return
     }
 
+    setWithdrawLoading(true)
     try {
       const res = await fetch("/api/bundler/wallets", {
         method: "POST",
@@ -1498,6 +1510,8 @@ export default function DashboardPage() {
     } catch (error: any) {
       console.error("withdraw error:", error)
       toast.error("Failed to withdraw")
+    } finally {
+      setWithdrawLoading(false)
     }
   }, [addSystemLog, devWalletRecord, funderWalletRecord, loadSavedWallets])
 
@@ -2456,19 +2470,19 @@ export default function DashboardPage() {
                 <div className="grid grid-cols-2 gap-1">
                   <Button
                     onClick={rugpullAllWallets}
-                    disabled={!selectedToken || activeWalletsWithTokens.length === 0}
+                    disabled={!selectedToken || activeWalletsWithTokens.length === 0 || rugpullLoading}
                     className="h-6 bg-red-600 hover:bg-red-700 text-[10px]"
                   >
-                    <Flame className="w-3 h-3 mr-1" />
-                    Dump from buyer
+                    <Flame className={`w-3 h-3 mr-1 ${rugpullLoading ? "animate-pulse" : ""}`} />
+                    {rugpullLoading ? "DUMPING..." : "Dump from buyer"}
                   </Button>
                   <Button
                     onClick={rugpullDevWallet}
-                    disabled={!selectedToken || !devWalletRecord}
+                    disabled={!selectedToken || !devWalletRecord || rugpullLoading}
                     className="h-6 bg-red-600 hover:bg-red-700 text-[10px]"
                   >
-                    <Flame className="w-3 h-3 mr-1" />
-                    Dump from dev
+                    <Flame className={`w-3 h-3 mr-1 ${rugpullLoading ? "animate-pulse" : ""}`} />
+                    {rugpullLoading ? "DUMPING..." : "Dump from dev"}
                   </Button>
                 </div>
 
@@ -2477,18 +2491,19 @@ export default function DashboardPage() {
                     <div className="grid grid-cols-2 gap-1">
                         <Button
                             onClick={collectAllToDev}
+                            disabled={collectLoading}
                             className="h-6 bg-blue-600 hover:bg-blue-700 text-[10px]"
                         >
-                            <Wallet className="w-3 h-3 mr-1" />
-                            Collect all → dev
+                            <Wallet className={`w-3 h-3 mr-1 ${collectLoading ? "animate-bounce" : ""}`} />
+                            {collectLoading ? "Collecting..." : "Collect all → dev"}
                         </Button>
                         <Button
                             onClick={withdrawDevToFunder}
-                            disabled={!funderWalletRecord?.publicKey}
+                            disabled={!funderWalletRecord?.publicKey || withdrawLoading}
                             className="h-6 bg-green-600 hover:bg-green-700 text-[10px]"
                         >
-                            <Download className="w-3 h-3 mr-1" />
-                            Withdraw dev → funder
+                            <Download className={`w-3 h-3 mr-1 ${withdrawLoading ? "animate-bounce" : ""}`} />
+                            {withdrawLoading ? "Withdrawing..." : "Withdraw dev → funder"}
                         </Button>
                     </div>
                 </div>
