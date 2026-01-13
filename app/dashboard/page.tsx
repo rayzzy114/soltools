@@ -14,7 +14,7 @@ import { Switch } from "@/components/ui/switch"
 import { Slider } from "@/components/ui/slider"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Alert, AlertDescription } from "@/components/ui/alert"
-import { TrendingUp, TrendingDown, Coins, Activity, Users, Play, Pause, Settings, RefreshCw, Flame, Rocket, AlertTriangle, BarChart3, Trash2, Upload, Wallet, Download, ShieldCheck, Zap, Terminal, Copy } from "lucide-react"
+import { TrendingUp, TrendingDown, Coins, Activity, Users, Play, Pause, Settings, RefreshCw, Flame, Rocket, AlertTriangle, BarChart3, Trash2, Upload, Wallet, Download, ShieldCheck, Zap, Terminal, Copy, HelpCircle, ArrowUpRight, ArrowDownLeft, ChevronDown, ChevronUp } from "lucide-react"
 import { PnLSummaryCard, MiniPnLCard } from "@/components/pnl/PnLCard"
 import type { PnLSummary, TokenPnL, Trade } from "@/lib/pnl/types"
 import { toast } from "sonner"
@@ -24,6 +24,10 @@ import { getBondingCurveAddress } from "@/lib/solana/pumpfun-sdk"
 import { TokenHolderTracker, type HolderRow } from "@/lib/solana/holder-tracker"
 import { clampNumber } from "@/lib/ui-utils"
 import { BuyerWalletList, DevWalletSelect } from "./MemoizedLists"
+import { InputWithSuffix } from "@/components/ui-custom/input-with-suffix"
+import { Skeleton } from "@/components/ui/skeleton"
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
 import {
   readStoredBundlerWallets,
   importStoredBundlerWallets,
@@ -2042,6 +2046,27 @@ export default function DashboardPage() {
     return () => clearInterval(interval)
   }, [fetchDashboardData])
 
+  // Keyboard Shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.shiftKey && e.key === "B") {
+        e.preventDefault()
+        if (volumeRunning) {
+          stopVolumeBot()
+        } else {
+          startVolumeBot()
+        }
+      }
+      if (e.shiftKey && e.key === "R") {
+        e.preventDefault()
+        fetchDashboardData()
+        toast.info("Refreshed data")
+      }
+    }
+    window.addEventListener("keydown", handleKeyDown)
+    return () => window.removeEventListener("keydown", handleKeyDown)
+  }, [volumeRunning, stopVolumeBot, startVolumeBot, fetchDashboardData])
+
   // Load wallets on mount
   useEffect(() => {
     loadSavedWallets()
@@ -2170,11 +2195,20 @@ export default function DashboardPage() {
                 {tokens.map((token) => (
                   <SelectItem key={token.mintAddress || token.symbol} value={token.mintAddress || ""}>
                     <div className="flex items-center gap-2">
-                      {token.imageUrl && (
-                        <div className="relative h-4 w-4 rounded-full overflow-hidden">
+                      <div className="relative h-4 w-4 rounded-full overflow-hidden shrink-0">
+                        {token.imageUrl ? (
                           <Image src={token.imageUrl} alt={token.symbol} fill className="object-cover" sizes="16px" />
-                        </div>
-                      )}
+                        ) : (
+                          <div
+                            className="h-full w-full flex items-center justify-center text-[8px] font-bold text-white/70"
+                            style={{
+                              background: `linear-gradient(135deg, hsl(${(token.symbol?.charCodeAt(0) || 0) * 10}, 70%, 50%), hsl(${(token.symbol?.charCodeAt(1) || 0) * 15}, 70%, 30%))`
+                            }}
+                          >
+                            {token.symbol?.slice(0, 1)}
+                          </div>
+                        )}
+                      </div>
                       <span className="font-medium text-neutral-900">{token.symbol || "Unknown"}</span>
                       <span className="text-neutral-500 font-mono text-[10px]">
                         {token.mintAddress ? `${token.mintAddress.slice(0, 4)}...${token.mintAddress.slice(-4)}` : ""}
@@ -2262,16 +2296,25 @@ export default function DashboardPage() {
                     <div className="flex items-center gap-2">
                         <span className="text-[10px] text-slate-400">STATUS:</span>
                         <div className="flex items-center gap-1">
-                        <div className={`w-2 h-2 rounded-full ${rpcHealthy ? "bg-green-500" : "bg-red-500"}`} />
-                        <span className={`text-[10px] ${rpcHealthy ? "text-green-400" : "text-red-400"}`}>RPC</span>
+                          <div className="relative flex h-2 w-2">
+                            {rpcHealthy && <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>}
+                            <span className={`relative inline-flex rounded-full h-2 w-2 ${rpcHealthy ? "bg-green-500" : "bg-red-500"}`}></span>
+                          </div>
+                          <span className={`text-[10px] ${rpcHealthy ? "text-green-400" : "text-red-400"}`}>RPC</span>
                         </div>
                         <div className="flex items-center gap-1">
-                        <div className={`w-2 h-2 rounded-full ${pumpFunAvailable ? "bg-green-500" : "bg-red-500"}`} />
-                        <span className={`text-[10px] ${pumpFunAvailable ? "text-green-400" : "text-red-400"}`}>PUMP</span>
+                          <div className="relative flex h-2 w-2">
+                            {pumpFunAvailable && <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>}
+                            <span className={`relative inline-flex rounded-full h-2 w-2 ${pumpFunAvailable ? "bg-green-500" : "bg-red-500"}`}></span>
+                          </div>
+                          <span className={`text-[10px] ${pumpFunAvailable ? "text-green-400" : "text-red-400"}`}>PUMP</span>
                         </div>
                         <div className="flex items-center gap-1">
-                        <div className={`w-2 h-2 rounded-full ${funderBalance !== null && funderBalance > 0.1 ? "bg-green-500" : "bg-orange-500"}`} />
-                        <span className={`text-[10px] ${funderBalance !== null && funderBalance > 0.1 ? "text-green-400" : "text-orange-400"}`}>FUNDING</span>
+                          <div className="relative flex h-2 w-2">
+                            {funderBalance !== null && funderBalance > 0.1 && <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>}
+                            <span className={`relative inline-flex rounded-full h-2 w-2 ${funderBalance !== null && funderBalance > 0.1 ? "bg-green-500" : "bg-orange-500"}`}></span>
+                          </div>
+                          <span className={`text-[10px] ${funderBalance !== null && funderBalance > 0.1 ? "text-green-400" : "text-orange-400"}`}>FUNDING</span>
                         </div>
                     </div>
                     <Button
@@ -2295,7 +2338,7 @@ export default function DashboardPage() {
                 </CardTitle>
               </CardHeader>
               <CardContent className="p-2">
-                <div className="h-32 overflow-y-auto font-mono text-[9px] text-green-400/80 p-2 bg-black/50 rounded border border-neutral-800/50">
+                <div className="h-32 overflow-y-auto font-mono text-[9px] text-green-400/80 p-2 bg-black/50 rounded border border-neutral-800/50 scrollbar-thin scrollbar-thumb-neutral-700 scrollbar-track-transparent">
                   {systemLogs.length === 0 ? (
                     <div className="text-slate-600 italic">System ready. Waiting for events...</div>
                   ) : (
@@ -2341,7 +2384,14 @@ export default function DashboardPage() {
                                 priority
                               />
                             ) : (
-                              <div className="text-[9px] text-neutral-400">No image</div>
+                              <div
+                                className="flex h-full w-full items-center justify-center text-[20px] font-bold text-white/50"
+                                style={{
+                                  background: `linear-gradient(135deg, hsl(${selectedToken?.symbol?.charCodeAt(0) || 0 * 10}, 70%, 50%), hsl(${selectedToken?.symbol?.charCodeAt(1) || 0 * 15}, 70%, 30%))`
+                                }}
+                              >
+                                {selectedToken?.symbol?.slice(0, 1) || "?"}
+                              </div>
                             )}
                           </div>
                           <div className="grid flex-1 grid-cols-[120px_1fr] gap-x-2 gap-y-1 text-[11px]">
@@ -2401,7 +2451,7 @@ export default function DashboardPage() {
                           <div className="text-slate-500">Current price (SOL)</div>
                           <div className="text-white font-mono">
                             {tokenFinanceLoading
-                              ? "..."
+                              ? <Skeleton className="h-3 w-16" />
                               : currentPriceSol == null
                               ? "-"
                               : currentPriceSol.toFixed(6)}
@@ -2409,7 +2459,7 @@ export default function DashboardPage() {
                           <div className="text-slate-500">Market cap</div>
                           <div className="text-white font-mono">
                             {tokenFinanceLoading
-                              ? "..."
+                              ? <Skeleton className="h-3 w-20" />
                               : marketCapSol == null
                               ? "-"
                               : `${marketCapSol.toLocaleString(undefined, { maximumFractionDigits: 2 })} SOL`}
@@ -2417,7 +2467,7 @@ export default function DashboardPage() {
                           <div className="text-slate-500">Total supply</div>
                           <div className="text-white font-mono">
                             {tokenFinanceLoading
-                              ? "..."
+                              ? <Skeleton className="h-3 w-24" />
                               : totalSupplyValue == null
                               ? "-"
                               : totalSupplyValue.toLocaleString()}
@@ -2425,7 +2475,7 @@ export default function DashboardPage() {
                           <div className="text-slate-500">SOL reserves / Liquidity</div>
                           <div className="text-white font-mono">
                             {tokenFinanceLoading
-                              ? "..."
+                              ? <Skeleton className="h-3 w-16" />
                               : tokenFinance?.liquiditySol == null
                               ? "-"
                               : `${tokenFinance.liquiditySol.toFixed(4)} SOL`}
@@ -2433,19 +2483,19 @@ export default function DashboardPage() {
                           <div className="text-slate-500">Funding balance</div>
                           <div className="text-white font-mono">
                             {tokenFinanceLoading
-                              ? "..."
+                              ? <Skeleton className="h-3 w-16" />
                               : tokenFinance?.fundingBalanceSol == null
                               ? "-"
                               : `${tokenFinance.fundingBalanceSol.toFixed(4)} SOL`}
                           </div>
                           <div className="text-slate-500">Holders count</div>
                           <div className="text-white font-mono">
-                            {holdersLoading ? "..." : holderRows.length.toLocaleString()}
+                            {holdersLoading ? <Skeleton className="h-3 w-12" /> : holderRows.length.toLocaleString()}
                           </div>
                           <div className="text-slate-500">24h volume</div>
                           <div className="text-white font-mono">
                             {tokenFinanceLoading
-                              ? "..."
+                              ? <Skeleton className="h-3 w-20" />
                               : tokenFinance?.volumeSol != null
                               ? `${tokenFinance.volumeSol.toFixed(2)} SOL`
                               : tokenFinance?.volumeUsd != null
@@ -2462,18 +2512,41 @@ export default function DashboardPage() {
           </div>
 
           <div className="xl:col-span-5 space-y-1">
-            <Card className="bg-red-950/20 border-red-500/50">
-              <CardHeader className="py-1 px-2">
-                <CardTitle className="text-xs font-medium text-white tracking-wider flex items-center gap-2 border-b border-slate-800 pb-2">
-                  <Flame className="w-4 h-4 text-red-400" />
-                  RUGPULL
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-1 px-2 pb-2">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-1">
+            <Collapsible defaultOpen>
+              <Card className="bg-red-950/20 border-red-500/50">
+                <CardHeader className="py-1 px-2">
+                  <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+                    <CardTitle className="text-xs font-medium text-white tracking-wider flex items-center gap-2">
+                      <Flame className="w-4 h-4 text-red-400" />
+                      RUGPULL
+                    </CardTitle>
+                    <CollapsibleTrigger asChild>
+                      <Button variant="ghost" size="sm" className="h-6 w-6 p-0 hover:bg-white/10">
+                        <ChevronDown className="h-4 w-4 text-slate-400" />
+                        <span className="sr-only">Toggle Rugpull</span>
+                      </Button>
+                    </CollapsibleTrigger>
+                  </div>
+                </CardHeader>
+                <CollapsibleContent>
+                  <CardContent className="space-y-1 px-2 pb-2">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-1">
                   <div className="space-y-1">
-                    <Label className="text-[10px] text-slate-600">Slippage %</Label>
-                    <Input
+                    <div className="flex items-center gap-1">
+                      <Label className="text-[10px] text-slate-600">Slippage %</Label>
+                      <TooltipProvider>
+                        <Tooltip>
+                          <TooltipTrigger>
+                            <HelpCircle className="w-3 h-3 text-slate-500" />
+                          </TooltipTrigger>
+                          <TooltipContent>
+                            <p>Slippage tolerance for sell transactions.</p>
+                          </TooltipContent>
+                        </Tooltip>
+                      </TooltipProvider>
+                    </div>
+                    <InputWithSuffix
+                      suffix="%"
                       type="number"
                       placeholder="20"
                       value={rugpullSlippage}
@@ -2564,19 +2637,30 @@ export default function DashboardPage() {
                             {withdrawLoading ? "Withdrawing..." : "Withdraw dev → funder"}
                         </Button>
                     </div>
-                </div>
-              </CardContent>
-            </Card>
+                    </div>
+                  </CardContent>
+                </CollapsibleContent>
+              </Card>
+            </Collapsible>
 
-            <Card className={`bg-neutral-900 border-neutral-700 transition-colors ${volumeRunning ? "border-green-500/50 shadow-[0_0_15px_-3px_rgba(34,197,94,0.1)]" : ""}`}>
-              <CardHeader className="py-1 px-2">
-                <div className="flex items-center justify-between">
-                  <CardTitle className="text-xs font-medium text-white tracking-wider flex items-center gap-2 border-b border-slate-800 pb-2">
-                    <Rocket className={`w-4 h-4 text-blue-400 ${volumeRunning ? "animate-pulse" : ""}`} />
-                    VOLUME BOT
-                  </CardTitle>
-                  <div className="flex items-center gap-2">
-                    <Badge className={volumeRunning ? "bg-green-500/20 text-green-400" : "bg-orange-500/20 text-orange-400"}>
+            <Collapsible defaultOpen>
+              <Card className={`bg-neutral-900 border-neutral-700 transition-colors ${volumeRunning ? "border-green-500/50 shadow-[0_0_15px_-3px_rgba(34,197,94,0.1)]" : ""}`}>
+                <CardHeader className="py-1 px-2">
+                  <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+                    <div className="flex items-center gap-2">
+                      <CardTitle className="text-xs font-medium text-white tracking-wider flex items-center gap-2">
+                        <Rocket className={`w-4 h-4 text-blue-400 ${volumeRunning ? "animate-pulse" : ""}`} />
+                        VOLUME BOT
+                      </CardTitle>
+                      <CollapsibleTrigger asChild>
+                        <Button variant="ghost" size="sm" className="h-6 w-6 p-0 hover:bg-white/10">
+                          <ChevronDown className="h-4 w-4 text-slate-400" />
+                          <span className="sr-only">Toggle Volume Bot</span>
+                        </Button>
+                      </CollapsibleTrigger>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Badge className={volumeRunning ? "bg-green-500/20 text-green-400" : "bg-orange-500/20 text-orange-400"}>
                       {volumeRunning ? "RUNNING" : (volumeBotStatus?.totalTrades > 0 ? "PAUSED" : "READY")}
                     </Badge>
                     <div className="text-[9px] text-slate-300 font-medium">
@@ -2604,11 +2688,12 @@ export default function DashboardPage() {
                     >
                       <Settings className="w-4 h-4" />
                     </Button>
+                    </div>
                   </div>
-                </div>
-              </CardHeader>
-              <CardContent className="space-y-1 px-2 pb-2">
-                <div className="flex flex-wrap items-center gap-1">
+                </CardHeader>
+                <CollapsibleContent>
+                  <CardContent className="space-y-1 px-2 pb-2">
+                    <div className="flex flex-wrap items-center gap-1">
                   {volumeRunning ? (
                     <Button onClick={stopVolumeBot} className="h-8 bg-orange-500 hover:bg-orange-600 text-black">
                       <Pause className="w-4 h-4 mr-2" />
@@ -2621,9 +2706,9 @@ export default function DashboardPage() {
                     </Button>
                   )}
                   <div className="flex items-center gap-3 text-[11px] text-neutral-400">
-                    <span>Pairs: {loading ? "..." : volumeBotStats.activePairs}</span>
-                    <span>Trades: {loading ? "..." : volumeBotStats.tradesToday.toLocaleString()}</span>
-                    <span>Vol: {loading ? "..." : `${parseFloat(volumeBotStats.volumeGenerated).toLocaleString()} SOL`}</span>
+                    <span>Pairs: {loading ? <Skeleton className="h-3 w-4 inline-block" /> : volumeBotStats.activePairs}</span>
+                    <span>Trades: {loading ? <Skeleton className="h-3 w-8 inline-block" /> : volumeBotStats.tradesToday.toLocaleString()}</span>
+                    <span>Vol: {loading ? <Skeleton className="h-3 w-12 inline-block" /> : `${parseFloat(volumeBotStats.volumeGenerated).toLocaleString()} SOL`}</span>
                   </div>
                 </div>
 
@@ -2651,7 +2736,7 @@ export default function DashboardPage() {
                   </span>
                 </div>
 
-                <div className="resize-y overflow-auto min-h-[120px] p-1 border border-neutral-800/50 rounded-md bg-neutral-950/20">
+                <div className="resize-y overflow-auto min-h-[120px] p-1 border border-neutral-800/50 rounded-md bg-neutral-950/20 scrollbar-thin scrollbar-thumb-neutral-700 scrollbar-track-transparent">
                   {mainStageWallets.length > 0 && (
                     <div className="flex items-center justify-between px-2 py-1 text-[9px] text-neutral-500 font-mono border-b border-neutral-800 mb-1 sticky top-0 bg-neutral-900 z-10">
                       <span>WALLET</span>
@@ -2673,10 +2758,12 @@ export default function DashboardPage() {
                         />
                       ))
                     )}
+                    </div>
                   </div>
-                </div>
-              </CardContent>
-            </Card>
+                  </CardContent>
+                </CollapsibleContent>
+              </Card>
+            </Collapsible>
           </div>
 
           <div className="xl:col-span-12 grid grid-cols-1 xl:grid-cols-2 gap-1">
@@ -2729,13 +2816,15 @@ export default function DashboardPage() {
                 <CardHeader className="py-1 px-2">
                   <div className="flex items-center justify-between border-b border-slate-800 pb-2">
                     <TabsList className="h-7 bg-neutral-800 border border-neutral-700">
-                      <TabsTrigger value="trades" className="text-[10px]">
+                      <TabsTrigger value="trades" className="text-[10px] gap-1">
                         <Activity className="w-3 h-3 mr-1" />
                         LIVE TRADES
+                        {trades.length > 0 && <span className="ml-1 text-[8px] bg-neutral-700 px-1 rounded-full text-neutral-300">{trades.length}</span>}
                       </TabsTrigger>
-                      <TabsTrigger value="logs" className="text-[10px]">
+                      <TabsTrigger value="logs" className="text-[10px] gap-1">
                         <AlertTriangle className="w-3 h-3 mr-1" />
                         SYSTEM LOGS
+                        {systemLogs.length > 0 && <span className="ml-1 text-[8px] bg-neutral-700 px-1 rounded-full text-neutral-300">{systemLogs.length}</span>}
                       </TabsTrigger>
                     </TabsList>
                   </div>
@@ -2749,9 +2838,9 @@ export default function DashboardPage() {
                         trades.slice(0, 6).map((trade) => (
                           <div key={trade.id} className="flex items-center justify-between text-[11px]">
                             <div className="flex items-center gap-2">
-                              <Badge className={trade.type === "buy" ? "bg-green-500/20 text-green-400" : "bg-red-500/20 text-red-400"}>
-                                {trade.type.toUpperCase()}
-                              </Badge>
+                              <div className={`p-1 rounded-full ${trade.type === "buy" ? "bg-green-500/20 text-green-400" : "bg-red-500/20 text-red-400"}`}>
+                                {trade.type === "buy" ? <ArrowUpRight className="w-3 h-3" /> : <ArrowDownLeft className="w-3 h-3" />}
+                              </div>
                               <span className="font-mono text-neutral-400">
                                 {trade.mintAddress.slice(0, 6)}...{trade.mintAddress.slice(-4)}
                               </span>
@@ -2777,7 +2866,7 @@ export default function DashboardPage() {
                         Clear
                       </Button>
                     </div>
-                    <div className="space-y-1 max-h-24 overflow-y-auto bg-neutral-950 rounded p-2">
+                    <div className="space-y-1 max-h-24 overflow-y-auto bg-neutral-950 rounded p-2 scrollbar-thin scrollbar-thumb-neutral-700 scrollbar-track-transparent">
                       {systemLogs.length === 0 && (!volumeBotStatus || volumeBotStatus.recentLogs?.length === 0) ? (
                         <div className="text-slate-400 text-xs">No logs yet</div>
                       ) : (
@@ -3207,7 +3296,8 @@ export default function DashboardPage() {
               <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
                 <div className="space-y-1">
                   <Label className="text-[10px] text-black">Dev buy (SOL)</Label>
-                  <Input
+                  <InputWithSuffix
+                    suffix="SOL"
                     type="number"
                     step="0.001"
                     value={devBuyAmount}
@@ -3217,7 +3307,8 @@ export default function DashboardPage() {
                 </div>
                 <div className="space-y-1">
                   <Label className="text-[10px] text-black">Default buyer (SOL)</Label>
-                  <Input
+                  <InputWithSuffix
+                    suffix="SOL"
                     type="number"
                     step="0.001"
                     value={buyAmountPerWallet}
@@ -3352,7 +3443,8 @@ export default function DashboardPage() {
             {volumeBotConfig.amountMode === "fixed" && (
               <div className="space-y-1">
                 <Label className="text-xs text-neutral-400">Fixed Amount (SOL)</Label>
-                <Input
+                <InputWithSuffix
+                  suffix="SOL"
                   type="number"
                   step="0.0001"
                   className="bg-background border-border text-xs focus-visible:ring-1 focus-visible:ring-cyan-500"
@@ -3366,7 +3458,8 @@ export default function DashboardPage() {
               <div className="grid grid-cols-2 gap-1">
                 <div className="space-y-1">
                   <Label className="text-xs text-neutral-400">Min SOL</Label>
-                  <Input
+                  <InputWithSuffix
+                    suffix="SOL"
                     type="number"
                     step="0.0001"
                     className="bg-background border-border text-xs focus-visible:ring-1 focus-visible:ring-cyan-500"
@@ -3376,7 +3469,8 @@ export default function DashboardPage() {
                 </div>
                 <div className="space-y-1">
                   <Label className="text-xs text-neutral-400">Max SOL</Label>
-                  <Input
+                  <InputWithSuffix
+                    suffix="SOL"
                     type="number"
                     step="0.0001"
                     className="bg-background border-border text-xs focus-visible:ring-1 focus-visible:ring-cyan-500"
@@ -3391,7 +3485,8 @@ export default function DashboardPage() {
               <div className="grid grid-cols-2 gap-1">
                 <div className="space-y-1">
                   <Label className="text-xs text-neutral-400">Min %</Label>
-                  <Input
+                  <InputWithSuffix
+                    suffix="%"
                     type="number"
                     step="0.1"
                     className="bg-background border-border text-xs focus-visible:ring-1 focus-visible:ring-cyan-500"
@@ -3401,7 +3496,8 @@ export default function DashboardPage() {
                 </div>
                 <div className="space-y-1">
                   <Label className="text-xs text-neutral-400">Max %</Label>
-                  <Input
+                  <InputWithSuffix
+                    suffix="%"
                     type="number"
                     step="0.1"
                     className="bg-background border-border text-xs focus-visible:ring-1 focus-visible:ring-cyan-500"
@@ -3414,8 +3510,21 @@ export default function DashboardPage() {
 
             <div className="grid grid-cols-2 gap-1">
               <div className="space-y-1">
-                <Label className="text-xs text-neutral-400">Slippage %</Label>
-                <Input
+                <div className="flex items-center gap-1">
+                  <Label className="text-xs text-neutral-400">Slippage %</Label>
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger>
+                        <HelpCircle className="w-3 h-3 text-neutral-500" />
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        <p>Max price impact allowance per trade</p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                </div>
+                <InputWithSuffix
+                  suffix="%"
                   type="number"
                   step="0.1"
                   className="bg-background border-border text-xs focus-visible:ring-1 focus-visible:ring-cyan-500"
@@ -3424,8 +3533,21 @@ export default function DashboardPage() {
                 />
               </div>
               <div className="space-y-1">
-                <Label className="text-xs text-neutral-400">Priority Fee (SOL)</Label>
-                <Input
+                <div className="flex items-center gap-1">
+                  <Label className="text-xs text-neutral-400">Priority Fee (SOL)</Label>
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger>
+                        <HelpCircle className="w-3 h-3 text-neutral-500" />
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        <p>Additional fee to boost transaction speed</p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                </div>
+                <InputWithSuffix
+                  suffix="SOL"
                   type="number"
                   step="0.0001"
                   className="bg-background border-border text-xs focus-visible:ring-1 focus-visible:ring-cyan-500"
