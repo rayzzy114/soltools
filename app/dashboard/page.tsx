@@ -14,7 +14,7 @@ import { Switch } from "@/components/ui/switch"
 import { Slider } from "@/components/ui/slider"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Alert, AlertDescription } from "@/components/ui/alert"
-import { TrendingUp, TrendingDown, Coins, Activity, Users, Play, Pause, Settings, RefreshCw, Flame, Rocket, AlertTriangle, BarChart3, Trash2, Upload, Wallet, Download, ShieldCheck, Zap, Terminal, Copy } from "lucide-react"
+import { TrendingUp, TrendingDown, Coins, Activity, Users, Play, Pause, Settings, RefreshCw, Flame, Rocket, AlertTriangle, BarChart3, Trash2, Upload, Wallet, Download, ShieldCheck, Zap, Terminal, Copy, HelpCircle, ArrowUpRight, ArrowDownLeft, ChevronDown, ChevronUp } from "lucide-react"
 import { PnLSummaryCard, MiniPnLCard } from "@/components/pnl/PnLCard"
 import type { PnLSummary, TokenPnL, Trade } from "@/lib/pnl/types"
 import { toast } from "sonner"
@@ -24,6 +24,10 @@ import { getBondingCurveAddress } from "@/lib/solana/pumpfun-sdk"
 import { TokenHolderTracker, type HolderRow } from "@/lib/solana/holder-tracker"
 import { clampNumber } from "@/lib/ui-utils"
 import { BuyerWalletList, DevWalletSelect } from "./MemoizedLists"
+import { InputWithSuffix } from "@/components/ui-custom/input-with-suffix"
+import { Skeleton } from "@/components/ui/skeleton"
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
 import {
   readStoredBundlerWallets,
   importStoredBundlerWallets,
@@ -97,71 +101,119 @@ const PRICE_SERIES_MAX_POINTS = 60
 const DASHBOARD_POLL_INTERVAL_MS = 5 * 60 * 1000
 
 // Reusable Copy Button for lists
-const CopyButton = ({ text, className }: { text: string, className?: string }) => (
-  <Button
-    variant="ghost"
-    size="icon"
-    className={`h-4 w-4 text-slate-400 hover:text-slate-200 ${className}`}
-    onClick={(e) => {
-      e.stopPropagation()
-      navigator.clipboard.writeText(text)
-        .then(() => toast.success("Copied to clipboard"))
-        .catch(() => toast.error("Failed to copy"))
-    }}
-    aria-label="Copy"
-    title="Copy"
-  >
-    <Copy className="w-3 h-3" />
-  </Button>
-)
+const CopyButton = ({ text, className }: { text: string, className?: string }) => {
+  const [copied, setCopied] = useState(false)
+
+  useEffect(() => {
+    if (copied) {
+      const timeout = setTimeout(() => setCopied(false), 2000)
+      return () => clearTimeout(timeout)
+    }
+  }, [copied])
+
+  return (
+    <Button
+      variant="ghost"
+      size="icon"
+      className={`h-4 w-4 text-slate-400 hover:text-green-400 transition-colors ${className}`}
+      onClick={(e) => {
+        e.stopPropagation()
+        navigator.clipboard.writeText(text)
+          .then(() => {
+            setCopied(true)
+            toast.success("Copied to clipboard")
+          })
+          .catch(() => toast.error("Failed to copy"))
+      }}
+      aria-label="Copy"
+      title="Copy"
+    >
+      {copied ? <ShieldCheck className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+    </Button>
+  )
+}
 
 // Optimized Wallet Row Component
 const WalletRow = memo(({ wallet, index, onSelect }: { wallet: BundlerWallet, index: number, onSelect: (w: BundlerWallet) => void }) => {
   let borderColor = "border-slate-500"
   let badgeBg = "bg-slate-100"
-  let badgeText = "text-slate-800"
+  let badgeText = "text-slate-900" // Higher contrast
 
   if (wallet.role === 'dev') {
     borderColor = "border-purple-500 hover:border-purple-400"
     badgeBg = "bg-purple-100"
-    badgeText = "text-purple-800"
+    badgeText = "text-purple-900"
   } else if (wallet.role === 'buyer') {
     borderColor = "border-cyan-500 hover:border-cyan-400"
     badgeBg = "bg-cyan-100"
-    badgeText = "text-cyan-800"
+    badgeText = "text-cyan-900"
   } else if (wallet.role === 'funder') {
     borderColor = "border-green-500 hover:border-green-400"
     badgeBg = "bg-green-100"
-    badgeText = "text-green-800"
+    badgeText = "text-green-900"
   } else if (wallet.role === 'volume_bot' || wallet.role === 'bot') {
     borderColor = "border-orange-500 hover:border-orange-400"
     badgeBg = "bg-orange-100"
-    badgeText = "text-orange-800"
+    badgeText = "text-orange-900"
   }
 
   return (
     <button
       type="button"
       onClick={() => onSelect(wallet)}
-      className={`h-10 rounded border ${borderColor} bg-white p-1 text-left text-[9px] leading-tight transition`}
+      className={`h-11 rounded border ${borderColor} bg-white p-1.5 text-left text-[10px] leading-tight transition hover:bg-slate-50 group focus-visible:ring-1 focus-visible:ring-cyan-500`}
     >
-      <div className="flex items-center justify-between gap-1">
-        <div className="text-[9px] truncate text-black font-bold">
-          {index + 1}. {wallet.label || 'Wallet'}
+      <div className="flex items-center justify-between gap-1 mb-0.5">
+        <div className="text-[10px] truncate text-black font-extrabold group-hover:text-blue-700 transition-colors">
+          #{index + 1} {wallet.label ? `- ${wallet.label}` : ''}
         </div>
         {wallet.role && wallet.role !== 'project' && (
-          <span className={`text-[8px] ${badgeBg} ${badgeText} px-1 rounded uppercase min-w-[20px] text-center truncate max-w-[40px]`}>
+          <span className={`text-[9px] font-bold ${badgeBg} ${badgeText} px-1.5 py-0.5 rounded uppercase min-w-[24px] text-center truncate shadow-sm`}>
             {wallet.role}
           </span>
         )}
       </div>
-      <div className="font-mono text-[9px] text-neutral-900 truncate">
-        {wallet.publicKey.slice(0, 6)}...{wallet.publicKey.slice(-4)}
+      <div className="flex justify-between items-center gap-1">
+          <div className="font-mono text-[10px] text-black font-semibold truncate">
+            {wallet.publicKey.slice(0, 6)}...{wallet.publicKey.slice(-4)}
+          </div>
+          <div className="font-mono text-[10px] text-neutral-800">
+             {wallet.solBalance.toFixed(3)}
+          </div>
       </div>
     </button>
   )
 })
 WalletRow.displayName = "WalletRow"
+
+// Reusable Empty State
+const EmptyState = ({ icon: Icon, text }: { icon: any, text: string }) => (
+  <div className="flex flex-col items-center justify-center py-8 text-neutral-500 gap-2">
+    <Icon className="w-8 h-8 opacity-20" />
+    <span className="text-xs font-medium opacity-60">{text}</span>
+  </div>
+)
+
+// Log Helper
+const LogEntry = memo(({ log }: { log: string }) => {
+  const parts = log.match(/^\[(.*?)\] (.*?): (.*)$/)
+  if (!parts) return <div>{log}</div>
+
+  const [, time, type, message] = parts
+  let typeColor = "text-slate-400"
+  if (type === "ERROR") typeColor = "text-red-400 font-bold"
+  else if (type === "SUCCESS") typeColor = "text-green-400 font-bold"
+  else if (type === "INFO") typeColor = "text-blue-300"
+
+  return (
+    <div className="whitespace-nowrap hover:bg-white/5 px-1 rounded transition-colors">
+      <span className="text-slate-500 mr-2">[{time}]</span>
+      <span className={`${typeColor} mr-2 w-16 inline-block`}>{type}</span>
+      <span className="text-slate-300">{message}</span>
+    </div>
+  )
+})
+LogEntry.displayName = "LogEntry"
 
 /**
  * Renders the dashboard UI for launching tokens, managing bundler wallets, running the volume bot, and viewing token/market data.
@@ -236,6 +288,8 @@ export default function DashboardPage() {
   const [cloneTokenMint, setCloneTokenMint] = useState("")
   const [priceSeries, setPriceSeries] = useState<Array<{ time: string; price: number }>>([])
   const [rugpullLoading, setRugpullLoading] = useState(false)
+  const [collectLoading, setCollectLoading] = useState(false)
+  const [withdrawLoading, setWithdrawLoading] = useState(false)
   const [systemLogs, setSystemLogs] = useState<string[]>([])
   const [syncingBalances, setSyncingBalances] = useState(false)
   const [rugpullSlippage, setRugpullSlippage] = useState("20")
@@ -1329,6 +1383,7 @@ export default function DashboardPage() {
 
     if (!confirmed) return
 
+    setRugpullLoading(true)
     try {
       const res = await fetch("/api/bundler/rugpull", {
         method: "POST",
@@ -1353,6 +1408,8 @@ export default function DashboardPage() {
     } catch (error: any) {
       console.error("rugpull error:", error)
       toast.error(`rugpull failed: ${error.message}`)
+    } finally {
+      setRugpullLoading(false)
     }
   }, [selectedToken, activeWalletsWithTokens, jitoTipSol, priorityFeeSol, jitoRegion, loadSavedWallets, rugpullSlippage])
 
@@ -1368,6 +1425,7 @@ export default function DashboardPage() {
       return
     }
 
+    setRugpullLoading(true)
     try {
       const res = await fetch("/api/bundler/rugpull", {
         method: "POST",
@@ -1391,6 +1449,8 @@ export default function DashboardPage() {
     } catch (error: any) {
       console.error("dev rugpull error:", error)
       toast.error(`dev rugpull failed: ${error.message}`)
+    } finally {
+      setRugpullLoading(false)
     }
   }, [
     selectedToken,
@@ -1429,6 +1489,7 @@ export default function DashboardPage() {
         return
     }
 
+    setCollectLoading(true)
     try {
       const res = await fetch("/api/bundler/wallets", {
         method: "POST",
@@ -1451,6 +1512,8 @@ export default function DashboardPage() {
     } catch (error: any) {
         console.error("collect error:", error)
         toast.error("Failed to collect SOL")
+    } finally {
+      setCollectLoading(false)
     }
   }, [launchDevWallet, bundlerWallets, activeWallets, loadSavedWallets, addSystemLog])
 
@@ -1476,6 +1539,7 @@ export default function DashboardPage() {
       return
     }
 
+    setWithdrawLoading(true)
     try {
       const res = await fetch("/api/bundler/wallets", {
         method: "POST",
@@ -1498,6 +1562,8 @@ export default function DashboardPage() {
     } catch (error: any) {
       console.error("withdraw error:", error)
       toast.error("Failed to withdraw")
+    } finally {
+      setWithdrawLoading(false)
     }
   }, [addSystemLog, devWalletRecord, funderWalletRecord, loadSavedWallets])
 
@@ -1980,6 +2046,27 @@ export default function DashboardPage() {
     return () => clearInterval(interval)
   }, [fetchDashboardData])
 
+  // Keyboard Shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.shiftKey && e.key === "B") {
+        e.preventDefault()
+        if (volumeRunning) {
+          stopVolumeBot()
+        } else {
+          startVolumeBot()
+        }
+      }
+      if (e.shiftKey && e.key === "R") {
+        e.preventDefault()
+        fetchDashboardData()
+        toast.info("Refreshed data")
+      }
+    }
+    window.addEventListener("keydown", handleKeyDown)
+    return () => window.removeEventListener("keydown", handleKeyDown)
+  }, [volumeRunning, stopVolumeBot, startVolumeBot, fetchDashboardData])
+
   // Load wallets on mount
   useEffect(() => {
     loadSavedWallets()
@@ -2101,18 +2188,32 @@ export default function DashboardPage() {
           <div className="flex items-center gap-1">
             <Label className="text-xs text-slate-600">Token</Label>
             <Select value={selectedTokenValue || ""} onValueChange={handleTokenSelect}>
-              <SelectTrigger className="h-8 w-44 bg-background border-border text-xs">
+              <SelectTrigger className="h-8 w-44 bg-background border-border text-xs focus-visible:ring-1 focus-visible:ring-cyan-500">
                 <SelectValue placeholder="Select token" />
               </SelectTrigger>
               <SelectContent>
                 {tokens.map((token) => (
                   <SelectItem key={token.mintAddress || token.symbol} value={token.mintAddress || ""}>
-                    {token.symbol ||
-                      token.name ||
-                      (token.mintAddress
-                        ? `${token.mintAddress.slice(0, 6)}...${token.mintAddress.slice(-4)}`
-                        : "Unknown")}
-                    {token.price ? ` - ${token.price}` : ""}
+                    <div className="flex items-center gap-2">
+                      <div className="relative h-4 w-4 rounded-full overflow-hidden shrink-0">
+                        {token.imageUrl ? (
+                          <Image src={token.imageUrl} alt={token.symbol} fill className="object-cover" sizes="16px" />
+                        ) : (
+                          <div
+                            className="h-full w-full flex items-center justify-center text-[8px] font-bold text-white/70"
+                            style={{
+                              background: `linear-gradient(135deg, hsl(${(token.symbol?.charCodeAt(0) || 0) * 10}, 70%, 50%), hsl(${(token.symbol?.charCodeAt(1) || 0) * 15}, 70%, 30%))`
+                            }}
+                          >
+                            {token.symbol?.slice(0, 1)}
+                          </div>
+                        )}
+                      </div>
+                      <span className="font-medium text-neutral-900">{token.symbol || "Unknown"}</span>
+                      <span className="text-neutral-500 font-mono text-[10px]">
+                        {token.mintAddress ? `${token.mintAddress.slice(0, 4)}...${token.mintAddress.slice(-4)}` : ""}
+                      </span>
+                    </div>
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -2168,9 +2269,16 @@ export default function DashboardPage() {
             <Card className="bg-neutral-900 border-neutral-800">
               <CardContent className="p-3 flex flex-col gap-1">
                 <span className="text-[10px] text-slate-400 font-medium tracking-wider">AGGREGATED PnL (UNREALIZED)</span>
-                <span className={`text-lg font-bold font-mono ${unifiedStats.unrealizedPnl >= 0 ? "text-green-400" : "text-red-400"}`}>
-                  {unifiedStats.unrealizedPnl.toFixed(4)} SOL
-                </span>
+                <div className="flex items-center gap-2">
+                  <span className={`text-lg font-bold font-mono ${unifiedStats.unrealizedPnl >= 0 ? "text-green-400" : "text-red-400"}`}>
+                    {unifiedStats.unrealizedPnl.toFixed(4)} SOL
+                  </span>
+                  {unifiedStats.unrealizedPnl > 0 ? (
+                    <TrendingUp className="w-4 h-4 text-green-400" />
+                  ) : unifiedStats.unrealizedPnl < 0 ? (
+                    <TrendingDown className="w-4 h-4 text-red-400" />
+                  ) : null}
+                </div>
                 <span className="text-[9px] text-slate-500">Estimated value</span>
               </CardContent>
             </Card>
@@ -2188,16 +2296,25 @@ export default function DashboardPage() {
                     <div className="flex items-center gap-2">
                         <span className="text-[10px] text-slate-400">STATUS:</span>
                         <div className="flex items-center gap-1">
-                        <div className={`w-2 h-2 rounded-full ${rpcHealthy ? "bg-green-500" : "bg-red-500"}`} />
-                        <span className={`text-[10px] ${rpcHealthy ? "text-green-400" : "text-red-400"}`}>RPC</span>
+                          <div className="relative flex h-2 w-2">
+                            {rpcHealthy && <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>}
+                            <span className={`relative inline-flex rounded-full h-2 w-2 ${rpcHealthy ? "bg-green-500" : "bg-red-500"}`}></span>
+                          </div>
+                          <span className={`text-[10px] ${rpcHealthy ? "text-green-400" : "text-red-400"}`}>RPC</span>
                         </div>
                         <div className="flex items-center gap-1">
-                        <div className={`w-2 h-2 rounded-full ${pumpFunAvailable ? "bg-green-500" : "bg-red-500"}`} />
-                        <span className={`text-[10px] ${pumpFunAvailable ? "text-green-400" : "text-red-400"}`}>PUMP</span>
+                          <div className="relative flex h-2 w-2">
+                            {pumpFunAvailable && <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>}
+                            <span className={`relative inline-flex rounded-full h-2 w-2 ${pumpFunAvailable ? "bg-green-500" : "bg-red-500"}`}></span>
+                          </div>
+                          <span className={`text-[10px] ${pumpFunAvailable ? "text-green-400" : "text-red-400"}`}>PUMP</span>
                         </div>
                         <div className="flex items-center gap-1">
-                        <div className={`w-2 h-2 rounded-full ${funderBalance !== null && funderBalance > 0.1 ? "bg-green-500" : "bg-orange-500"}`} />
-                        <span className={`text-[10px] ${funderBalance !== null && funderBalance > 0.1 ? "text-green-400" : "text-orange-400"}`}>FUNDING</span>
+                          <div className="relative flex h-2 w-2">
+                            {funderBalance !== null && funderBalance > 0.1 && <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>}
+                            <span className={`relative inline-flex rounded-full h-2 w-2 ${funderBalance !== null && funderBalance > 0.1 ? "bg-green-500" : "bg-orange-500"}`}></span>
+                          </div>
+                          <span className={`text-[10px] ${funderBalance !== null && funderBalance > 0.1 ? "text-green-400" : "text-orange-400"}`}>FUNDING</span>
                         </div>
                     </div>
                     <Button
@@ -2221,14 +2338,12 @@ export default function DashboardPage() {
                 </CardTitle>
               </CardHeader>
               <CardContent className="p-2">
-                <div className="h-32 overflow-y-auto font-mono text-[9px] text-green-400/80 p-2 bg-black/50 rounded border border-neutral-800/50">
+                <div className="h-32 overflow-y-auto font-mono text-[9px] text-green-400/80 p-2 bg-black/50 rounded border border-neutral-800/50 scrollbar-thin scrollbar-thumb-neutral-700 scrollbar-track-transparent">
                   {systemLogs.length === 0 ? (
                     <div className="text-slate-600 italic">System ready. Waiting for events...</div>
                   ) : (
                     systemLogs.map((log, i) => (
-                      <div key={i} className="whitespace-nowrap">
-                        {log}
-                      </div>
+                      <LogEntry key={i} log={log} />
                     ))
                   )}
                 </div>
@@ -2269,7 +2384,14 @@ export default function DashboardPage() {
                                 priority
                               />
                             ) : (
-                              <div className="text-[9px] text-neutral-400">No image</div>
+                              <div
+                                className="flex h-full w-full items-center justify-center text-[20px] font-bold text-white/50"
+                                style={{
+                                  background: `linear-gradient(135deg, hsl(${selectedToken?.symbol?.charCodeAt(0) || 0 * 10}, 70%, 50%), hsl(${selectedToken?.symbol?.charCodeAt(1) || 0 * 15}, 70%, 30%))`
+                                }}
+                              >
+                                {selectedToken?.symbol?.slice(0, 1) || "?"}
+                              </div>
                             )}
                           </div>
                           <div className="grid flex-1 grid-cols-[120px_1fr] gap-x-2 gap-y-1 text-[11px]">
@@ -2329,7 +2451,7 @@ export default function DashboardPage() {
                           <div className="text-slate-500">Current price (SOL)</div>
                           <div className="text-white font-mono">
                             {tokenFinanceLoading
-                              ? "..."
+                              ? <Skeleton className="h-3 w-16" />
                               : currentPriceSol == null
                               ? "-"
                               : currentPriceSol.toFixed(6)}
@@ -2337,7 +2459,7 @@ export default function DashboardPage() {
                           <div className="text-slate-500">Market cap</div>
                           <div className="text-white font-mono">
                             {tokenFinanceLoading
-                              ? "..."
+                              ? <Skeleton className="h-3 w-20" />
                               : marketCapSol == null
                               ? "-"
                               : `${marketCapSol.toLocaleString(undefined, { maximumFractionDigits: 2 })} SOL`}
@@ -2345,7 +2467,7 @@ export default function DashboardPage() {
                           <div className="text-slate-500">Total supply</div>
                           <div className="text-white font-mono">
                             {tokenFinanceLoading
-                              ? "..."
+                              ? <Skeleton className="h-3 w-24" />
                               : totalSupplyValue == null
                               ? "-"
                               : totalSupplyValue.toLocaleString()}
@@ -2353,7 +2475,7 @@ export default function DashboardPage() {
                           <div className="text-slate-500">SOL reserves / Liquidity</div>
                           <div className="text-white font-mono">
                             {tokenFinanceLoading
-                              ? "..."
+                              ? <Skeleton className="h-3 w-16" />
                               : tokenFinance?.liquiditySol == null
                               ? "-"
                               : `${tokenFinance.liquiditySol.toFixed(4)} SOL`}
@@ -2361,19 +2483,19 @@ export default function DashboardPage() {
                           <div className="text-slate-500">Funding balance</div>
                           <div className="text-white font-mono">
                             {tokenFinanceLoading
-                              ? "..."
+                              ? <Skeleton className="h-3 w-16" />
                               : tokenFinance?.fundingBalanceSol == null
                               ? "-"
                               : `${tokenFinance.fundingBalanceSol.toFixed(4)} SOL`}
                           </div>
                           <div className="text-slate-500">Holders count</div>
                           <div className="text-white font-mono">
-                            {holdersLoading ? "..." : holderRows.length.toLocaleString()}
+                            {holdersLoading ? <Skeleton className="h-3 w-12" /> : holderRows.length.toLocaleString()}
                           </div>
                           <div className="text-slate-500">24h volume</div>
                           <div className="text-white font-mono">
                             {tokenFinanceLoading
-                              ? "..."
+                              ? <Skeleton className="h-3 w-20" />
                               : tokenFinance?.volumeSol != null
                               ? `${tokenFinance.volumeSol.toFixed(2)} SOL`
                               : tokenFinance?.volumeUsd != null
@@ -2390,23 +2512,46 @@ export default function DashboardPage() {
           </div>
 
           <div className="xl:col-span-5 space-y-1">
-            <Card className="bg-red-950/20 border-red-500/50">
-              <CardHeader className="py-1 px-2">
-                <CardTitle className="text-xs font-medium text-white tracking-wider flex items-center gap-2 border-b border-slate-800 pb-2">
-                  <Flame className="w-4 h-4 text-red-400" />
-                  RUGPULL
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-1 px-2 pb-2">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-1">
+            <Collapsible defaultOpen>
+              <Card className="bg-red-950/20 border-red-500/50">
+                <CardHeader className="py-1 px-2">
+                  <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+                    <CardTitle className="text-xs font-medium text-white tracking-wider flex items-center gap-2">
+                      <Flame className="w-4 h-4 text-red-400" />
+                      RUGPULL
+                    </CardTitle>
+                    <CollapsibleTrigger asChild>
+                      <Button variant="ghost" size="sm" className="h-6 w-6 p-0 hover:bg-white/10">
+                        <ChevronDown className="h-4 w-4 text-slate-400" />
+                        <span className="sr-only">Toggle Rugpull</span>
+                      </Button>
+                    </CollapsibleTrigger>
+                  </div>
+                </CardHeader>
+                <CollapsibleContent>
+                  <CardContent className="space-y-1 px-2 pb-2">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-1">
                   <div className="space-y-1">
-                    <Label className="text-[10px] text-slate-600">Slippage %</Label>
-                    <Input
+                    <div className="flex items-center gap-1">
+                      <Label className="text-[10px] text-slate-600">Slippage %</Label>
+                      <TooltipProvider>
+                        <Tooltip>
+                          <TooltipTrigger>
+                            <HelpCircle className="w-3 h-3 text-slate-500" />
+                          </TooltipTrigger>
+                          <TooltipContent>
+                            <p>Slippage tolerance for sell transactions.</p>
+                          </TooltipContent>
+                        </Tooltip>
+                      </TooltipProvider>
+                    </div>
+                    <InputWithSuffix
+                      suffix="%"
                       type="number"
                       placeholder="20"
                       value={rugpullSlippage}
                       onChange={(e) => setRugpullSlippage(e.target.value)}
-                      className="h-7 bg-background border-border text-xs"
+                      className="h-7 bg-background border-border text-xs focus-visible:ring-1 focus-visible:ring-cyan-500"
                     />
                   </div>
                   <div className="space-y-1">
@@ -2456,19 +2601,19 @@ export default function DashboardPage() {
                 <div className="grid grid-cols-2 gap-1">
                   <Button
                     onClick={rugpullAllWallets}
-                    disabled={!selectedToken || activeWalletsWithTokens.length === 0}
+                    disabled={!selectedToken || activeWalletsWithTokens.length === 0 || rugpullLoading}
                     className="h-6 bg-red-600 hover:bg-red-700 text-[10px]"
                   >
-                    <Flame className="w-3 h-3 mr-1" />
-                    Dump from buyer
+                    <Flame className={`w-3 h-3 mr-1 ${rugpullLoading ? "animate-pulse" : ""}`} />
+                    {rugpullLoading ? "DUMPING..." : "Dump from buyer"}
                   </Button>
                   <Button
                     onClick={rugpullDevWallet}
-                    disabled={!selectedToken || !devWalletRecord}
+                    disabled={!selectedToken || !devWalletRecord || rugpullLoading}
                     className="h-6 bg-red-600 hover:bg-red-700 text-[10px]"
                   >
-                    <Flame className="w-3 h-3 mr-1" />
-                    Dump from dev
+                    <Flame className={`w-3 h-3 mr-1 ${rugpullLoading ? "animate-pulse" : ""}`} />
+                    {rugpullLoading ? "DUMPING..." : "Dump from dev"}
                   </Button>
                 </div>
 
@@ -2477,33 +2622,45 @@ export default function DashboardPage() {
                     <div className="grid grid-cols-2 gap-1">
                         <Button
                             onClick={collectAllToDev}
+                            disabled={collectLoading}
                             className="h-6 bg-blue-600 hover:bg-blue-700 text-[10px]"
                         >
-                            <Wallet className="w-3 h-3 mr-1" />
-                            Collect all → dev
+                            <Wallet className={`w-3 h-3 mr-1 ${collectLoading ? "animate-bounce" : ""}`} />
+                            {collectLoading ? "Collecting..." : "Collect all → dev"}
                         </Button>
                         <Button
                             onClick={withdrawDevToFunder}
-                            disabled={!funderWalletRecord?.publicKey}
+                            disabled={!funderWalletRecord?.publicKey || withdrawLoading}
                             className="h-6 bg-green-600 hover:bg-green-700 text-[10px]"
                         >
-                            <Download className="w-3 h-3 mr-1" />
-                            Withdraw dev → funder
+                            <Download className={`w-3 h-3 mr-1 ${withdrawLoading ? "animate-bounce" : ""}`} />
+                            {withdrawLoading ? "Withdrawing..." : "Withdraw dev → funder"}
                         </Button>
                     </div>
-                </div>
-              </CardContent>
-            </Card>
+                    </div>
+                  </CardContent>
+                </CollapsibleContent>
+              </Card>
+            </Collapsible>
 
-            <Card className="bg-neutral-900 border-neutral-700">
-              <CardHeader className="py-1 px-2">
-                <div className="flex items-center justify-between">
-                  <CardTitle className="text-xs font-medium text-white tracking-wider flex items-center gap-2 border-b border-slate-800 pb-2">
-                    <Rocket className="w-4 h-4 text-blue-400" />
-                    VOLUME BOT
-                  </CardTitle>
-                  <div className="flex items-center gap-2">
-                    <Badge className={volumeRunning ? "bg-green-500/20 text-green-400" : "bg-orange-500/20 text-orange-400"}>
+            <Collapsible defaultOpen>
+              <Card className={`bg-neutral-900 border-neutral-700 transition-colors ${volumeRunning ? "border-green-500/50 shadow-[0_0_15px_-3px_rgba(34,197,94,0.1)]" : ""}`}>
+                <CardHeader className="py-1 px-2">
+                  <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+                    <div className="flex items-center gap-2">
+                      <CardTitle className="text-xs font-medium text-white tracking-wider flex items-center gap-2">
+                        <Rocket className={`w-4 h-4 text-blue-400 ${volumeRunning ? "animate-pulse" : ""}`} />
+                        VOLUME BOT
+                      </CardTitle>
+                      <CollapsibleTrigger asChild>
+                        <Button variant="ghost" size="sm" className="h-6 w-6 p-0 hover:bg-white/10">
+                          <ChevronDown className="h-4 w-4 text-slate-400" />
+                          <span className="sr-only">Toggle Volume Bot</span>
+                        </Button>
+                      </CollapsibleTrigger>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Badge className={volumeRunning ? "bg-green-500/20 text-green-400" : "bg-orange-500/20 text-orange-400"}>
                       {volumeRunning ? "RUNNING" : (volumeBotStatus?.totalTrades > 0 ? "PAUSED" : "READY")}
                     </Badge>
                     <div className="text-[9px] text-slate-300 font-medium">
@@ -2531,11 +2688,12 @@ export default function DashboardPage() {
                     >
                       <Settings className="w-4 h-4" />
                     </Button>
+                    </div>
                   </div>
-                </div>
-              </CardHeader>
-              <CardContent className="space-y-1 px-2 pb-2">
-                <div className="flex flex-wrap items-center gap-1">
+                </CardHeader>
+                <CollapsibleContent>
+                  <CardContent className="space-y-1 px-2 pb-2">
+                    <div className="flex flex-wrap items-center gap-1">
                   {volumeRunning ? (
                     <Button onClick={stopVolumeBot} className="h-8 bg-orange-500 hover:bg-orange-600 text-black">
                       <Pause className="w-4 h-4 mr-2" />
@@ -2548,9 +2706,9 @@ export default function DashboardPage() {
                     </Button>
                   )}
                   <div className="flex items-center gap-3 text-[11px] text-neutral-400">
-                    <span>Pairs: {loading ? "..." : volumeBotStats.activePairs}</span>
-                    <span>Trades: {loading ? "..." : volumeBotStats.tradesToday.toLocaleString()}</span>
-                    <span>Vol: {loading ? "..." : `${parseFloat(volumeBotStats.volumeGenerated).toLocaleString()} SOL`}</span>
+                    <span>Pairs: {loading ? <Skeleton className="h-3 w-4 inline-block" /> : volumeBotStats.activePairs}</span>
+                    <span>Trades: {loading ? <Skeleton className="h-3 w-8 inline-block" /> : volumeBotStats.tradesToday.toLocaleString()}</span>
+                    <span>Vol: {loading ? <Skeleton className="h-3 w-12 inline-block" /> : `${parseFloat(volumeBotStats.volumeGenerated).toLocaleString()} SOL`}</span>
                   </div>
                 </div>
 
@@ -2578,10 +2736,18 @@ export default function DashboardPage() {
                   </span>
                 </div>
 
-                <div className="resize-y overflow-auto min-h-[120px] p-1 border border-transparent hover:border-neutral-800 transition-colors">
+                <div className="resize-y overflow-auto min-h-[120px] p-1 border border-neutral-800/50 rounded-md bg-neutral-950/20 scrollbar-thin scrollbar-thumb-neutral-700 scrollbar-track-transparent">
+                  {mainStageWallets.length > 0 && (
+                    <div className="flex items-center justify-between px-2 py-1 text-[9px] text-neutral-500 font-mono border-b border-neutral-800 mb-1 sticky top-0 bg-neutral-900 z-10">
+                      <span>WALLET</span>
+                      <span>BALANCE</span>
+                    </div>
+                  )}
                   <div className="grid grid-cols-6 sm:grid-cols-8 lg:grid-cols-12 gap-1 auto-rows-min">
                     {mainStageWallets.length === 0 ? (
-                      <div className="col-span-full text-xs text-neutral-500">No active wallets</div>
+                      <div className="col-span-full py-8">
+                        <EmptyState icon={Wallet} text="No active wallets" />
+                      </div>
                     ) : (
                       mainStageWallets.map((wallet, index) => (
                         <WalletRow
@@ -2592,10 +2758,12 @@ export default function DashboardPage() {
                         />
                       ))
                     )}
+                    </div>
                   </div>
-                </div>
-              </CardContent>
-            </Card>
+                  </CardContent>
+                </CollapsibleContent>
+              </Card>
+            </Collapsible>
           </div>
 
           <div className="xl:col-span-12 grid grid-cols-1 xl:grid-cols-2 gap-1">
@@ -2611,25 +2779,30 @@ export default function DashboardPage() {
                   {holdersLoading ? (
                     <div className="text-slate-400 text-xs p-2 text-center">Loading holders...</div>
                   ) : holderRows.length === 0 ? (
-                    <div className="text-slate-400 text-xs p-2 text-center">No holders yet</div>
+                    <EmptyState icon={Users} text="No holders yet" />
                   ) : (
                     holderRows.map((wallet, index) => {
                       const isLiquidityPool = wallet.isBondingCurve || index === 0
                       return (
-                        <div key={wallet.address} className="flex items-center justify-between text-[11px]">
-                          <div className="flex items-center gap-2">
-                            <span className="font-mono text-neutral-400">
+                        <div key={wallet.address} className="relative flex items-center justify-between text-[11px] p-1 rounded hover:bg-neutral-800/50 transition-colors">
+                          <div
+                            className="absolute left-0 top-0 bottom-0 bg-neutral-800/30 rounded -z-10"
+                            style={{ width: `${Math.min(100, wallet.percentage)}%` }}
+                          />
+                          <div className="flex items-center gap-2 z-10">
+                            <span className="font-mono text-neutral-400 w-4">{index + 1}.</span>
+                            <span className="font-mono text-neutral-300">
                               {wallet.address.slice(0, 6)}...{wallet.address.slice(-4)}
                             </span>
-                            <CopyButton text={wallet.address} />
+                            <CopyButton text={wallet.address} className="h-3 w-3 text-neutral-600 hover:text-white" />
                             {isLiquidityPool && (
-                              <span className="rounded bg-cyan-500/10 px-1 text-[9px] text-cyan-300">
-                                Liquidity pool
+                              <span className="rounded bg-cyan-500/10 px-1 text-[9px] text-cyan-300 border border-cyan-500/20">
+                                LP
                               </span>
                             )}
                           </div>
-                          <span className="text-white">
-                            {wallet.balance.toFixed(2)} ({wallet.percentage.toFixed(2)}%)
+                          <span className="text-white font-mono z-10">
+                            {wallet.percentage.toFixed(2)}%
                           </span>
                         </div>
                       )
@@ -2643,13 +2816,15 @@ export default function DashboardPage() {
                 <CardHeader className="py-1 px-2">
                   <div className="flex items-center justify-between border-b border-slate-800 pb-2">
                     <TabsList className="h-7 bg-neutral-800 border border-neutral-700">
-                      <TabsTrigger value="trades" className="text-[10px]">
+                      <TabsTrigger value="trades" className="text-[10px] gap-1">
                         <Activity className="w-3 h-3 mr-1" />
                         LIVE TRADES
+                        {trades.length > 0 && <span className="ml-1 text-[8px] bg-neutral-700 px-1 rounded-full text-neutral-300">{trades.length}</span>}
                       </TabsTrigger>
-                      <TabsTrigger value="logs" className="text-[10px]">
+                      <TabsTrigger value="logs" className="text-[10px] gap-1">
                         <AlertTriangle className="w-3 h-3 mr-1" />
                         SYSTEM LOGS
+                        {systemLogs.length > 0 && <span className="ml-1 text-[8px] bg-neutral-700 px-1 rounded-full text-neutral-300">{systemLogs.length}</span>}
                       </TabsTrigger>
                     </TabsList>
                   </div>
@@ -2658,14 +2833,14 @@ export default function DashboardPage() {
                   <TabsContent value="trades" className="mt-0">
                     <div className="space-y-1">
                       {trades.length === 0 ? (
-                        <div className="text-slate-400 text-xs p-2 text-center">No trades yet</div>
+                        <EmptyState icon={Activity} text="No trades yet" />
                       ) : (
                         trades.slice(0, 6).map((trade) => (
                           <div key={trade.id} className="flex items-center justify-between text-[11px]">
                             <div className="flex items-center gap-2">
-                              <Badge className={trade.type === "buy" ? "bg-green-500/20 text-green-400" : "bg-red-500/20 text-red-400"}>
-                                {trade.type.toUpperCase()}
-                              </Badge>
+                              <div className={`p-1 rounded-full ${trade.type === "buy" ? "bg-green-500/20 text-green-400" : "bg-red-500/20 text-red-400"}`}>
+                                {trade.type === "buy" ? <ArrowUpRight className="w-3 h-3" /> : <ArrowDownLeft className="w-3 h-3" />}
+                              </div>
                               <span className="font-mono text-neutral-400">
                                 {trade.mintAddress.slice(0, 6)}...{trade.mintAddress.slice(-4)}
                               </span>
@@ -2691,7 +2866,7 @@ export default function DashboardPage() {
                         Clear
                       </Button>
                     </div>
-                    <div className="space-y-1 max-h-24 overflow-y-auto bg-neutral-950 rounded p-2">
+                    <div className="space-y-1 max-h-24 overflow-y-auto bg-neutral-950 rounded p-2 scrollbar-thin scrollbar-thumb-neutral-700 scrollbar-track-transparent">
                       {systemLogs.length === 0 && (!volumeBotStatus || volumeBotStatus.recentLogs?.length === 0) ? (
                         <div className="text-slate-400 text-xs">No logs yet</div>
                       ) : (
@@ -2723,7 +2898,7 @@ export default function DashboardPage() {
             </DialogHeader>
             <div className="space-y-3">
               <Select value={cloneTokenMint} onValueChange={setCloneTokenMint}>
-                <SelectTrigger className="h-8 bg-background border-border text-xs">
+                <SelectTrigger className="h-8 bg-background border-border text-xs focus-visible:ring-1 focus-visible:ring-cyan-500">
                   <SelectValue placeholder="Pick token to clone" />
                 </SelectTrigger>
                 <SelectContent>
@@ -2780,12 +2955,12 @@ export default function DashboardPage() {
                   onChange={(e) => setQuickBuyAmount(e.target.value)}
                 />
               </div>
-              <div className="grid grid-cols-5 gap-2">
+              <div className="grid grid-cols-5 gap-1.5">
                 {["0.02", "0.05", "0.1", "0.2", "0.3", "0.5", "0.7", "0.8", "1", "2", "3", "4.5", "7", "8", "10"].map((preset) => (
                   <Button
                     key={preset}
                     variant="outline"
-                    className="h-8 text-xs bg-white text-neutral-900 border-neutral-300 hover:bg-neutral-100 disabled:text-neutral-400"
+                    className="h-7 text-[10px] bg-white text-neutral-900 border-neutral-300 hover:bg-blue-50 hover:border-blue-300 hover:text-blue-600 disabled:text-neutral-400 transition-colors"
                     onClick={() => setQuickBuyAmount(preset)}
                   >
                     {preset}
@@ -2806,12 +2981,12 @@ export default function DashboardPage() {
                 </Button>
               </div>
               <div className="text-xs text-neutral-700">Sell %</div>
-              <div className="grid grid-cols-4 gap-2">
+              <div className="grid grid-cols-4 gap-1.5">
                 {[10, 25, 50, 100].map((pct) => (
                   <Button
                     key={pct}
                     variant="outline"
-                    className="h-8 text-xs bg-white text-neutral-900 border-neutral-300 hover:bg-neutral-100 disabled:text-neutral-400"
+                    className="h-7 text-[10px] bg-white text-neutral-900 border-neutral-300 hover:bg-red-50 hover:border-red-300 hover:text-red-600 disabled:text-neutral-400 transition-colors"
                     onClick={() => {
                       if (!quickTradeWallet) return
                       executeWalletTrade(quickTradeWallet, "sell", { sellPercent: pct })
@@ -2878,7 +3053,7 @@ export default function DashboardPage() {
                     value={tokenName}
                     onChange={(e) => setTokenName(e.target.value)}
                     placeholder="Token Name"
-                    className="h-8 bg-background border-border text-xs"
+                    className="h-8 bg-background border-border text-xs focus-visible:ring-1 focus-visible:ring-cyan-500"
                   />
                 </div>
                 <div className="space-y-1">
@@ -2888,7 +3063,7 @@ export default function DashboardPage() {
                     onChange={(e) => setTokenSymbol(e.target.value.toUpperCase())}
                     placeholder="SYMBOL"
                     maxLength={10}
-                    className="h-8 bg-background border-border text-xs"
+                    className="h-8 bg-background border-border text-xs focus-visible:ring-1 focus-visible:ring-cyan-500"
                   />
                 </div>
               </div>
@@ -2899,7 +3074,7 @@ export default function DashboardPage() {
                   value={tokenDescription}
                   onChange={(e) => setTokenDescription(e.target.value)}
                   placeholder="Token description..."
-                  className="min-h-[48px] bg-background border-border text-xs"
+                  className="min-h-[48px] bg-background border-border text-xs focus-visible:ring-1 focus-visible:ring-cyan-500"
                   rows={2}
                 />
               </div>
@@ -2911,7 +3086,7 @@ export default function DashboardPage() {
                     value={tokenWebsite}
                     onChange={(e) => setTokenWebsite(e.target.value)}
                     placeholder="https://example.com"
-                    className="h-8 bg-background border-border text-xs"
+                    className="h-8 bg-background border-border text-xs focus-visible:ring-1 focus-visible:ring-cyan-500"
                   />
                 </div>
                 <div className="space-y-1">
@@ -2920,7 +3095,7 @@ export default function DashboardPage() {
                     value={tokenTwitter}
                     onChange={(e) => setTokenTwitter(e.target.value)}
                     placeholder="https://x.com/..."
-                    className="h-8 bg-background border-border text-xs"
+                    className="h-8 bg-background border-border text-xs focus-visible:ring-1 focus-visible:ring-cyan-500"
                   />
                 </div>
                 <div className="space-y-1">
@@ -2929,7 +3104,7 @@ export default function DashboardPage() {
                     value={tokenTelegram}
                     onChange={(e) => setTokenTelegram(e.target.value)}
                     placeholder="https://t.me/..."
-                    className="h-8 bg-background border-border text-xs"
+                    className="h-8 bg-background border-border text-xs focus-visible:ring-1 focus-visible:ring-cyan-500"
                   />
                 </div>
               </div>
@@ -2941,7 +3116,7 @@ export default function DashboardPage() {
                     type="file"
                     accept="image/*"
                     onChange={(e) => handleTokenImageChange(e.target.files?.[0] || null)}
-                    className="h-8 bg-background border-border text-xs"
+                    className="h-8 bg-background border-border text-xs focus-visible:ring-1 focus-visible:ring-cyan-500"
                   />
                 </div>
                 <div className="rounded border border-neutral-800 bg-neutral-950/40 p-2">
@@ -3047,7 +3222,7 @@ export default function DashboardPage() {
                     step="0.0001"
                     value={totalBuyAmount}
                     onChange={(e) => setTotalBuyAmount(e.target.value)}
-                    className="h-8 bg-background border-border text-xs"
+                    className="h-8 bg-background border-border text-xs focus-visible:ring-1 focus-visible:ring-cyan-500"
                   />
                 </div>
                 <div className="flex flex-wrap gap-2 md:col-span-2 md:items-end">
@@ -3121,22 +3296,24 @@ export default function DashboardPage() {
               <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
                 <div className="space-y-1">
                   <Label className="text-[10px] text-black">Dev buy (SOL)</Label>
-                  <Input
+                  <InputWithSuffix
+                    suffix="SOL"
                     type="number"
                     step="0.001"
                     value={devBuyAmount}
                     onChange={(e) => setDevBuyAmount(e.target.value)}
-                    className="h-8 bg-background border-border text-xs"
+                    className="h-8 bg-background border-border text-xs focus-visible:ring-1 focus-visible:ring-cyan-500"
                   />
                 </div>
                 <div className="space-y-1">
                   <Label className="text-[10px] text-black">Default buyer (SOL)</Label>
-                  <Input
+                  <InputWithSuffix
+                    suffix="SOL"
                     type="number"
                     step="0.001"
                     value={buyAmountPerWallet}
                     onChange={(e) => setBuyAmountPerWallet(e.target.value)}
-                    className="h-8 bg-background border-border text-xs"
+                    className="h-8 bg-background border-border text-xs focus-visible:ring-1 focus-visible:ring-cyan-500"
                   />
                 </div>
               </div>
@@ -3216,7 +3393,7 @@ export default function DashboardPage() {
                   <Input
                     type="number"
                     min="1"
-                    className="bg-background border-border text-xs"
+                    className="bg-background border-border text-xs focus-visible:ring-1 focus-visible:ring-cyan-500"
                     value={volumeBotConfig.minInterval}
                     onChange={(e) => setVolumeBotConfig(prev => ({ ...prev, minInterval: e.target.value }))}
                   />
@@ -3226,7 +3403,7 @@ export default function DashboardPage() {
                   <Input
                     type="number"
                     min="1"
-                    className="bg-background border-border text-xs"
+                    className="bg-background border-border text-xs focus-visible:ring-1 focus-visible:ring-cyan-500"
                     value={volumeBotConfig.maxInterval}
                     onChange={(e) => setVolumeBotConfig(prev => ({ ...prev, maxInterval: e.target.value }))}
                   />
@@ -3238,7 +3415,7 @@ export default function DashboardPage() {
               <div className="space-y-1">
                 <Label className="text-xs text-neutral-400">Mode</Label>
                 <Select value={volumeBotConfig.mode} onValueChange={(value: any) => setVolumeBotConfig(prev => ({ ...prev, mode: value }))}>
-                  <SelectTrigger className="bg-background border-border text-xs">
+                  <SelectTrigger className="bg-background border-border text-xs focus-visible:ring-1 focus-visible:ring-cyan-500">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -3251,7 +3428,7 @@ export default function DashboardPage() {
               <div className="space-y-1">
                 <Label className="text-xs text-neutral-400">Amount Mode</Label>
                 <Select value={volumeBotConfig.amountMode} onValueChange={(value: any) => setVolumeBotConfig(prev => ({ ...prev, amountMode: value }))}>
-                  <SelectTrigger className="bg-background border-border text-xs">
+                  <SelectTrigger className="bg-background border-border text-xs focus-visible:ring-1 focus-visible:ring-cyan-500">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -3266,10 +3443,11 @@ export default function DashboardPage() {
             {volumeBotConfig.amountMode === "fixed" && (
               <div className="space-y-1">
                 <Label className="text-xs text-neutral-400">Fixed Amount (SOL)</Label>
-                <Input
+                <InputWithSuffix
+                  suffix="SOL"
                   type="number"
                   step="0.0001"
-                  className="bg-background border-border text-xs"
+                  className="bg-background border-border text-xs focus-visible:ring-1 focus-visible:ring-cyan-500"
                   value={volumeBotConfig.fixedAmount}
                   onChange={(e) => setVolumeBotConfig(prev => ({ ...prev, fixedAmount: e.target.value }))}
                 />
@@ -3280,20 +3458,22 @@ export default function DashboardPage() {
               <div className="grid grid-cols-2 gap-1">
                 <div className="space-y-1">
                   <Label className="text-xs text-neutral-400">Min SOL</Label>
-                  <Input
+                  <InputWithSuffix
+                    suffix="SOL"
                     type="number"
                     step="0.0001"
-                    className="bg-background border-border text-xs"
+                    className="bg-background border-border text-xs focus-visible:ring-1 focus-visible:ring-cyan-500"
                     value={volumeBotConfig.minAmount}
                     onChange={(e) => setVolumeBotConfig(prev => ({ ...prev, minAmount: e.target.value }))}
                   />
                 </div>
                 <div className="space-y-1">
                   <Label className="text-xs text-neutral-400">Max SOL</Label>
-                  <Input
+                  <InputWithSuffix
+                    suffix="SOL"
                     type="number"
                     step="0.0001"
-                    className="bg-background border-border text-xs"
+                    className="bg-background border-border text-xs focus-visible:ring-1 focus-visible:ring-cyan-500"
                     value={volumeBotConfig.maxAmount}
                     onChange={(e) => setVolumeBotConfig(prev => ({ ...prev, maxAmount: e.target.value }))}
                   />
@@ -3305,20 +3485,22 @@ export default function DashboardPage() {
               <div className="grid grid-cols-2 gap-1">
                 <div className="space-y-1">
                   <Label className="text-xs text-neutral-400">Min %</Label>
-                  <Input
+                  <InputWithSuffix
+                    suffix="%"
                     type="number"
                     step="0.1"
-                    className="bg-background border-border text-xs"
+                    className="bg-background border-border text-xs focus-visible:ring-1 focus-visible:ring-cyan-500"
                     value={volumeBotConfig.minPercentage}
                     onChange={(e) => setVolumeBotConfig(prev => ({ ...prev, minPercentage: e.target.value }))}
                   />
                 </div>
                 <div className="space-y-1">
                   <Label className="text-xs text-neutral-400">Max %</Label>
-                  <Input
+                  <InputWithSuffix
+                    suffix="%"
                     type="number"
                     step="0.1"
-                    className="bg-background border-border text-xs"
+                    className="bg-background border-border text-xs focus-visible:ring-1 focus-visible:ring-cyan-500"
                     value={volumeBotConfig.maxPercentage}
                     onChange={(e) => setVolumeBotConfig(prev => ({ ...prev, maxPercentage: e.target.value }))}
                   />
@@ -3328,21 +3510,47 @@ export default function DashboardPage() {
 
             <div className="grid grid-cols-2 gap-1">
               <div className="space-y-1">
-                <Label className="text-xs text-neutral-400">Slippage %</Label>
-                <Input
+                <div className="flex items-center gap-1">
+                  <Label className="text-xs text-neutral-400">Slippage %</Label>
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger>
+                        <HelpCircle className="w-3 h-3 text-neutral-500" />
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        <p>Max price impact allowance per trade</p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                </div>
+                <InputWithSuffix
+                  suffix="%"
                   type="number"
                   step="0.1"
-                  className="bg-background border-border text-xs"
+                  className="bg-background border-border text-xs focus-visible:ring-1 focus-visible:ring-cyan-500"
                   value={volumeBotConfig.slippage}
                   onChange={(e) => setVolumeBotConfig(prev => ({ ...prev, slippage: e.target.value }))}
                 />
               </div>
               <div className="space-y-1">
-                <Label className="text-xs text-neutral-400">Priority Fee (SOL)</Label>
-                <Input
+                <div className="flex items-center gap-1">
+                  <Label className="text-xs text-neutral-400">Priority Fee (SOL)</Label>
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger>
+                        <HelpCircle className="w-3 h-3 text-neutral-500" />
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        <p>Additional fee to boost transaction speed</p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                </div>
+                <InputWithSuffix
+                  suffix="SOL"
                   type="number"
                   step="0.0001"
-                  className="bg-background border-border text-xs"
+                  className="bg-background border-border text-xs focus-visible:ring-1 focus-visible:ring-cyan-500"
                   value={volumeBotConfig.priorityFee}
                   onChange={(e) => setVolumeBotConfig(prev => ({ ...prev, priorityFee: e.target.value }))}
                 />
