@@ -864,9 +864,9 @@ export default function WalletToolsPage() {
   return (
     <div className="p-2 space-y-2">
       <div className="flex flex-wrap items-center gap-2">
-        <Label className="text-xs text-slate-600">Token</Label>
+        <Label htmlFor="token-select" className="text-xs text-slate-600">Token</Label>
         <Select value={selectedTokenValue || ""} onValueChange={handleTokenSelect}>
-          <SelectTrigger className="h-8 w-48 bg-background border-border text-xs">
+          <SelectTrigger id="token-select" className="h-8 w-48 bg-background border-border text-xs">
             <SelectValue placeholder="Select token" />
           </SelectTrigger>
           <SelectContent>
@@ -893,8 +893,9 @@ export default function WalletToolsPage() {
           </CardHeader>
           <CardContent className="px-2 pb-2 space-y-2">
             <div className="space-y-1">
-              <Label className="text-[10px] text-slate-400">Funder Address</Label>
+              <Label htmlFor="funder-address" className="text-[10px] text-slate-400">Funder Address</Label>
               <Input
+                id="funder-address"
                 placeholder="wallet address..."
                 value={funderWalletInput}
                 onChange={(e) => setFunderWalletInput(e.target.value)}
@@ -962,9 +963,10 @@ export default function WalletToolsPage() {
             </div>
 
             <div className="space-y-1">
-              <Label className="text-[10px] text-slate-400">Top up from connected</Label>
+              <Label htmlFor="top-up-amount" className="text-[10px] text-slate-400">Top up from connected</Label>
               <div className="flex items-center gap-2">
                 <Input
+                  id="top-up-amount"
                   type="number"
                   step="0.0001"
                   value={funderTopupAmount}
@@ -1002,8 +1004,9 @@ export default function WalletToolsPage() {
           </CardHeader>
           <CardContent className="px-2 pb-2 space-y-2">
             <div className="space-y-1">
-              <Label className="text-[10px] text-slate-600">Funder Wallet</Label>
+              <Label htmlFor="gas-funder-wallet" className="text-[10px] text-slate-600">Funder Wallet</Label>
               <Input
+                id="gas-funder-wallet"
                 type="text"
                 placeholder="funder wallet address"
                 value={funderWalletDb?.publicKey || "not set"}
@@ -1012,8 +1015,9 @@ export default function WalletToolsPage() {
               />
             </div>
             <div className="space-y-1">
-              <Label className="text-[10px] text-slate-600">Amount (SOL)</Label>
+              <Label htmlFor="gas-amount" className="text-[10px] text-slate-600">Amount (SOL)</Label>
               <Input
+                id="gas-amount"
                 type="number"
                 step="0.0001"
                 placeholder="0.003"
@@ -1035,7 +1039,9 @@ export default function WalletToolsPage() {
               WALLETS
             </CardTitle>
             <div className="flex items-center gap-1">
+              <Label htmlFor="wallet-count" className="sr-only">Wallet Count</Label>
               <Input
+                id="wallet-count"
                 type="number"
                 placeholder="5"
                 value={walletCount}
