@@ -97,71 +97,119 @@ const PRICE_SERIES_MAX_POINTS = 60
 const DASHBOARD_POLL_INTERVAL_MS = 5 * 60 * 1000
 
 // Reusable Copy Button for lists
-const CopyButton = ({ text, className }: { text: string, className?: string }) => (
-  <Button
-    variant="ghost"
-    size="icon"
-    className={`h-4 w-4 text-slate-400 hover:text-slate-200 ${className}`}
-    onClick={(e) => {
-      e.stopPropagation()
-      navigator.clipboard.writeText(text)
-        .then(() => toast.success("Copied to clipboard"))
-        .catch(() => toast.error("Failed to copy"))
-    }}
-    aria-label="Copy"
-    title="Copy"
-  >
-    <Copy className="w-3 h-3" />
-  </Button>
-)
+const CopyButton = ({ text, className }: { text: string, className?: string }) => {
+  const [copied, setCopied] = useState(false)
+
+  useEffect(() => {
+    if (copied) {
+      const timeout = setTimeout(() => setCopied(false), 2000)
+      return () => clearTimeout(timeout)
+    }
+  }, [copied])
+
+  return (
+    <Button
+      variant="ghost"
+      size="icon"
+      className={`h-4 w-4 text-slate-400 hover:text-green-400 transition-colors ${className}`}
+      onClick={(e) => {
+        e.stopPropagation()
+        navigator.clipboard.writeText(text)
+          .then(() => {
+            setCopied(true)
+            toast.success("Copied to clipboard")
+          })
+          .catch(() => toast.error("Failed to copy"))
+      }}
+      aria-label="Copy"
+      title="Copy"
+    >
+      {copied ? <ShieldCheck className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+    </Button>
+  )
+}
 
 // Optimized Wallet Row Component
 const WalletRow = memo(({ wallet, index, onSelect }: { wallet: BundlerWallet, index: number, onSelect: (w: BundlerWallet) => void }) => {
   let borderColor = "border-slate-500"
   let badgeBg = "bg-slate-100"
-  let badgeText = "text-slate-800"
+  let badgeText = "text-slate-900" // Higher contrast
 
   if (wallet.role === 'dev') {
     borderColor = "border-purple-500 hover:border-purple-400"
     badgeBg = "bg-purple-100"
-    badgeText = "text-purple-800"
+    badgeText = "text-purple-900"
   } else if (wallet.role === 'buyer') {
     borderColor = "border-cyan-500 hover:border-cyan-400"
     badgeBg = "bg-cyan-100"
-    badgeText = "text-cyan-800"
+    badgeText = "text-cyan-900"
   } else if (wallet.role === 'funder') {
     borderColor = "border-green-500 hover:border-green-400"
     badgeBg = "bg-green-100"
-    badgeText = "text-green-800"
+    badgeText = "text-green-900"
   } else if (wallet.role === 'volume_bot' || wallet.role === 'bot') {
     borderColor = "border-orange-500 hover:border-orange-400"
     badgeBg = "bg-orange-100"
-    badgeText = "text-orange-800"
+    badgeText = "text-orange-900"
   }
 
   return (
     <button
       type="button"
       onClick={() => onSelect(wallet)}
-      className={`h-10 rounded border ${borderColor} bg-white p-1 text-left text-[9px] leading-tight transition`}
+      className={`h-11 rounded border ${borderColor} bg-white p-1.5 text-left text-[10px] leading-tight transition hover:bg-slate-50 group focus-visible:ring-1 focus-visible:ring-cyan-500`}
     >
-      <div className="flex items-center justify-between gap-1">
-        <div className="text-[9px] truncate text-black font-bold">
-          {index + 1}. {wallet.label || 'Wallet'}
+      <div className="flex items-center justify-between gap-1 mb-0.5">
+        <div className="text-[10px] truncate text-black font-extrabold group-hover:text-blue-700 transition-colors">
+          #{index + 1} {wallet.label ? `- ${wallet.label}` : ''}
         </div>
         {wallet.role && wallet.role !== 'project' && (
-          <span className={`text-[8px] ${badgeBg} ${badgeText} px-1 rounded uppercase min-w-[20px] text-center truncate max-w-[40px]`}>
+          <span className={`text-[9px] font-bold ${badgeBg} ${badgeText} px-1.5 py-0.5 rounded uppercase min-w-[24px] text-center truncate shadow-sm`}>
             {wallet.role}
           </span>
         )}
       </div>
-      <div className="font-mono text-[9px] text-neutral-900 truncate">
-        {wallet.publicKey.slice(0, 6)}...{wallet.publicKey.slice(-4)}
+      <div className="flex justify-between items-center gap-1">
+          <div className="font-mono text-[10px] text-black font-semibold truncate">
+            {wallet.publicKey.slice(0, 6)}...{wallet.publicKey.slice(-4)}
+          </div>
+          <div className="font-mono text-[10px] text-neutral-800">
+             {wallet.solBalance.toFixed(3)}
+          </div>
       </div>
     </button>
   )
 })
 WalletRow.displayName = "WalletRow"
+
+// Reusable Empty State
+const EmptyState = ({ icon: Icon, text }: { icon: any, text: string }) => (
+  <div className="flex flex-col items-center justify-center py-8 text-neutral-500 gap-2">
+    <Icon className="w-8 h-8 opacity-20" />
+    <span className="text-xs font-medium opacity-60">{text}</span>
+  </div>
+)
+
+// Log Helper
+const LogEntry = memo(({ log }: { log: string }) => {
+  const parts = log.match(/^\[(.*?)\] (.*?): (.*)$/)
+  if (!parts) return <div>{log}</div>
+
+  const [, time, type, message] = parts
+  let typeColor = "text-slate-400"
+  if (type === "ERROR") typeColor = "text-red-400 font-bold"
+  else if (type === "SUCCESS") typeColor = "text-green-400 font-bold"
+  else if (type === "INFO") typeColor = "text-blue-300"
+
+  return (
+    <div className="whitespace-nowrap hover:bg-white/5 px-1 rounded transition-colors">
+      <span className="text-slate-500 mr-2">[{time}]</span>
+      <span className={`${typeColor} mr-2 w-16 inline-block`}>{type}</span>
+      <span className="text-slate-300">{message}</span>
+    </div>
+  )
+})
+LogEntry.displayName = "LogEntry"
 
 /**
  * Renders the dashboard UI for launching tokens, managing bundler wallets, running the volume bot, and viewing token/market data.
@@ -2115,18 +2163,23 @@ export default function DashboardPage() {
           <div className="flex items-center gap-1">
             <Label className="text-xs text-slate-600">Token</Label>
             <Select value={selectedTokenValue || ""} onValueChange={handleTokenSelect}>
-              <SelectTrigger className="h-8 w-44 bg-background border-border text-xs">
+              <SelectTrigger className="h-8 w-44 bg-background border-border text-xs focus-visible:ring-1 focus-visible:ring-cyan-500">
                 <SelectValue placeholder="Select token" />
               </SelectTrigger>
               <SelectContent>
                 {tokens.map((token) => (
                   <SelectItem key={token.mintAddress || token.symbol} value={token.mintAddress || ""}>
-                    {token.symbol ||
-                      token.name ||
-                      (token.mintAddress
-                        ? `${token.mintAddress.slice(0, 6)}...${token.mintAddress.slice(-4)}`
-                        : "Unknown")}
-                    {token.price ? ` - ${token.price}` : ""}
+                    <div className="flex items-center gap-2">
+                      {token.imageUrl && (
+                        <div className="relative h-4 w-4 rounded-full overflow-hidden">
+                          <Image src={token.imageUrl} alt={token.symbol} fill className="object-cover" sizes="16px" />
+                        </div>
+                      )}
+                      <span className="font-medium text-neutral-900">{token.symbol || "Unknown"}</span>
+                      <span className="text-neutral-500 font-mono text-[10px]">
+                        {token.mintAddress ? `${token.mintAddress.slice(0, 4)}...${token.mintAddress.slice(-4)}` : ""}
+                      </span>
+                    </div>
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -2182,9 +2235,16 @@ export default function DashboardPage() {
             <Card className="bg-neutral-900 border-neutral-800">
               <CardContent className="p-3 flex flex-col gap-1">
                 <span className="text-[10px] text-slate-400 font-medium tracking-wider">AGGREGATED PnL (UNREALIZED)</span>
-                <span className={`text-lg font-bold font-mono ${unifiedStats.unrealizedPnl >= 0 ? "text-green-400" : "text-red-400"}`}>
-                  {unifiedStats.unrealizedPnl.toFixed(4)} SOL
-                </span>
+                <div className="flex items-center gap-2">
+                  <span className={`text-lg font-bold font-mono ${unifiedStats.unrealizedPnl >= 0 ? "text-green-400" : "text-red-400"}`}>
+                    {unifiedStats.unrealizedPnl.toFixed(4)} SOL
+                  </span>
+                  {unifiedStats.unrealizedPnl > 0 ? (
+                    <TrendingUp className="w-4 h-4 text-green-400" />
+                  ) : unifiedStats.unrealizedPnl < 0 ? (
+                    <TrendingDown className="w-4 h-4 text-red-400" />
+                  ) : null}
+                </div>
                 <span className="text-[9px] text-slate-500">Estimated value</span>
               </CardContent>
             </Card>
@@ -2240,9 +2300,7 @@ export default function DashboardPage() {
                     <div className="text-slate-600 italic">System ready. Waiting for events...</div>
                   ) : (
                     systemLogs.map((log, i) => (
-                      <div key={i} className="whitespace-nowrap">
-                        {log}
-                      </div>
+                      <LogEntry key={i} log={log} />
                     ))
                   )}
                 </div>
@@ -2420,7 +2478,7 @@ export default function DashboardPage() {
                       placeholder="20"
                       value={rugpullSlippage}
                       onChange={(e) => setRugpullSlippage(e.target.value)}
-                      className="h-7 bg-background border-border text-xs"
+                      className="h-7 bg-background border-border text-xs focus-visible:ring-1 focus-visible:ring-cyan-500"
                     />
                   </div>
                   <div className="space-y-1">
@@ -2510,11 +2568,11 @@ export default function DashboardPage() {
               </CardContent>
             </Card>
 
-            <Card className="bg-neutral-900 border-neutral-700">
+            <Card className={`bg-neutral-900 border-neutral-700 transition-colors ${volumeRunning ? "border-green-500/50 shadow-[0_0_15px_-3px_rgba(34,197,94,0.1)]" : ""}`}>
               <CardHeader className="py-1 px-2">
                 <div className="flex items-center justify-between">
                   <CardTitle className="text-xs font-medium text-white tracking-wider flex items-center gap-2 border-b border-slate-800 pb-2">
-                    <Rocket className="w-4 h-4 text-blue-400" />
+                    <Rocket className={`w-4 h-4 text-blue-400 ${volumeRunning ? "animate-pulse" : ""}`} />
                     VOLUME BOT
                   </CardTitle>
                   <div className="flex items-center gap-2">
@@ -2593,10 +2651,18 @@ export default function DashboardPage() {
                   </span>
                 </div>
 
-                <div className="resize-y overflow-auto min-h-[120px] p-1 border border-transparent hover:border-neutral-800 transition-colors">
+                <div className="resize-y overflow-auto min-h-[120px] p-1 border border-neutral-800/50 rounded-md bg-neutral-950/20">
+                  {mainStageWallets.length > 0 && (
+                    <div className="flex items-center justify-between px-2 py-1 text-[9px] text-neutral-500 font-mono border-b border-neutral-800 mb-1 sticky top-0 bg-neutral-900 z-10">
+                      <span>WALLET</span>
+                      <span>BALANCE</span>
+                    </div>
+                  )}
                   <div className="grid grid-cols-6 sm:grid-cols-8 lg:grid-cols-12 gap-1 auto-rows-min">
                     {mainStageWallets.length === 0 ? (
-                      <div className="col-span-full text-xs text-neutral-500">No active wallets</div>
+                      <div className="col-span-full py-8">
+                        <EmptyState icon={Wallet} text="No active wallets" />
+                      </div>
                     ) : (
                       mainStageWallets.map((wallet, index) => (
                         <WalletRow
@@ -2626,25 +2692,30 @@ export default function DashboardPage() {
                   {holdersLoading ? (
                     <div className="text-slate-400 text-xs p-2 text-center">Loading holders...</div>
                   ) : holderRows.length === 0 ? (
-                    <div className="text-slate-400 text-xs p-2 text-center">No holders yet</div>
+                    <EmptyState icon={Users} text="No holders yet" />
                   ) : (
                     holderRows.map((wallet, index) => {
                       const isLiquidityPool = wallet.isBondingCurve || index === 0
                       return (
-                        <div key={wallet.address} className="flex items-center justify-between text-[11px]">
-                          <div className="flex items-center gap-2">
-                            <span className="font-mono text-neutral-400">
+                        <div key={wallet.address} className="relative flex items-center justify-between text-[11px] p-1 rounded hover:bg-neutral-800/50 transition-colors">
+                          <div
+                            className="absolute left-0 top-0 bottom-0 bg-neutral-800/30 rounded -z-10"
+                            style={{ width: `${Math.min(100, wallet.percentage)}%` }}
+                          />
+                          <div className="flex items-center gap-2 z-10">
+                            <span className="font-mono text-neutral-400 w-4">{index + 1}.</span>
+                            <span className="font-mono text-neutral-300">
                               {wallet.address.slice(0, 6)}...{wallet.address.slice(-4)}
                             </span>
-                            <CopyButton text={wallet.address} />
+                            <CopyButton text={wallet.address} className="h-3 w-3 text-neutral-600 hover:text-white" />
                             {isLiquidityPool && (
-                              <span className="rounded bg-cyan-500/10 px-1 text-[9px] text-cyan-300">
-                                Liquidity pool
+                              <span className="rounded bg-cyan-500/10 px-1 text-[9px] text-cyan-300 border border-cyan-500/20">
+                                LP
                               </span>
                             )}
                           </div>
-                          <span className="text-white">
-                            {wallet.balance.toFixed(2)} ({wallet.percentage.toFixed(2)}%)
+                          <span className="text-white font-mono z-10">
+                            {wallet.percentage.toFixed(2)}%
                           </span>
                         </div>
                       )
@@ -2673,7 +2744,7 @@ export default function DashboardPage() {
                   <TabsContent value="trades" className="mt-0">
                     <div className="space-y-1">
                       {trades.length === 0 ? (
-                        <div className="text-slate-400 text-xs p-2 text-center">No trades yet</div>
+                        <EmptyState icon={Activity} text="No trades yet" />
                       ) : (
                         trades.slice(0, 6).map((trade) => (
                           <div key={trade.id} className="flex items-center justify-between text-[11px]">
@@ -2738,7 +2809,7 @@ export default function DashboardPage() {
             </DialogHeader>
             <div className="space-y-3">
               <Select value={cloneTokenMint} onValueChange={setCloneTokenMint}>
-                <SelectTrigger className="h-8 bg-background border-border text-xs">
+                <SelectTrigger className="h-8 bg-background border-border text-xs focus-visible:ring-1 focus-visible:ring-cyan-500">
                   <SelectValue placeholder="Pick token to clone" />
                 </SelectTrigger>
                 <SelectContent>
@@ -2795,12 +2866,12 @@ export default function DashboardPage() {
                   onChange={(e) => setQuickBuyAmount(e.target.value)}
                 />
               </div>
-              <div className="grid grid-cols-5 gap-2">
+              <div className="grid grid-cols-5 gap-1.5">
                 {["0.02", "0.05", "0.1", "0.2", "0.3", "0.5", "0.7", "0.8", "1", "2", "3", "4.5", "7", "8", "10"].map((preset) => (
                   <Button
                     key={preset}
                     variant="outline"
-                    className="h-8 text-xs bg-white text-neutral-900 border-neutral-300 hover:bg-neutral-100 disabled:text-neutral-400"
+                    className="h-7 text-[10px] bg-white text-neutral-900 border-neutral-300 hover:bg-blue-50 hover:border-blue-300 hover:text-blue-600 disabled:text-neutral-400 transition-colors"
                     onClick={() => setQuickBuyAmount(preset)}
                   >
                     {preset}
@@ -2821,12 +2892,12 @@ export default function DashboardPage() {
                 </Button>
               </div>
               <div className="text-xs text-neutral-700">Sell %</div>
-              <div className="grid grid-cols-4 gap-2">
+              <div className="grid grid-cols-4 gap-1.5">
                 {[10, 25, 50, 100].map((pct) => (
                   <Button
                     key={pct}
                     variant="outline"
-                    className="h-8 text-xs bg-white text-neutral-900 border-neutral-300 hover:bg-neutral-100 disabled:text-neutral-400"
+                    className="h-7 text-[10px] bg-white text-neutral-900 border-neutral-300 hover:bg-red-50 hover:border-red-300 hover:text-red-600 disabled:text-neutral-400 transition-colors"
                     onClick={() => {
                       if (!quickTradeWallet) return
                       executeWalletTrade(quickTradeWallet, "sell", { sellPercent: pct })
@@ -2893,7 +2964,7 @@ export default function DashboardPage() {
                     value={tokenName}
                     onChange={(e) => setTokenName(e.target.value)}
                     placeholder="Token Name"
-                    className="h-8 bg-background border-border text-xs"
+                    className="h-8 bg-background border-border text-xs focus-visible:ring-1 focus-visible:ring-cyan-500"
                   />
                 </div>
                 <div className="space-y-1">
@@ -2903,7 +2974,7 @@ export default function DashboardPage() {
                     onChange={(e) => setTokenSymbol(e.target.value.toUpperCase())}
                     placeholder="SYMBOL"
                     maxLength={10}
-                    className="h-8 bg-background border-border text-xs"
+                    className="h-8 bg-background border-border text-xs focus-visible:ring-1 focus-visible:ring-cyan-500"
                   />
                 </div>
               </div>
@@ -2914,7 +2985,7 @@ export default function DashboardPage() {
                   value={tokenDescription}
                   onChange={(e) => setTokenDescription(e.target.value)}
                   placeholder="Token description..."
-                  className="min-h-[48px] bg-background border-border text-xs"
+                  className="min-h-[48px] bg-background border-border text-xs focus-visible:ring-1 focus-visible:ring-cyan-500"
                   rows={2}
                 />
               </div>
@@ -2926,7 +2997,7 @@ export default function DashboardPage() {
                     value={tokenWebsite}
                     onChange={(e) => setTokenWebsite(e.target.value)}
                     placeholder="https://example.com"
-                    className="h-8 bg-background border-border text-xs"
+                    className="h-8 bg-background border-border text-xs focus-visible:ring-1 focus-visible:ring-cyan-500"
                   />
                 </div>
                 <div className="space-y-1">
@@ -2935,7 +3006,7 @@ export default function DashboardPage() {
                     value={tokenTwitter}
                     onChange={(e) => setTokenTwitter(e.target.value)}
                     placeholder="https://x.com/..."
-                    className="h-8 bg-background border-border text-xs"
+                    className="h-8 bg-background border-border text-xs focus-visible:ring-1 focus-visible:ring-cyan-500"
                   />
                 </div>
                 <div className="space-y-1">
@@ -2944,7 +3015,7 @@ export default function DashboardPage() {
                     value={tokenTelegram}
                     onChange={(e) => setTokenTelegram(e.target.value)}
                     placeholder="https://t.me/..."
-                    className="h-8 bg-background border-border text-xs"
+                    className="h-8 bg-background border-border text-xs focus-visible:ring-1 focus-visible:ring-cyan-500"
                   />
                 </div>
               </div>
@@ -2956,7 +3027,7 @@ export default function DashboardPage() {
                     type="file"
                     accept="image/*"
                     onChange={(e) => handleTokenImageChange(e.target.files?.[0] || null)}
-                    className="h-8 bg-background border-border text-xs"
+                    className="h-8 bg-background border-border text-xs focus-visible:ring-1 focus-visible:ring-cyan-500"
                   />
                 </div>
                 <div className="rounded border border-neutral-800 bg-neutral-950/40 p-2">
@@ -3062,7 +3133,7 @@ export default function DashboardPage() {
                     step="0.0001"
                     value={totalBuyAmount}
                     onChange={(e) => setTotalBuyAmount(e.target.value)}
-                    className="h-8 bg-background border-border text-xs"
+                    className="h-8 bg-background border-border text-xs focus-visible:ring-1 focus-visible:ring-cyan-500"
                   />
                 </div>
                 <div className="flex flex-wrap gap-2 md:col-span-2 md:items-end">
@@ -3141,7 +3212,7 @@ export default function DashboardPage() {
                     step="0.001"
                     value={devBuyAmount}
                     onChange={(e) => setDevBuyAmount(e.target.value)}
-                    className="h-8 bg-background border-border text-xs"
+                    className="h-8 bg-background border-border text-xs focus-visible:ring-1 focus-visible:ring-cyan-500"
                   />
                 </div>
                 <div className="space-y-1">
@@ -3151,7 +3222,7 @@ export default function DashboardPage() {
                     step="0.001"
                     value={buyAmountPerWallet}
                     onChange={(e) => setBuyAmountPerWallet(e.target.value)}
-                    className="h-8 bg-background border-border text-xs"
+                    className="h-8 bg-background border-border text-xs focus-visible:ring-1 focus-visible:ring-cyan-500"
                   />
                 </div>
               </div>
@@ -3231,7 +3302,7 @@ export default function DashboardPage() {
                   <Input
                     type="number"
                     min="1"
-                    className="bg-background border-border text-xs"
+                    className="bg-background border-border text-xs focus-visible:ring-1 focus-visible:ring-cyan-500"
                     value={volumeBotConfig.minInterval}
                     onChange={(e) => setVolumeBotConfig(prev => ({ ...prev, minInterval: e.target.value }))}
                   />
@@ -3241,7 +3312,7 @@ export default function DashboardPage() {
                   <Input
                     type="number"
                     min="1"
-                    className="bg-background border-border text-xs"
+                    className="bg-background border-border text-xs focus-visible:ring-1 focus-visible:ring-cyan-500"
                     value={volumeBotConfig.maxInterval}
                     onChange={(e) => setVolumeBotConfig(prev => ({ ...prev, maxInterval: e.target.value }))}
                   />
@@ -3253,7 +3324,7 @@ export default function DashboardPage() {
               <div className="space-y-1">
                 <Label className="text-xs text-neutral-400">Mode</Label>
                 <Select value={volumeBotConfig.mode} onValueChange={(value: any) => setVolumeBotConfig(prev => ({ ...prev, mode: value }))}>
-                  <SelectTrigger className="bg-background border-border text-xs">
+                  <SelectTrigger className="bg-background border-border text-xs focus-visible:ring-1 focus-visible:ring-cyan-500">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -3266,7 +3337,7 @@ export default function DashboardPage() {
               <div className="space-y-1">
                 <Label className="text-xs text-neutral-400">Amount Mode</Label>
                 <Select value={volumeBotConfig.amountMode} onValueChange={(value: any) => setVolumeBotConfig(prev => ({ ...prev, amountMode: value }))}>
-                  <SelectTrigger className="bg-background border-border text-xs">
+                  <SelectTrigger className="bg-background border-border text-xs focus-visible:ring-1 focus-visible:ring-cyan-500">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -3284,7 +3355,7 @@ export default function DashboardPage() {
                 <Input
                   type="number"
                   step="0.0001"
-                  className="bg-background border-border text-xs"
+                  className="bg-background border-border text-xs focus-visible:ring-1 focus-visible:ring-cyan-500"
                   value={volumeBotConfig.fixedAmount}
                   onChange={(e) => setVolumeBotConfig(prev => ({ ...prev, fixedAmount: e.target.value }))}
                 />
@@ -3298,7 +3369,7 @@ export default function DashboardPage() {
                   <Input
                     type="number"
                     step="0.0001"
-                    className="bg-background border-border text-xs"
+                    className="bg-background border-border text-xs focus-visible:ring-1 focus-visible:ring-cyan-500"
                     value={volumeBotConfig.minAmount}
                     onChange={(e) => setVolumeBotConfig(prev => ({ ...prev, minAmount: e.target.value }))}
                   />
@@ -3308,7 +3379,7 @@ export default function DashboardPage() {
                   <Input
                     type="number"
                     step="0.0001"
-                    className="bg-background border-border text-xs"
+                    className="bg-background border-border text-xs focus-visible:ring-1 focus-visible:ring-cyan-500"
                     value={volumeBotConfig.maxAmount}
                     onChange={(e) => setVolumeBotConfig(prev => ({ ...prev, maxAmount: e.target.value }))}
                   />
@@ -3323,7 +3394,7 @@ export default function DashboardPage() {
                   <Input
                     type="number"
                     step="0.1"
-                    className="bg-background border-border text-xs"
+                    className="bg-background border-border text-xs focus-visible:ring-1 focus-visible:ring-cyan-500"
                     value={volumeBotConfig.minPercentage}
                     onChange={(e) => setVolumeBotConfig(prev => ({ ...prev, minPercentage: e.target.value }))}
                   />
@@ -3333,7 +3404,7 @@ export default function DashboardPage() {
                   <Input
                     type="number"
                     step="0.1"
-                    className="bg-background border-border text-xs"
+                    className="bg-background border-border text-xs focus-visible:ring-1 focus-visible:ring-cyan-500"
                     value={volumeBotConfig.maxPercentage}
                     onChange={(e) => setVolumeBotConfig(prev => ({ ...prev, maxPercentage: e.target.value }))}
                   />
@@ -3347,7 +3418,7 @@ export default function DashboardPage() {
                 <Input
                   type="number"
                   step="0.1"
-                  className="bg-background border-border text-xs"
+                  className="bg-background border-border text-xs focus-visible:ring-1 focus-visible:ring-cyan-500"
                   value={volumeBotConfig.slippage}
                   onChange={(e) => setVolumeBotConfig(prev => ({ ...prev, slippage: e.target.value }))}
                 />
@@ -3357,7 +3428,7 @@ export default function DashboardPage() {
                 <Input
                   type="number"
                   step="0.0001"
-                  className="bg-background border-border text-xs"
+                  className="bg-background border-border text-xs focus-visible:ring-1 focus-visible:ring-cyan-500"
                   value={volumeBotConfig.priorityFee}
                   onChange={(e) => setVolumeBotConfig(prev => ({ ...prev, priorityFee: e.target.value }))}
                 />
