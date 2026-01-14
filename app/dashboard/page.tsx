@@ -3212,8 +3212,9 @@ export default function DashboardPage() {
               <Label className="text-xs text-neutral-300 font-bold">Speed Mode (Seconds)</Label>
               <div className="grid grid-cols-2 gap-2">
                 <div className="space-y-1">
-                  <Label className="text-xs text-neutral-400">From (Min)</Label>
+                  <Label htmlFor="bot-speed-min" className="text-xs text-neutral-400">From (Min)</Label>
                   <Input
+                    id="bot-speed-min"
                     type="number"
                     min="1"
                     className="bg-background border-border text-xs"
@@ -3222,8 +3223,9 @@ export default function DashboardPage() {
                   />
                 </div>
                 <div className="space-y-1">
-                  <Label className="text-xs text-neutral-400">To (Max)</Label>
+                  <Label htmlFor="bot-speed-max" className="text-xs text-neutral-400">To (Max)</Label>
                   <Input
+                    id="bot-speed-max"
                     type="number"
                     min="1"
                     className="bg-background border-border text-xs"
@@ -3236,9 +3238,9 @@ export default function DashboardPage() {
 
             <div className="grid grid-cols-2 gap-1">
               <div className="space-y-1">
-                <Label className="text-xs text-neutral-400">Mode</Label>
+                <Label htmlFor="bot-mode" className="text-xs text-neutral-400">Mode</Label>
                 <Select value={volumeBotConfig.mode} onValueChange={(value: any) => setVolumeBotConfig(prev => ({ ...prev, mode: value }))}>
-                  <SelectTrigger className="bg-background border-border text-xs">
+                  <SelectTrigger id="bot-mode" className="bg-background border-border text-xs">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -3249,9 +3251,9 @@ export default function DashboardPage() {
                 </Select>
               </div>
               <div className="space-y-1">
-                <Label className="text-xs text-neutral-400">Amount Mode</Label>
+                <Label htmlFor="bot-amount-mode" className="text-xs text-neutral-400">Amount Mode</Label>
                 <Select value={volumeBotConfig.amountMode} onValueChange={(value: any) => setVolumeBotConfig(prev => ({ ...prev, amountMode: value }))}>
-                  <SelectTrigger className="bg-background border-border text-xs">
+                  <SelectTrigger id="bot-amount-mode" className="bg-background border-border text-xs">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -3265,8 +3267,9 @@ export default function DashboardPage() {
 
             {volumeBotConfig.amountMode === "fixed" && (
               <div className="space-y-1">
-                <Label className="text-xs text-neutral-400">Fixed Amount (SOL)</Label>
+                <Label htmlFor="bot-fixed-amount" className="text-xs text-neutral-400">Fixed Amount (SOL)</Label>
                 <Input
+                  id="bot-fixed-amount"
                   type="number"
                   step="0.0001"
                   className="bg-background border-border text-xs"
@@ -3279,8 +3282,9 @@ export default function DashboardPage() {
             {volumeBotConfig.amountMode === "random" && (
               <div className="grid grid-cols-2 gap-1">
                 <div className="space-y-1">
-                  <Label className="text-xs text-neutral-400">Min SOL</Label>
+                  <Label htmlFor="bot-min-amount" className="text-xs text-neutral-400">Min SOL</Label>
                   <Input
+                    id="bot-min-amount"
                     type="number"
                     step="0.0001"
                     className="bg-background border-border text-xs"
@@ -3289,8 +3293,9 @@ export default function DashboardPage() {
                   />
                 </div>
                 <div className="space-y-1">
-                  <Label className="text-xs text-neutral-400">Max SOL</Label>
+                  <Label htmlFor="bot-max-amount" className="text-xs text-neutral-400">Max SOL</Label>
                   <Input
+                    id="bot-max-amount"
                     type="number"
                     step="0.0001"
                     className="bg-background border-border text-xs"
@@ -3304,8 +3309,9 @@ export default function DashboardPage() {
             {volumeBotConfig.amountMode === "percentage" && (
               <div className="grid grid-cols-2 gap-1">
                 <div className="space-y-1">
-                  <Label className="text-xs text-neutral-400">Min %</Label>
+                  <Label htmlFor="bot-min-pct" className="text-xs text-neutral-400">Min %</Label>
                   <Input
+                    id="bot-min-pct"
                     type="number"
                     step="0.1"
                     className="bg-background border-border text-xs"
@@ -3314,8 +3320,9 @@ export default function DashboardPage() {
                   />
                 </div>
                 <div className="space-y-1">
-                  <Label className="text-xs text-neutral-400">Max %</Label>
+                  <Label htmlFor="bot-max-pct" className="text-xs text-neutral-400">Max %</Label>
                   <Input
+                    id="bot-max-pct"
                     type="number"
                     step="0.1"
                     className="bg-background border-border text-xs"
@@ -3328,8 +3335,9 @@ export default function DashboardPage() {
 
             <div className="grid grid-cols-2 gap-1">
               <div className="space-y-1">
-                <Label className="text-xs text-neutral-400">Slippage %</Label>
+                <Label htmlFor="bot-slippage" className="text-xs text-neutral-400">Slippage %</Label>
                 <Input
+                  id="bot-slippage"
                   type="number"
                   step="0.1"
                   className="bg-background border-border text-xs"
@@ -3338,8 +3346,9 @@ export default function DashboardPage() {
                 />
               </div>
               <div className="space-y-1">
-                <Label className="text-xs text-neutral-400">Priority Fee (SOL)</Label>
+                <Label htmlFor="bot-priority-fee" className="text-xs text-neutral-400">Priority Fee (SOL)</Label>
                 <Input
+                  id="bot-priority-fee"
                   type="number"
                   step="0.0001"
                   className="bg-background border-border text-xs"
