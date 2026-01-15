@@ -2771,8 +2771,9 @@ export default function DashboardPage() {
                   : ""}
               </div>
               <div className="space-y-1">
-                <Label className="text-xs text-neutral-700">Buy Amount (SOL)</Label>
+                <Label htmlFor="quick-buy-amount" className="text-xs text-neutral-700">Buy Amount (SOL)</Label>
                 <Input
+                  id="quick-buy-amount"
                   type="number"
                   step="0.0001"
                   className="h-8 bg-white border-neutral-300 text-xs text-neutral-900"
@@ -2787,6 +2788,7 @@ export default function DashboardPage() {
                     variant="outline"
                     className="h-8 text-xs bg-white text-neutral-900 border-neutral-300 hover:bg-neutral-100 disabled:text-neutral-400"
                     onClick={() => setQuickBuyAmount(preset)}
+                    aria-label={`Set buy amount to ${preset} SOL`}
                   >
                     {preset}
                   </Button>
@@ -2817,6 +2819,7 @@ export default function DashboardPage() {
                       executeWalletTrade(quickTradeWallet, "sell", { sellPercent: pct })
                     }}
                     disabled={!selectedToken || !quickTradeWallet}
+                    aria-label={`Sell ${pct}% of tokens`}
                   >
                     {pct}%
                   </Button>
