@@ -2400,8 +2400,9 @@ export default function DashboardPage() {
               <CardContent className="space-y-1 px-2 pb-2">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-1">
                   <div className="space-y-1">
-                    <Label className="text-[10px] text-slate-600">Slippage %</Label>
+                    <Label htmlFor="rugpull-slippage" className="text-[10px] text-slate-600">Slippage %</Label>
                     <Input
+                      id="rugpull-slippage"
                       type="number"
                       placeholder="20"
                       value={rugpullSlippage}
@@ -2723,7 +2724,7 @@ export default function DashboardPage() {
             </DialogHeader>
             <div className="space-y-3">
               <Select value={cloneTokenMint} onValueChange={setCloneTokenMint}>
-                <SelectTrigger className="h-8 bg-background border-border text-xs">
+                <SelectTrigger className="h-8 bg-background border-border text-xs" aria-label="Select token to clone">
                   <SelectValue placeholder="Pick token to clone" />
                 </SelectTrigger>
                 <SelectContent>
@@ -2771,8 +2772,9 @@ export default function DashboardPage() {
                   : ""}
               </div>
               <div className="space-y-1">
-                <Label className="text-xs text-neutral-700">Buy Amount (SOL)</Label>
+                <Label htmlFor="quick-buy-amount" className="text-xs text-neutral-700">Buy Amount (SOL)</Label>
                 <Input
+                  id="quick-buy-amount"
                   type="number"
                   step="0.0001"
                   className="h-8 bg-white border-neutral-300 text-xs text-neutral-900"
@@ -2873,8 +2875,9 @@ export default function DashboardPage() {
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
                 <div className="space-y-1">
-                  <Label className="text-[10px] text-black">Name</Label>
+                  <Label htmlFor="token-name" className="text-[10px] text-black">Name</Label>
                   <Input
+                    id="token-name"
                     value={tokenName}
                     onChange={(e) => setTokenName(e.target.value)}
                     placeholder="Token Name"
@@ -2882,8 +2885,9 @@ export default function DashboardPage() {
                   />
                 </div>
                 <div className="space-y-1">
-                  <Label className="text-[10px] text-black">Symbol</Label>
+                  <Label htmlFor="token-symbol" className="text-[10px] text-black">Symbol</Label>
                   <Input
+                    id="token-symbol"
                     value={tokenSymbol}
                     onChange={(e) => setTokenSymbol(e.target.value.toUpperCase())}
                     placeholder="SYMBOL"
@@ -2894,8 +2898,9 @@ export default function DashboardPage() {
               </div>
 
               <div className="space-y-1">
-                <Label className="text-[10px] text-black">Description</Label>
+                <Label htmlFor="token-description" className="text-[10px] text-black">Description</Label>
                 <Textarea
+                  id="token-description"
                   value={tokenDescription}
                   onChange={(e) => setTokenDescription(e.target.value)}
                   placeholder="Token description..."
@@ -2906,8 +2911,9 @@ export default function DashboardPage() {
 
               <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
                 <div className="space-y-1">
-                  <Label className="text-[10px] text-black">Website</Label>
+                  <Label htmlFor="token-website" className="text-[10px] text-black">Website</Label>
                   <Input
+                    id="token-website"
                     value={tokenWebsite}
                     onChange={(e) => setTokenWebsite(e.target.value)}
                     placeholder="https://example.com"
@@ -2915,8 +2921,9 @@ export default function DashboardPage() {
                   />
                 </div>
                 <div className="space-y-1">
-                  <Label className="text-[10px] text-black">Twitter</Label>
+                  <Label htmlFor="token-twitter" className="text-[10px] text-black">Twitter</Label>
                   <Input
+                    id="token-twitter"
                     value={tokenTwitter}
                     onChange={(e) => setTokenTwitter(e.target.value)}
                     placeholder="https://x.com/..."
@@ -2924,8 +2931,9 @@ export default function DashboardPage() {
                   />
                 </div>
                 <div className="space-y-1">
-                  <Label className="text-[10px] text-black">Telegram</Label>
+                  <Label htmlFor="token-telegram" className="text-[10px] text-black">Telegram</Label>
                   <Input
+                    id="token-telegram"
                     value={tokenTelegram}
                     onChange={(e) => setTokenTelegram(e.target.value)}
                     placeholder="https://t.me/..."
@@ -2936,8 +2944,9 @@ export default function DashboardPage() {
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-2 items-start">
                 <div className="space-y-1">
-                  <Label className="text-[10px] text-black">Image</Label>
+                  <Label htmlFor="token-image" className="text-[10px] text-black">Image</Label>
                   <Input
+                    id="token-image"
                     type="file"
                     accept="image/*"
                     onChange={(e) => handleTokenImageChange(e.target.files?.[0] || null)}
@@ -3041,12 +3050,14 @@ export default function DashboardPage() {
             <CardContent className="space-y-2 px-2 pb-2">
               <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
                 <div className="space-y-1">
-                  <Label className="text-[10px] text-black">Total buy amount (SOL)</Label>
+                  <Label htmlFor="launch-total-buy" className="text-[10px] text-black">Total buy amount (SOL)</Label>
                   <Input
+                    id="launch-total-buy"
                     type="number"
                     step="0.0001"
                     value={totalBuyAmount}
                     onChange={(e) => setTotalBuyAmount(e.target.value)}
+                    placeholder="1.0"
                     className="h-8 bg-background border-border text-xs"
                   />
                 </div>
@@ -3120,8 +3131,9 @@ export default function DashboardPage() {
             <CardContent className="space-y-2 px-2 pb-2">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
                 <div className="space-y-1">
-                  <Label className="text-[10px] text-black">Dev buy (SOL)</Label>
+                  <Label htmlFor="launch-dev-buy" className="text-[10px] text-black">Dev buy (SOL)</Label>
                   <Input
+                    id="launch-dev-buy"
                     type="number"
                     step="0.001"
                     value={devBuyAmount}
@@ -3130,8 +3142,9 @@ export default function DashboardPage() {
                   />
                 </div>
                 <div className="space-y-1">
-                  <Label className="text-[10px] text-black">Default buyer (SOL)</Label>
+                  <Label htmlFor="launch-buyer-amount" className="text-[10px] text-black">Default buyer (SOL)</Label>
                   <Input
+                    id="launch-buyer-amount"
                     type="number"
                     step="0.001"
                     value={buyAmountPerWallet}
