@@ -32,6 +32,8 @@ export default function CryptoDashboard() {
               size="icon"
               onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
               className="text-neutral-400 hover:text-cyan-400"
+              aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+              title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
             >
               <ChevronRight
                 className={`w-4 h-4 sm:w-5 sm:h-5 transition-transform ${sidebarCollapsed ? "" : "rotate-180"}`}
@@ -52,6 +54,8 @@ export default function CryptoDashboard() {
                     ? "bg-cyan-500 text-black font-semibold"
                     : "text-neutral-400 hover:text-white hover:bg-neutral-800"
                 }`}
+                aria-label={item.label}
+                title={item.label}
               >
                 <item.icon className="w-5 h-5 md:w-5 md:h-5 sm:w-6 sm:h-6" />
                 {!sidebarCollapsed && <span className="text-sm font-medium">{item.label}</span>}
@@ -94,7 +98,14 @@ export default function CryptoDashboard() {
               <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
               <span className="text-xs text-green-500">MAINNET</span>
             </div>
-            <Button variant="ghost" size="icon" onClick={() => window.location.reload()} className="text-neutral-400 hover:text-cyan-400" title="Reload App">
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => window.location.reload()}
+              className="text-neutral-400 hover:text-cyan-400"
+              title="Reload App"
+              aria-label="Reload App"
+            >
               <RefreshCw className="w-4 h-4" />
             </Button>
           </div>
