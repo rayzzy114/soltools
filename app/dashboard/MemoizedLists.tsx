@@ -101,6 +101,7 @@ export const BuyerWalletList = memo(({
                   )
                 }}
                 className="h-8 bg-background border-border text-xs"
+                aria-label={`Amount for wallet ${index + 1}`}
               />
             </div>
             <div className="col-span-1 flex justify-end">
@@ -128,19 +129,21 @@ interface DevWalletSelectProps {
   launchDevWallet: string
   devWalletOptions: BundlerWallet[]
   onSelect: (value: string) => void
+  id?: string
 }
 
 export const DevWalletSelect = memo(({
   launchDevWallet,
   devWalletOptions,
-  onSelect
+  onSelect,
+  id
 }: DevWalletSelectProps) => {
   return (
     <Select
       value={launchDevWallet}
       onValueChange={onSelect}
     >
-      <SelectTrigger className="h-8 bg-background border-border text-xs">
+      <SelectTrigger id={id} className="h-8 bg-background border-border text-xs">
         <SelectValue placeholder="Pick dev wallet" />
       </SelectTrigger>
       <SelectContent>
